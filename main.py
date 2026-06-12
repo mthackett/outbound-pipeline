@@ -150,7 +150,7 @@ def run_pipeline():
 
     # Containers for batch updates to avoid Google Sheets API rate limiting
     cell_updates = []
-    req_rows_to_append = []
+    req_cell_updates = []
     
     system_instruction = (
         "You are a precise B2B GTM intelligence engine. Your task is to analyze raw text "
@@ -240,7 +240,9 @@ def run_pipeline():
                     req.extraction_confidence,
                     current_timestamp
                 ]
-                req_rows_to_append.append(req_row)
+                # Queue cell updates for the requirements extraction worksheet at the matching row index
+                for col_idx, value in enumerate(req_row, start=1):
+                    req_cell_updates.append(gspread.Cell(row=index, col=col_idx, value=value))
                 print(f"✅ Row {index}: Successfully parsed and queued updates.")
                 
             except Exception as e:
@@ -262,9 +264,9 @@ def run_pipeline():
         except Exception as e:
             print(f"⚠️ Warning: Could not auto-resize 'Raw Ingestion' columns: {e}")
         
-    if req_rows_to_append:
-        print(f"📡 Appending {len(req_rows_to_append)} rows to '{requirements_sheet_name}' worksheet...")
-        extraction_worksheet.append_rows(req_rows_to_append)
+    if req_cell_updates:
+        print(f"📡 Sending {len(req_cell_updates)} cell updates to '{requirements_sheet_name}' worksheet...")
+        extraction_worksheet.update_cells(req_cell_updates)
         print("✅ Requirements extraction updates saved.")
         try:
             extraction_worksheet.columns_auto_resize(0, 11)
@@ -272,7 +274,7 @@ def run_pipeline():
         except Exception as e:
             print(f"⚠️ Warning: Could not auto-resize '{requirements_sheet_name}' columns: {e}")
 
-    if not cell_updates and not req_rows_to_append:
+    if not cell_updates and not req_cell_updates:
         print("💤 No new or pending job descriptions found to process.")
 
 if __name__ == "__main__":
