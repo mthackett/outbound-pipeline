@@ -120,6 +120,12 @@ def run_pipeline():
         ingest_worksheet.update_cell(1, len(headers) + 1, "Opportunity ID")
         headers.append("Opportunity ID")
         
+    # Check and add Tokens column if missing
+    if "Tokens" not in headers:
+        print("➕ 'Tokens' column not found in headers. Appending it...")
+        ingest_worksheet.update_cell(1, len(headers) + 1, "Tokens")
+        headers.append("Tokens")
+        
     header_indices = {header: idx + 1 for idx, header in enumerate(headers)}
     
     # Setup Requirements Sheet
@@ -209,6 +215,10 @@ def run_pipeline():
                     queue_update_if_empty("Source URL", payload.source_url)
                 
                 queue_update_if_empty("Opportunity ID", opp_id)
+                
+                # Update token usage
+                tokens_str = f"{{Output: {completion.usage.completion_tokens}, Input: {completion.usage.prompt_tokens}}}"
+                queue_update_if_empty("Tokens", tokens_str)
                 
                 # Always update Status and Last Modified for processed rows
                 current_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
