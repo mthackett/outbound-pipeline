@@ -1,0 +1,26 @@
+# Secrets & Credentials
+.env
+credentials.json
+
+# Local NoSQL Database
+outbound_db.json
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+# Python Cache & Compiled Files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+# IDEs & Editor Configuration
+.vscode/
+.idea/
+*.suo
+*.swp
