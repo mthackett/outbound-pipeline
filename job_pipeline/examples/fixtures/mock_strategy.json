@@ -1,0 +1,16 @@
+{
+  "company": "Acme Corp",
+  "title": "Revenue Operations Analyst",
+  "pain_hypotheses": [
+    {
+      "hypothesis": "Fragmented pipeline visibility across Salesforce and Hubspot",
+      "confidence": "High",
+      "employer_signals": ["Mentioned requirement for unifying funnel analytics across CRMs"],
+      "candidate_evidence": ["Built automated dbt + BigQuery pipeline unifying lead lifecycle metrics"]
+    }
+  ],
+  "value_thesis": {
+    "one_liner": "Unifies GTM telemetry to accelerate revenue conversion and eliminate pipeline friction.",
+    "pillars": ["Automated Funnel Reporting", "Lead Routing Optimization", "Cross-functional SLA Alignment"]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "job": {
+    "job_id": "JAT-DEMO-001",
+    "title": "Revenue Operations Analyst",
+    "company": "ExampleCloud",
+    "location": "United States",
+    "work_arrangement": "Remote",
+    "interview_stage": "Hiring manager",
+    "application_status": "Interview",
+    "posted_compensation": {
+      "raw": "$105,000-$130,000 base",
+      "min": 105000,
+      "max": 130000,
+      "currency": "USD",
+      "period": "year"
+    },
+    "description": "Revenue Operations Analyst\nExampleCloud is hiring a Revenue Operations Analyst to improve pipeline visibility and reporting across Marketing, Sales, and Customer Success. The role will own recurring pipeline and funnel reporting, partner with stakeholders on metric definitions, and improve trust in CRM data.\nResponsibilities include analyzing lead lifecycle conversion and sales handoffs, identifying routing and follow-up gaps, building dashboards for revenue leadership, and automating manual reporting workflows. The analyst will work with CRM data, SQL, BI tools, and data warehouse models.\nThe ideal candidate can translate analysis into operational recommendations, work cross-functionally with Sales, Marketing, Finance, and Systems teams, and communicate findings to leadership. Experience with Salesforce is preferred.\nSuccess in the first six months includes more reliable pipeline reporting, faster identification of funnel issues, clearer ownership of revenue metrics, and reduced manual reporting work.\nCompensation: $105,000-$130,000 base."
+  },
+  "resume": {
+    "resume_id": "resume-demo-revops-v3",
+    "version": "revops_v3",
+    "label": "Revenue Operations Analyst",
+    "text": "Jordan Lee\nProfessional Summary\nRevenue Operations Analyst using SQL, Python, Power BI, BigQuery, dbt, and HubSpot to diagnose funnel and pipeline performance, automate reporting, and improve GTM processes.\nWork History\nRevenue Operations Analyst, BrightArc SaaS, 2022-Present\nAnalyzed lead lifecycle and routing data to identify handoff delays and inconsistent ownership; implemented SLA monitoring and routing alerts that reduced SLA breaches from 31% to 12%.\nBuilt dbt models in BigQuery and Power BI dashboards for pipeline, funnel, and retention reporting; replaced manual spreadsheet reporting and saved approximately 8 hours per week.\nAnalyzed channel attribution and campaign performance to guide reallocation of $120K in quarterly media spend; qualified sales opportunities increased 18% in the following quarter.\nPartnered with Sales, Marketing, and Finance to standardize revenue metric definitions and create an executive KPI review used in weekly operating meetings.\nAudited CRM data quality and automated validation checks for missing lifecycle stages and ownership fields, reducing recurring reporting cleanup.\nProject: Revenue Pipeline Diagnostic\nModeled leads, accounts, opportunities, and activities in PostgreSQL and created SQL views for MQL conversion, first-touch SLA, routing, follow-up, and pipeline ARR. Identified a 26% SLA breach rate and $410K in unattributed pipeline, then recommended matching, alerting, and data hygiene improvements.\nSkills\nRevenue Analytics: pipeline, funnel, MQL, SLA, lifecycle, attribution, routing\nBI: SQL, Excel, Power BI, Looker Studio\nData: Python, BigQuery, PostgreSQL, dbt, ELT, data modeling\nSystems: HubSpot, CRM integrations, APIs, workflow automation\nEducation\nBS Applied Mathematics"
+  },
+  "candidate": {
+    "name": "Jordan Lee",
+    "target_pay": "$125,000",
+    "floor_pay": "$110,000",
+    "strong_win_pay": "$130,000+"
+  },
+  "generation": {
+    "template_version": "1.0.0"
+  }
+}

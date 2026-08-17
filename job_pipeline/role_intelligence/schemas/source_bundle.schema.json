@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "source_bundle.schema.json",
+  "title": "Candidate Cockpit Source Bundle",
+  "type": "object",
+  "required": ["job", "resume"],
+  "properties": {
+    "job": {
+      "type": "object",
+      "required": ["title", "company", "description"],
+      "properties": {
+        "job_id": {"type": ["string", "null"]},
+        "title": {"type": "string", "minLength": 1},
+        "company": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "tagged_description": {"type": ["string", "null"]},
+        "source_url": {"type": ["string", "null"]},
+        "source": {"type": ["string", "null"]},
+        "location": {"type": ["string", "null"]},
+        "work_arrangement": {"type": ["string", "null"]},
+        "seniority": {"type": ["string", "null"]},
+        "application_status": {"type": ["string", "null"]},
+        "interview_stage": {"type": ["string", "null"]},
+        "application_date": {"type": ["string", "null"]},
+        "interview_date": {"type": ["string", "null"]},
+        "posted_compensation": {
+          "type": ["object", "null"],
+          "properties": {
+            "raw": {"type": ["string", "null"]},
+            "min": {"type": ["number", "null"]},
+            "max": {"type": ["number", "null"]},
+            "currency": {"type": ["string", "null"]},
+            "period": {"type": ["string", "null"]}
+          },
+          "additionalProperties": true
+        },
+        "extracted_requirements": {
+          "type": "array",
+          "items": {"type": "string"},
+          "default": []
+        },
+        "contacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {"type": ["string", "null"]},
+              "role": {"type": ["string", "null"]},
+              "email": {"type": ["string", "null"]}
+            },
+            "additionalProperties": true
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": true
+    },
+    "resume": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "resume_id": {"type": ["string", "null"]},
+        "version": {"type": ["string", "null"]},
+        "label": {"type": ["string", "null"]},
+        "path": {"type": ["string", "null"]},
+        "text": {"type": "string", "minLength": 1},
+        "tagged_text": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "candidate": {
+      "type": "object",
+      "properties": {
+        "name": {"type": ["string", "null"]},
+        "target_pay": {"type": ["string", "number", "null"]},
+        "floor_pay": {"type": ["string", "number", "null"]},
+        "strong_win_pay": {"type": ["string", "number", "null"]}
+      },
+      "additionalProperties": true,
+      "default": {}
+    },
+    "generation": {
+      "type": "object",
+      "properties": {
+        "requested_at": {"type": ["string", "null"]},
+        "template_version": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

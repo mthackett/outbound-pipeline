@@ -2,6 +2,14 @@
 .env
 credentials.json
 
+# Legacy Scratch / Prototype Directory
+project/
+
+# Generated Reports & Output Artifacts
+output_reports/
+*.manifest.json
+jd.txt
+
 # Local NoSQL Database
 outbound_db.json
 
@@ -12,6 +20,7 @@ ENV/
 
 # Python Cache & Compiled Files
 __pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd

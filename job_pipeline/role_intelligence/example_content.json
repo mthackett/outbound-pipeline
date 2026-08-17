@@ -1,0 +1,534 @@
+{
+  "tool_version": "1.0.0",
+  "template_version": "1.0.0",
+  "document_title": "Jordan Lee Candidate Cockpit - ExampleCloud",
+  "subject": "Job-targeted resume recall, consultative interview, and offer playbook",
+  "author": "Jordan Lee",
+  "job": {
+    "job_id": "JAT-DEMO-001",
+    "company": "ExampleCloud",
+    "title": "Revenue Operations Analyst",
+    "interview_stage": "Hiring manager"
+  },
+  "resume": {
+    "resume_id": "resume-demo-revops-v3",
+    "version": "revops_v3"
+  },
+  "generation": {
+    "strategy_version": "1.0.0",
+    "sample": "fictional"
+  },
+  "variables": {
+    "posted_pay": "$105,000-$130,000 base",
+    "target_pay": "$125,000",
+    "floor_pay": "$110,000",
+    "strong_win_pay": "$130,000+"
+  },
+  "pages": [
+    {
+      "title": "JORDAN LEE  |  REVENUE OPERATIONS ANALYST  |  JOB-TARGETED RESUME RECALL",
+      "columns": [
+        [
+          {
+            "title": "Core Fit",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "RevOps analyst + builder",
+                "rest": " -> diagnose revenue friction -> build reporting/process fix"
+              },
+              {
+                "lead": "Pipeline + funnel visibility",
+                "rest": " | lifecycle | routing | CRM data trust"
+              },
+              {
+                "lead": "SQL | Power BI | BigQuery | dbt | HubSpot"
+              },
+              {
+                "lead": "Cross-functional metrics",
+                "rest": " -> Sales + Marketing + Finance -> executive decisions"
+              }
+            ],
+            "source_refs": [
+              "R003",
+              "R009"
+            ]
+          },
+          {
+            "title": "Proof Numbers",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "31% -> 12%",
+                "rest": " SLA breach reduction"
+              },
+              {
+                "lead": "~8 hrs/week",
+                "rest": " manual reporting time saved"
+              },
+              {
+                "lead": "$120K/qtr",
+                "rest": " media spend reallocation influenced"
+              },
+              {
+                "lead": "+18%",
+                "rest": " qualified sales opportunities next quarter"
+              },
+              {
+                "lead": "$410K",
+                "rest": " unattributed pipeline identified in diagnostic"
+              }
+            ],
+            "source_refs": [
+              "R006",
+              "R007",
+              "R008",
+              "R012"
+            ]
+          },
+          {
+            "title": "Skill Bank",
+            "kind": "skills",
+            "items": [
+              {
+                "label": "Revenue",
+                "terms": [
+                  "pipeline",
+                  "funnel",
+                  "MQL",
+                  "SLA",
+                  "lifecycle",
+                  "routing",
+                  "attribution"
+                ]
+              },
+              {
+                "label": "BI",
+                "terms": [
+                  "SQL",
+                  "Power BI",
+                  "Excel",
+                  "Looker Studio"
+                ]
+              },
+              {
+                "label": "Data",
+                "terms": [
+                  "BigQuery",
+                  "dbt",
+                  "Python",
+                  "PostgreSQL",
+                  "ELT",
+                  "modeling"
+                ]
+              },
+              {
+                "label": "Systems",
+                "terms": [
+                  "HubSpot",
+                  "CRM integrations",
+                  "APIs",
+                  "automation"
+                ]
+              }
+            ]
+          },
+          {
+            "title": "Credentials",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "BS Applied Mathematics"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "title": "Best-Match Experience",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "Lifecycle/routing: ",
+                "rest": "handoff delays + ownership gaps -> SLA monitoring + alerts -> breaches 31% to 12%"
+              },
+              {
+                "lead": "Reporting stack: ",
+                "rest": "dbt + BigQuery + Power BI -> pipeline/funnel/retention visibility -> ~8 hrs/week saved"
+              },
+              {
+                "lead": "Metric governance: ",
+                "rest": "Sales + Marketing + Finance -> standardized definitions -> weekly executive KPI review"
+              },
+              {
+                "lead": "CRM data quality: ",
+                "rest": "missing lifecycle/ownership fields -> automated validation -> less recurring cleanup"
+              },
+              {
+                "lead": "Decision influence: ",
+                "rest": "attribution analysis -> $120K/qtr reallocation -> qualified opportunities +18%"
+              }
+            ],
+            "source_refs": [
+              "R006",
+              "R007",
+              "R008",
+              "R009",
+              "R010"
+            ]
+          },
+          {
+            "title": "Value Pattern",
+            "kind": "mixed",
+            "blocks": [
+              {
+                "kind": "bullet",
+                "lead": "Find the revenue/process break -> quantify it -> make it visible -> align stakeholders -> fix/automate -> measure"
+              },
+              {
+                "kind": "note",
+                "text": "Interview thread: connect technical work to the decision, process, or economic lever it improved."
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "title": "Best Evidence | Pipeline Diagnostic",
+            "kind": "lines",
+            "items": [
+              {
+                "label": "Scope: ",
+                "value": "leads + accounts + opportunities + activities"
+              },
+              {
+                "label": "Built: ",
+                "value": "PostgreSQL model + SQL views for MQL, SLA, routing, follow-up, pipeline ARR"
+              },
+              {
+                "label": "Found: ",
+                "value": "26% SLA breach | $410K unattributed pipeline"
+              },
+              {
+                "label": "Recommended: ",
+                "value": "matching | alerts | routing | data hygiene"
+              },
+              {
+                "label": "Why it fits: ",
+                "value": "repeatable diagnostic approach to visibility + handoff risk"
+              }
+            ],
+            "source_refs": [
+              "R012"
+            ]
+          },
+          {
+            "title": "Story Index",
+            "kind": "lines",
+            "items": [
+              {
+                "label": "Process improvement -> ",
+                "value": "SLA monitoring + routing alerts"
+              },
+              {
+                "label": "Messy data -> ",
+                "value": "dbt/BigQuery reporting models"
+              },
+              {
+                "label": "Cross-functional -> ",
+                "value": "shared revenue metric definitions"
+              },
+              {
+                "label": "Influence -> ",
+                "value": "$120K media reallocation"
+              },
+              {
+                "label": "Automation -> ",
+                "value": "~8 hrs/week reporting saved"
+              },
+              {
+                "label": "Data quality -> ",
+                "value": "automated CRM validation"
+              },
+              {
+                "label": "Deep dive -> ",
+                "value": "revenue pipeline diagnostic"
+              }
+            ]
+          },
+          {
+            "title": "Quick Recall",
+            "kind": "mixed",
+            "blocks": [
+              {
+                "kind": "bullet",
+                "lead": "Context -> Problem -> Analysis/Action -> Result -> Learning"
+              },
+              {
+                "kind": "note",
+                "text": "Lead with the business problem; use tools as evidence of how you solved it."
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    {
+      "title": "JORDAN LEE  |  EXAMPLECLOUD  |  CONSULTATIVE INTERVIEW + OFFER PLAYBOOK",
+      "columns": [
+        [
+          {
+            "title": "Value Thesis",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "Core thesis: ",
+                "rest": "diagnose where revenue visibility + handoffs break, build the trusted data layer, then turn insight into operational change"
+              },
+              {
+                "lead": "Visibility: ",
+                "rest": "dbt/BigQuery + BI + shared metric definitions"
+              },
+              {
+                "lead": "Conversion/process: ",
+                "rest": "routing/SLA diagnosis -> 31% to 12% breaches"
+              },
+              {
+                "lead": "Scale: ",
+                "rest": "reporting automation -> ~8 hrs/week reclaimed"
+              }
+            ]
+          },
+          {
+            "title": "Likely Business Pain",
+            "kind": "lines",
+            "items": [
+              {
+                "label": "Explicit | reporting trust -> ",
+                "value": "proof: BI/data models + metric governance -> faster, clearer decisions"
+              },
+              {
+                "label": "Likely | handoff leakage -> ",
+                "value": "proof: lifecycle/routing + SLA improvement -> stronger opportunity capture"
+              },
+              {
+                "label": "Explicit | manual work -> ",
+                "value": "proof: reporting + CRM automation -> more analyst capacity"
+              }
+            ]
+          },
+          {
+            "title": "Behavioral Question Map",
+            "kind": "lines",
+            "items": [
+              {
+                "label": "Process improvement -> ",
+                "value": "baseline -> analyze -> change -> measure | SLA 31% to 12%"
+              },
+              {
+                "label": "Cross-functional -> ",
+                "value": "needs -> shared goal -> definitions -> alignment | KPI metrics"
+              },
+              {
+                "label": "Messy data -> ",
+                "value": "question -> audit -> model -> validate -> publish | dbt/BigQuery"
+              },
+              {
+                "label": "Influence -> ",
+                "value": "decision -> evidence -> options -> rec -> result | $120K / +18%"
+              },
+              {
+                "label": "Automation -> ",
+                "value": "manual pain -> workflow -> automate -> validate -> value | ~8 hrs/week"
+              },
+              {
+                "label": "Ambiguity -> ",
+                "value": "outcome -> metric -> data -> hypotheses -> rec -> measure | diagnostic"
+              },
+              {
+                "label": "Conflict -> ",
+                "value": "issue -> understand needs -> shared goal -> tradeoffs -> agreement"
+              },
+              {
+                "label": "Setback -> ",
+                "value": "ownership -> root cause -> corrective change -> lasting improvement"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "title": "Compensation Snapshot",
+            "kind": "lines",
+            "items": [
+              {
+                "label": "Posted range: ",
+                "value": "{{posted_pay}}"
+              },
+              {
+                "label": "Target: ",
+                "value": "{{target_pay}}"
+              },
+              {
+                "label": "Floor: ",
+                "value": "{{floor_pay}}"
+              },
+              {
+                "label": "Strong win: ",
+                "value": "{{strong_win_pay}}"
+              }
+            ]
+          },
+          {
+            "title": "Value-Based Negotiation Anchor",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "Tie ask to scope: ",
+                "rest": "pipeline visibility + lifecycle + automation + cross-functional metric ownership"
+              },
+              {
+                "lead": "Evidence: ",
+                "rest": "31% to 12% SLA breaches | ~8 hrs/week saved | $120K spend decision / +18% opportunities"
+              },
+              {
+                "lead": "Economic levers: ",
+                "rest": "conversion | analyst time | reporting trust | decision speed"
+              }
+            ]
+          },
+          {
+            "title": "Negotiation Sequence",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "Enthusiasm -> full package -> written offer -> evaluate -> counter -> wait"
+              }
+            ]
+          },
+          {
+            "title": "Counter Structure",
+            "kind": "lines",
+            "items": [
+              {
+                "label": "1. Fit: ",
+                "value": "reaffirm interest + match to priority pain"
+              },
+              {
+                "label": "2. Value: ",
+                "value": "anchor in evidence + economic levers"
+              },
+              {
+                "label": "3. Scope: ",
+                "value": "connect responsibility to posted range / level"
+              },
+              {
+                "label": "4. Ask: ",
+                "value": "specific number or package improvement"
+              },
+              {
+                "label": "5. Close: ",
+                "value": "collaborative path to agreement"
+              }
+            ]
+          },
+          {
+            "title": "Package Check",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "Base | bonus | equity | 401(k) | health | PTO | review timing",
+                "lead_bold": false
+              },
+              {
+                "lead": "Remote expectations | title/level | scope | start date | IP terms",
+                "lead_bold": false
+              }
+            ]
+          },
+          {
+            "title": "Tradeables",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "Base | signing bonus | bonus/equity | review timing | PTO | remote flexibility | title | development",
+                "lead_bold": false
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "title": "Questions to Validate Pain",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "Where do teams disagree most on pipeline definitions or metric ownership?"
+              },
+              {
+                "lead": "Where in the lead-to-opportunity handoff is leakage or delay highest?"
+              },
+              {
+                "lead": "Which recurring reports or cleanup tasks consume the most analyst time?"
+              },
+              {
+                "lead": "Which revenue decisions are hardest to make quickly today?"
+              }
+            ]
+          },
+          {
+            "title": "Bridge Points",
+            "kind": "lines",
+            "items": [
+              {
+                "label": "Salesforce preferred -> ",
+                "value": "HubSpot + CRM lifecycle/routing/data quality; CRM operating patterns transfer across platforms"
+              }
+            ]
+          },
+          {
+            "title": "First 90 Days",
+            "kind": "lines",
+            "items": [
+              {
+                "label": "0-30: ",
+                "value": "map systems, definitions, stakeholders, reporting + handoffs; baseline pain"
+              },
+              {
+                "label": "31-60: ",
+                "value": "validate root causes; prioritize highest-value gaps; align definitions/ownership"
+              },
+              {
+                "label": "61-90: ",
+                "value": "pilot priority fixes; measure; establish repeatable operating/reporting cadence"
+              }
+            ]
+          },
+          {
+            "title": "Role Scope Check",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "Actual mix: analysis | reporting | data modeling | CRM ops | automation"
+              },
+              {
+                "lead": "Ownership: definitions | systems | dashboards | lifecycle | stakeholder decisions"
+              }
+            ]
+          },
+          {
+            "title": "Offer Scorecard",
+            "kind": "bullets",
+            "items": [
+              {
+                "lead": "Comp | manager | scope | growth | autonomy | remote culture | workload | stability | IP fit",
+                "lead_bold": false
+              }
+            ],
+            "note": "Close: reinforce fit around validated pain -> invite remaining concerns -> confirm next step + timeline."
+          }
+        ]
+      ]
+    }
+  ]
+}

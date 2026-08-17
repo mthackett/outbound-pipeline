@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "value_match_strategy.schema.json",
+  "title": "Consultative Value-Match Strategy",
+  "type": "object",
+  "required": [
+    "problem_hypotheses",
+    "value_thesis",
+    "behavioral_map",
+    "bridge_points",
+    "diagnostic_questions",
+    "first_90_days",
+    "compensation_context"
+  ],
+  "properties": {
+    "strategy_version": {"type": "string", "default": "1.0.0"},
+    "job_id": {"type": ["string", "null"]},
+    "resume_id": {"type": ["string", "null"]},
+    "problem_hypotheses": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {"$ref": "#/$defs/problem"}
+    },
+    "value_thesis": {
+      "type": "object",
+      "required": ["one_line", "pillars", "pain_specific", "pay_justification"],
+      "properties": {
+        "one_line": {"type": "string", "minLength": 1},
+        "pillars": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "pain_specific": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["pain_id", "thesis"],
+            "properties": {
+              "pain_id": {"type": "string"},
+              "thesis": {"type": "string"},
+              "source_refs": {"$ref": "#/$defs/source_refs"}
+            },
+            "additionalProperties": true
+          }
+        },
+        "pay_justification": {"type": "string"},
+        "source_refs": {"$ref": "#/$defs/source_refs"}
+      },
+      "additionalProperties": true
+    },
+    "behavioral_map": {
+      "type": "array",
+      "minItems": 6,
+      "items": {"$ref": "#/$defs/behavioral"}
+    },
+    "bridge_points": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/bridge"}
+    },
+    "diagnostic_questions": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["question", "purpose"],
+        "properties": {
+          "question": {"type": "string", "minLength": 1},
+          "purpose": {"type": "string", "minLength": 1},
+          "pain_ids": {"type": "array", "items": {"type": "string"}},
+          "source_refs": {"$ref": "#/$defs/source_refs"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "first_90_days": {
+      "type": "object",
+      "required": ["hypothesis", "days_0_30", "days_31_60", "days_61_90"],
+      "properties": {
+        "hypothesis": {"type": "string"},
+        "days_0_30": {"type": "string"},
+        "days_31_60": {"type": "string"},
+        "days_61_90": {"type": "string"},
+        "pain_ids": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "compensation_context": {
+      "type": "object",
+      "required": ["posted_pay", "target_pay", "floor_pay", "strong_win_pay", "value_anchors"],
+      "properties": {
+        "posted_pay": {"type": ["string", "number", "null"]},
+        "target_pay": {"type": ["string", "number", "null"]},
+        "floor_pay": {"type": ["string", "number", "null"]},
+        "strong_win_pay": {"type": ["string", "number", "null"]},
+        "value_anchors": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "source_refs": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": []
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["evidence", "mapping", "source_refs"],
+      "properties": {
+        "evidence": {"type": "string", "minLength": 1},
+        "mapping": {"type": "string", "minLength": 1},
+        "result": {"type": ["string", "null"]},
+        "metrics": {"type": "array", "items": {"type": "string"}},
+        "fit_type": {"enum": ["direct", "adjacent", "transferable"]},
+        "source_refs": {"$ref": "#/$defs/source_refs"},
+        "source_excerpt": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "signal": {
+      "type": "object",
+      "required": ["signal", "source_refs"],
+      "properties": {
+        "signal": {"type": "string", "minLength": 1},
+        "source_refs": {"$ref": "#/$defs/source_refs"},
+        "source_excerpt": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "problem": {
+      "type": "object",
+      "required": [
+        "id",
+        "pain",
+        "confidence",
+        "job_signals",
+        "business_consequences",
+        "candidate_evidence",
+        "likely_value",
+        "economic_levers",
+        "validation_questions"
+      ],
+      "properties": {
+        "id": {"type": "string", "pattern": "^P[1-9][0-9]*$"},
+        "pain": {"type": "string", "minLength": 1},
+        "confidence": {"enum": ["explicit", "strongly_implied", "plausible_hypothesis"]},
+        "job_signals": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/signal"}
+        },
+        "business_consequences": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "candidate_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/evidence"}
+        },
+        "likely_value": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "economic_levers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["lever", "quantification_status"],
+            "properties": {
+              "lever": {"type": "string"},
+              "quantification_status": {
+                "enum": ["source_backed", "quantifiable_in_interview", "not_quantified"]
+              },
+              "source_refs": {"$ref": "#/$defs/source_refs"}
+            },
+            "additionalProperties": true
+          }
+        },
+        "validation_questions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "behavioral": {
+      "type": "object",
+      "required": ["theme", "likelihood", "why_likely", "answer_scaffold"],
+      "properties": {
+        "theme": {"type": "string"},
+        "likelihood": {"enum": ["high", "medium", "baseline"]},
+        "why_likely": {"type": "string"},
+        "answer_scaffold": {"type": "string"},
+        "story_seed": {
+          "type": ["object", "null"],
+          "properties": {
+            "seed": {"type": "string"},
+            "source_refs": {"$ref": "#/$defs/source_refs"},
+            "source_excerpt": {"type": ["string", "null"]}
+          },
+          "additionalProperties": true
+        },
+        "framework_only": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "bridge": {
+      "type": "object",
+      "required": ["requested", "closest_evidence", "transferable_principle", "bridge"],
+      "properties": {
+        "requested": {"type": "string"},
+        "closest_evidence": {"type": "string"},
+        "transferable_principle": {"type": "string"},
+        "bridge": {"type": "string"},
+        "job_source_refs": {"$ref": "#/$defs/source_refs"},
+        "resume_source_refs": {"$ref": "#/$defs/source_refs"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

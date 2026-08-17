@@ -1,0 +1,50 @@
+{
+  "font_name": "Arial",
+  "title_font_pt": 15.2,
+  "banner_font_pt": 10.6,
+  "body_font_pt": 9.9,
+  "note_font_pt": 9.0,
+  "skill_font_pt": 9.45,
+  "skill_label_font_pt": 9.55,
+  "accent_color": "17365D",
+  "banner_color": "17365D",
+  "banner_text_color": "FFFFFF",
+  "body_color": "1C1C1C",
+  "note_color": "555555",
+  "skill_label_fill": "EAF0F8",
+  "skill_border_color": "CBD8E8",
+  "skill_border_size": 3,
+  "skill_label_width_in": 0.75,
+  "skill_text_width_in": 2.27,
+  "bullet_left_pt": 9,
+  "bullet_hanging_pt": 6,
+  "banner_pad_twips_top": 40,
+  "banner_pad_twips_bottom": 40,
+  "banner_pad_twips_side": 55,
+  "column_pad_twips": 70,
+  "column_widths_in": [
+    3.2,
+    3.55,
+    3.2
+  ],
+  "page": {
+    "width_in": 11.0,
+    "height_in": 8.5,
+    "top_margin_in": 0.24,
+    "bottom_margin_in": 0.24,
+    "left_margin_in": 0.27,
+    "right_margin_in": 0.27
+  },
+  "spacing": {
+    "title_after_pt": 5.0,
+    "after_banner_pt": 0.7,
+    "bullet_after_pt": 1.25,
+    "line_after_pt": 1.15,
+    "skill_after_pt": 1.0,
+    "note_after_pt": 1.1,
+    "body_line": 0.96,
+    "skill_line": 0.96,
+    "note_line": 0.94
+  },
+  "unset_variable_text": "Set per role"
+}

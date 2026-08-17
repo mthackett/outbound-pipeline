@@ -1,0 +1,181 @@
+{
+  "tool_version": "1.0.0",
+  "template_version": "1.0.0",
+  "document_title": "Candidate Cockpit",
+  "subject": "Job-targeted resume recall, consultative interview, and offer playbook",
+  "author": "",
+  "job": {
+    "job_id": "",
+    "company": "",
+    "title": "",
+    "interview_stage": ""
+  },
+  "resume": {
+    "resume_id": "",
+    "version": ""
+  },
+  "generation": {},
+  "variables": {
+    "posted_pay": "",
+    "target_pay": "",
+    "floor_pay": "",
+    "strong_win_pay": ""
+  },
+  "pages": [
+    {
+      "title": "NAME | TARGET ROLE | JOB-TARGETED RESUME RECALL",
+      "columns": [
+        [
+          {
+            "title": "Core Fit",
+            "kind": "bullets",
+            "items": []
+          },
+          {
+            "title": "Proof Numbers",
+            "kind": "bullets",
+            "items": []
+          },
+          {
+            "title": "Skill Bank",
+            "kind": "skills",
+            "items": []
+          },
+          {
+            "title": "Credentials",
+            "kind": "bullets",
+            "items": []
+          }
+        ],
+        [
+          {
+            "title": "Best-Match Experience",
+            "kind": "bullets",
+            "items": []
+          },
+          {
+            "title": "Value Pattern",
+            "kind": "mixed",
+            "blocks": []
+          }
+        ],
+        [
+          {
+            "title": "Best Evidence / Project",
+            "kind": "lines",
+            "items": []
+          },
+          {
+            "title": "Story Index",
+            "kind": "lines",
+            "items": []
+          },
+          {
+            "title": "Quick Recall",
+            "kind": "mixed",
+            "blocks": []
+          }
+        ]
+      ]
+    },
+    {
+      "title": "NAME | CONSULTATIVE INTERVIEW + OFFER PLAYBOOK",
+      "columns": [
+        [
+          {
+            "title": "Value Thesis",
+            "kind": "bullets",
+            "items": []
+          },
+          {
+            "title": "Likely Business Pain",
+            "kind": "lines",
+            "items": []
+          },
+          {
+            "title": "Behavioral Question Map",
+            "kind": "lines",
+            "items": []
+          }
+        ],
+        [
+          {
+            "title": "Compensation Snapshot",
+            "kind": "lines",
+            "items": [
+              {
+                "label": "Posted range: ",
+                "value": "{{posted_pay}}"
+              },
+              {
+                "label": "Target: ",
+                "value": "{{target_pay}}"
+              },
+              {
+                "label": "Floor: ",
+                "value": "{{floor_pay}}"
+              },
+              {
+                "label": "Strong win: ",
+                "value": "{{strong_win_pay}}"
+              }
+            ]
+          },
+          {
+            "title": "Value-Based Negotiation Anchor",
+            "kind": "bullets",
+            "items": []
+          },
+          {
+            "title": "Negotiation Sequence",
+            "kind": "bullets",
+            "items": []
+          },
+          {
+            "title": "Counter Structure",
+            "kind": "lines",
+            "items": []
+          },
+          {
+            "title": "Package Check",
+            "kind": "bullets",
+            "items": []
+          },
+          {
+            "title": "Tradeables",
+            "kind": "bullets",
+            "items": []
+          }
+        ],
+        [
+          {
+            "title": "Questions to Validate Pain",
+            "kind": "bullets",
+            "items": []
+          },
+          {
+            "title": "Bridge Points",
+            "kind": "lines",
+            "items": []
+          },
+          {
+            "title": "First 90 Days",
+            "kind": "lines",
+            "items": []
+          },
+          {
+            "title": "Role Scope Check",
+            "kind": "bullets",
+            "items": []
+          },
+          {
+            "title": "Offer Scorecard",
+            "kind": "bullets",
+            "items": [],
+            "note": ""
+          }
+        ]
+      ]
+    }
+  ]
+}
