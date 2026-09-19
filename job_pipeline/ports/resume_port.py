@@ -7,6 +7,7 @@ class ResumeFileRef(BaseModel):
     doc_id: str
     filename: str
     role_label: str = ""
+    web_link: Optional[str] = None
 
 
 class ResumeRepositoryPort(ABC):

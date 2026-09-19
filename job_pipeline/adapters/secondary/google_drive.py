@@ -39,12 +39,27 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
         self._init_services()
 
     def _init_services(self):
-        if not os.path.exists(self.credentials_path):
-            print(f"WARNING: Credentials file '{self.credentials_path}' not found. Google Drive adapter disabled.")
+        creds = None
+        raw_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+        if raw_json and raw_json.strip():
+            try:
+                import json
+                keyfile_dict = json.loads(raw_json)
+                creds = ServiceAccountCredentials.from_json_keyfile_dict(keyfile_dict, SCOPES)
+            except Exception as e:
+                print(f"WARNING: Could not parse GOOGLE_CREDENTIALS_JSON: {e}")
+
+        if creds is None and os.path.exists(self.credentials_path):
+            try:
+                creds = ServiceAccountCredentials.from_json_keyfile_name(self.credentials_path, SCOPES)
+            except Exception as e:
+                print(f"WARNING: Failed to load credentials from file '{self.credentials_path}': {e}")
+
+        if creds is None:
+            print(f"WARNING: No valid Google credentials found (checked GOOGLE_CREDENTIALS_JSON and '{self.credentials_path}'). Google Drive adapter disabled.")
             return
 
         try:
-            creds = ServiceAccountCredentials.from_json_keyfile_name(self.credentials_path, SCOPES)
             self._drive_svc = build("drive", "v3", credentials=creds)
             self._docs_svc = build("docs", "v1", credentials=creds)
         except Exception as e:
@@ -143,7 +158,7 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
             return {"file_id": doc_id, "file_link": doc_link}
         except Exception as e:
             if "storageQuotaExceeded" in str(e):
-                print(f"INFO: Service Account storage quota notice. Share folder 'your-google-drive-applications-root-folder-id-here' with service account email 'your-service-account@your-project.iam.gserviceaccount.com' as Editor.")
+                print("INFO: Service Account storage quota notice. Ensure your Google Drive root applications folder is shared with your service account email as Editor.")
             else:
                 print(f"ERROR: Failed to create Raw Job Description Google Doc: {e}")
             return None
@@ -213,12 +228,19 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
 
         query = f"'{self.resumes_folder_id}' in parents and mimeType = 'application/vnd.google-apps.document' and trashed = false"
         try:
-            results = self._drive_svc.files().list(q=query, pageSize=50, fields="files(id, name)").execute()
+            results = self._drive_svc.files().list(q=query, pageSize=50, fields="files(id, name, webViewLink)").execute()
             files = results.get("files", [])
             resumes = []
             for f in files:
+                f_id = f.get("id")
                 clean_label = re.sub(r'(?i)\b(resume|cv|doc)\b', '', f.get("name", "")).strip()
-                resumes.append(ResumeFileRef(doc_id=f.get("id"), filename=f.get("name"), role_label=clean_label))
+                link = f.get("webViewLink") or f"https://docs.google.com/document/d/{f_id}/edit"
+                resumes.append(ResumeFileRef(
+                    doc_id=f_id,
+                    filename=f.get("name"),
+                    role_label=clean_label,
+                    web_link=link
+                ))
             return resumes
         except Exception as e:
             print(f"ERROR: Failed to list resumes from Google Drive: {e}")

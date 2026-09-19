@@ -18,9 +18,8 @@ A comprehensive system handbook, operational runbook, status checklist, and feat
 ## 📌 One-Time Setup Checklist
 
 - [ ] **Google Drive Service Account Sharing**:
-  - Open root folder `your-google-drive-applications-root-folder-id-here` in Google Drive web UI:
-    👉 [https://drive.google.com/drive/folders/your-google-drive-applications-root-folder-id-here](https://drive.google.com/drive/folders/your-google-drive-applications-root-folder-id-here)
-  - Click **Share** -> Add `your-service-account@your-project.iam.gserviceaccount.com` as **Editor**.
+  - Open your root applications folder in Google Drive.
+  - Click **Share** -> Add your service account `client_email` (from `credentials.json`) as **Editor**.
   - *This completes 100% cloud file upload syncing into your personal Google Drive folder!*
 - [ ] **Optional `.env` Configuration**:
   - Add your personal Google login email to `.env`: `GOOGLE_USER_EMAIL=your_email@gmail.com` to automatically grant direct browser view permissions to all generated drive links.

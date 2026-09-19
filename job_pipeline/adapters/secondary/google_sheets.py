@@ -32,19 +32,38 @@ class GoogleSheetsAdapter(JobStoragePort):
         spreadsheet_id: Optional[str] = None
     ):
         self.credentials_path = credentials_path or os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials.json")
-        self.spreadsheet_id = spreadsheet_id or os.environ.get("GOOGLE_SPREADSHEET_ID", "your-google-spreadsheet-id-here")
+        self.spreadsheet_id = spreadsheet_id or os.environ.get("GOOGLE_SPREADSHEET_ID", "")
         self._client = None
         self._spreadsheet = None
         self._init_connection()
 
     def _init_connection(self):
-        if not os.path.exists(self.credentials_path):
-            print(f"WARNING: Credentials file '{self.credentials_path}' not found. Google Sheets adapter disabled.")
+        if not self.spreadsheet_id:
+            print("WARNING: GOOGLE_SPREADSHEET_ID is not configured.")
+            return
+
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = None
+        raw_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+        if raw_json and raw_json.strip():
+            try:
+                import json
+                keyfile_dict = json.loads(raw_json)
+                creds = ServiceAccountCredentials.from_json_keyfile_dict(keyfile_dict, scope)
+            except Exception as e:
+                print(f"WARNING: Could not parse GOOGLE_CREDENTIALS_JSON: {e}")
+
+        if creds is None and os.path.exists(self.credentials_path):
+            try:
+                creds = ServiceAccountCredentials.from_json_keyfile_name(self.credentials_path, scope)
+            except Exception as e:
+                print(f"WARNING: Failed to load credentials from file '{self.credentials_path}': {e}")
+
+        if creds is None:
+            print(f"WARNING: No valid Google credentials found (checked GOOGLE_CREDENTIALS_JSON and '{self.credentials_path}'). Google Sheets adapter disabled.")
             return
 
         try:
-            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-            creds = ServiceAccountCredentials.from_json_keyfile_name(self.credentials_path, scope)
             self._client = gspread.authorize(creds)
             self._spreadsheet = self._client.open_by_key(self.spreadsheet_id)
         except Exception as e:
@@ -188,13 +207,28 @@ class GoogleSheetsAdapter(JobStoragePort):
             ingest_ws = self._spreadsheet.worksheet("Raw Ingestion")
             records = ingest_ws.get_all_records()
             headers = [h.strip() for h in ingest_ws.row_values(1)]
-            status_col = headers.index("Status") + 1 if "Status" in headers else 5
+            status_col = headers.index("Status") + 1 if "Status" in headers else 7
+            notes_col = headers.index("Notes") + 1 if "Notes" in headers else None
 
             for idx, rec in enumerate(records, start=2):
                 if str(rec.get("Opportunity ID", "")).strip() == opportunity_id:
                     ingest_ws.update_cell(idx, status_col, status)
+                    if notes is not None and notes_col:
+                        ingest_ws.update_cell(idx, notes_col, notes)
                     return True
             return False
         except Exception as e:
             print(f"ERROR: Failed to update status in Google Sheets: {e}")
             return False
+
+    def fetch_all_opportunities(self) -> List[Dict[str, Any]]:
+        """Retrieves all tracked opportunities from 'Raw Ingestion' worksheet for CRM/Pipeline viewing."""
+        if not self.is_connected:
+            return []
+        try:
+            worksheet = self._spreadsheet.worksheet("Raw Ingestion")
+            records = worksheet.get_all_records()
+            return records
+        except Exception as e:
+            print(f"ERROR: Failed to fetch opportunities from Google Sheets: {e}")
+            return []
