@@ -1,6 +1,9 @@
 # Secrets & Credentials
 .env
 credentials.json
+token.json
+client_secret*.json
+oauth_*.json
 
 # Legacy Scratch / Prototype Directory
 project/

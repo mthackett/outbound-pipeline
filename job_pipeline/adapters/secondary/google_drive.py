@@ -7,18 +7,13 @@ load_dotenv()
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload, MediaInMemoryUpload
-from oauth2client.service_account import ServiceAccountCredentials
 
+from job_pipeline.domain.models import ScreeningQA
+from job_pipeline.domain.services import ScreeningQAService
 from job_pipeline.ports.storage_port import DocumentStoragePort
 from job_pipeline.ports.resume_port import ResumeRepositoryPort, ResumeFileRef
 from job_pipeline.adapters.secondary.resume_selector import TitleBasedResumeSelector
-
-
-SCOPES = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/documents.readonly"
-]
+from job_pipeline.adapters.secondary.google_auth import SCOPES
 
 
 class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
@@ -39,29 +34,18 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
         self._init_services()
 
     def _init_services(self):
-        creds = None
-        raw_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-        if raw_json and raw_json.strip():
-            try:
-                import json
-                keyfile_dict = json.loads(raw_json)
-                creds = ServiceAccountCredentials.from_json_keyfile_dict(keyfile_dict, SCOPES)
-            except Exception as e:
-                print(f"WARNING: Could not parse GOOGLE_CREDENTIALS_JSON: {e}")
-
-        if creds is None and os.path.exists(self.credentials_path):
-            try:
-                creds = ServiceAccountCredentials.from_json_keyfile_name(self.credentials_path, SCOPES)
-            except Exception as e:
-                print(f"WARNING: Failed to load credentials from file '{self.credentials_path}': {e}")
+        from job_pipeline.adapters.secondary.google_auth import get_google_credentials
+        creds, auth_type = get_google_credentials(credentials_path=self.credentials_path)
+        self.auth_type = auth_type
 
         if creds is None:
-            print(f"WARNING: No valid Google credentials found (checked GOOGLE_CREDENTIALS_JSON and '{self.credentials_path}'). Google Drive adapter disabled.")
+            print(f"WARNING: No valid Google credentials found (checked OAuth token.json and '{self.credentials_path}'). Google Drive adapter disabled.")
             return
 
         try:
             self._drive_svc = build("drive", "v3", credentials=creds)
             self._docs_svc = build("docs", "v1", credentials=creds)
+            print(f"INFO: Google Drive Adapter initialized successfully (Auth Type: {self.auth_type}).")
         except Exception as e:
             print(f"WARNING: Could not initialize Google Drive API: {e}")
 
@@ -110,15 +94,43 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
                         body={"type": "anyone", "role": "reader"}
                     ).execute()
             except Exception as perm_err:
-                print(f"INFO: Drive permission notice: {perm_err}")
+                print(f"INFO: Permission setting notice: {perm_err}")
+
+            # Create a shortcut to the master pipeline spreadsheet inside the application folder
+            sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
+            if sheet_id:
+                try:
+                    self._drive_svc.files().create(
+                        body={
+                            "name": "Pipeline Tracker (Master Sheet)",
+                            "mimeType": "application/vnd.google-apps.shortcut",
+                            "parents": [folder_id],
+                            "shortcutDetails": {"targetId": sheet_id}
+                        },
+                        fields="id, webViewLink"
+                    ).execute()
+                    print("SUCCESS: Created master sheet shortcut in application folder.")
+                except Exception as sc_err:
+                    print(f"INFO: Sheet shortcut notice: {sc_err}")
 
             return {"folder_id": folder_id, "folder_link": folder_link}
         except Exception as e:
             print(f"ERROR: Failed to create Drive application folder: {e}")
             return {"folder_id": "", "folder_link": ""}
 
-    def upload_raw_job_description(self, folder_id: str, raw_text: str) -> Optional[Dict[str, str]]:
+    def upload_raw_job_description(self, folder_id: str, raw_text: str, company_name: str = "", job_title: str = "") -> Optional[Dict[str, str]]:
         """Creates a Google Doc with raw JD text inside the application folder (0 quota bytes)."""
+        # Save local backup on disk
+        os.makedirs("output_reports", exist_ok=True)
+        if company_name or job_title:
+            safe_c = re.sub(r'[^a-zA-Z0-9]', '_', company_name)
+            safe_t = re.sub(r'[^a-zA-Z0-9]', '_', job_title)
+            try:
+                with open(f"output_reports/{safe_c}_{safe_t}_Raw_Job_Description.txt", "w", encoding="utf-8") as f:
+                    f.write(raw_text)
+            except Exception as io_err:
+                print(f"INFO: Local disk backup notice: {io_err}")
+
         if not self.is_connected or not folder_id or folder_id == "mock_folder_id":
             return {"file_id": "mock_file_id", "file_link": "https://drive.google.com/mock_file"}
 
@@ -127,33 +139,32 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
             "mimeType": "application/vnd.google-apps.document",
             "parents": [folder_id]
         }
+        media = MediaInMemoryUpload(raw_text.encode("utf-8"), mimetype="text/plain", resumable=False)
 
         try:
             doc_file = self._drive_svc.files().create(
                 body=file_metadata,
+                media_body=media,
                 fields="id, webViewLink"
             ).execute()
             doc_id = doc_file.get("id")
             doc_link = doc_file.get("webViewLink")
 
-            # Write text content to Google Doc using Docs API
-            if self._docs_svc and doc_id:
-                try:
-                    self._docs_svc.documents().batchUpdate(
-                        documentId=doc_id,
-                        body={
-                            "requests": [
-                                {
-                                    "insertText": {
-                                        "location": {"index": 1},
-                                        "text": raw_text
-                                    }
-                                }
-                            ]
-                        }
+            # Ensure accessible permissions
+            user_email = os.environ.get("CANDIDATE_EMAIL") or os.environ.get("GOOGLE_USER_EMAIL")
+            try:
+                if user_email:
+                    self._drive_svc.permissions().create(
+                        fileId=doc_id,
+                        body={"type": "user", "role": "writer", "emailAddress": user_email}
                     ).execute()
-                except Exception as doc_err:
-                    print(f"INFO: Text insert into Google Doc notice: {doc_err}")
+                else:
+                    self._drive_svc.permissions().create(
+                        fileId=doc_id,
+                        body={"type": "anyone", "role": "reader"}
+                    ).execute()
+            except Exception as perm_err:
+                print(f"INFO: Permission setting notice: {perm_err}")
 
             return {"file_id": doc_id, "file_link": doc_link}
         except Exception as e:
@@ -161,6 +172,94 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
                 print("INFO: Service Account storage quota notice. Ensure your Google Drive root applications folder is shared with your service account email as Editor.")
             else:
                 print(f"ERROR: Failed to create Raw Job Description Google Doc: {e}")
+            return None
+
+    def create_screening_questions_doc(
+        self,
+        folder_id: str,
+        company_name: str,
+        job_title: str,
+        qa_items: List[ScreeningQA],
+        opportunity_id: Optional[str] = None
+    ) -> Optional[Dict[str, str]]:
+        """Creates a Google Doc titled 'Screening Questions' inside the application folder."""
+        formatted_text = ScreeningQAService.format_screening_gdoc_text(
+            company_name=company_name,
+            job_title=job_title,
+            qa_items=qa_items,
+            opportunity_id=opportunity_id
+        )
+
+        os.makedirs("output_reports", exist_ok=True)
+        safe_c = re.sub(r'[^a-zA-Z0-9]', '_', company_name)
+        safe_t = re.sub(r'[^a-zA-Z0-9]', '_', job_title)
+        try:
+            with open(f"output_reports/{safe_c}_{safe_t}_Screening_Questions.txt", "w", encoding="utf-8") as f:
+                f.write(formatted_text)
+        except Exception as io_err:
+            print(f"INFO: Local screening backup notice: {io_err}")
+
+        if not self.is_connected or not folder_id or folder_id == "mock_folder_id":
+            return {"file_id": "mock_screening_id", "file_link": "https://docs.google.com/document/d/mock_screening_questions/edit"}
+
+        file_metadata = {
+            "name": "Screening Questions",
+            "mimeType": "application/vnd.google-apps.document",
+            "parents": [folder_id]
+        }
+        media = MediaInMemoryUpload(formatted_text.encode("utf-8"), mimetype="text/plain", resumable=False)
+
+        try:
+            # Check if a 'Screening Questions' doc already exists in this folder
+            existing_query = f"'{folder_id}' in parents and name = 'Screening Questions' and trashed = false"
+            existing_files = self._drive_svc.files().list(
+                q=existing_query,
+                fields="files(id, webViewLink)",
+                pageSize=1
+            ).execute().get("files", [])
+
+            if existing_files:
+                doc_id = existing_files[0]["id"]
+                doc_link = existing_files[0].get("webViewLink")
+                updated_file = self._drive_svc.files().update(
+                    fileId=doc_id,
+                    media_body=media,
+                    fields="id, webViewLink"
+                ).execute()
+                doc_link = updated_file.get("webViewLink", doc_link)
+                print(f"SUCCESS: Updated existing Screening Questions Google Doc: {doc_id}")
+                return {"file_id": doc_id, "file_link": doc_link}
+
+            doc_file = self._drive_svc.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, webViewLink"
+            ).execute()
+            doc_id = doc_file.get("id")
+            doc_link = doc_file.get("webViewLink")
+
+            # Set permissions
+            user_email = os.environ.get("CANDIDATE_EMAIL") or os.environ.get("GOOGLE_USER_EMAIL")
+            try:
+                if user_email:
+                    self._drive_svc.permissions().create(
+                        fileId=doc_id,
+                        body={"type": "user", "role": "writer", "emailAddress": user_email}
+                    ).execute()
+                else:
+                    self._drive_svc.permissions().create(
+                        fileId=doc_id,
+                        body={"type": "anyone", "role": "reader"}
+                    ).execute()
+            except Exception as perm_err:
+                print(f"INFO: Permission setting notice for Screening Questions doc: {perm_err}")
+
+            return {"file_id": doc_id, "file_link": doc_link}
+        except Exception as e:
+            if "storageQuotaExceeded" in str(e):
+                print("INFO: Service Account storage quota notice for Screening Questions doc. (Authenticate with personal OAuth 2.0 via `python -m job_pipeline.setup_oauth` to create native Google Docs).")
+            else:
+                print(f"ERROR: Failed to create Screening Questions Google Doc: {e}")
             return None
 
     def export_resume_pdf(self, resume_doc_id: str, folder_id: str, output_filename: str) -> Optional[str]:
@@ -184,7 +283,21 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
             return copied_file.get("id")
         except Exception as e:
             if "storageQuotaExceeded" in str(e):
-                print(f"INFO: Service Account storage quota notice for resume copy.")
+                # Service account has 0 quota in personal Google Drive -> create a native Shortcut to the resume instead!
+                try:
+                    sc = self._drive_svc.files().create(
+                        body={
+                            "name": output_filename.replace(".pdf", ""),
+                            "mimeType": "application/vnd.google-apps.shortcut",
+                            "parents": [folder_id],
+                            "shortcutDetails": {"targetId": resume_doc_id}
+                        },
+                        fields="id, webViewLink"
+                    ).execute()
+                    print(f"SUCCESS: Created resume shortcut in application folder: {sc.get('id')}")
+                    return sc.get("id")
+                except Exception as sc_err:
+                    print(f"INFO: Resume shortcut creation notice: {sc_err}")
             else:
                 print(f"ERROR: Failed to copy resume Google Doc inside Drive folder: {e}")
             return None

@@ -3,6 +3,8 @@ import sys
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional
+from dotenv import load_dotenv
+load_dotenv()
 from openai import OpenAI
 
 # Add role_intelligence directory to sys.path for internal imports

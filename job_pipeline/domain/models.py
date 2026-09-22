@@ -12,10 +12,17 @@ class TargetPayBounds(BaseModel):
     display_range: str = "Not specified"
 
 
+class ScreeningQA(BaseModel):
+    question: str
+    answer: str
+    category: Optional[str] = None  # Salary, Technical, Experience, Culture, General
+    created_at: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+
 class FitEvaluation(BaseModel):
     status: str = Field(
         ...,
-        description="PASS, FLAGGED_DEALBREAKER, FLAGGED_SKILL_MISMATCH, FLAGGED_LOW_PAY, FLAGGED_DUPLICATE"
+        description="PASS, FLAGGED_DEALBREAKER, FLAGGED_SKILL_MISMATCH, FLAGGED_LOW_PAY, FLAGGED_DUPLICATE, FLAGGED_COMPANY_VELOCITY"
     )
     is_qualified: bool = True
     dealbreakers_found: List[str] = Field(default_factory=list)
@@ -24,6 +31,12 @@ class FitEvaluation(BaseModel):
     pay_bounds: TargetPayBounds = Field(default_factory=TargetPayBounds)
     warnings: List[str] = Field(default_factory=list)
     reasoning: str = ""
+    duplicate_detected: bool = False
+    is_repost: bool = False
+    prior_application_date: Optional[str] = None
+    company_velocity_exceeded: bool = False
+    active_company_applications_count: int = 0
+    active_company_applications: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class JobPosting(BaseModel):
@@ -41,6 +54,8 @@ class JobPosting(BaseModel):
     selected_resume_name: Optional[str] = None
     drive_folder_link: Optional[str] = None
     drive_jd_link: Optional[str] = None
+    drive_screening_doc_link: Optional[str] = None
+    screening_qa: List[ScreeningQA] = Field(default_factory=list)
     row_index: Optional[int] = None
     tokens_used: int = 0
 
@@ -54,6 +69,9 @@ class CandidateProfile(BaseModel):
     ])
     minimum_compensation_floor: float = 90000
     target_pay_percentiles: List[float] = Field(default_factory=lambda: [0.60, 0.80])
+    max_company_applications_limit: int = 2
+    company_application_window_days: int = 60
+    repost_detection_threshold_days: int = 60
 
 
 class StakeholderContact(BaseModel):

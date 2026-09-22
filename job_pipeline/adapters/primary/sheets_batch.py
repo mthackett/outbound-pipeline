@@ -61,6 +61,9 @@ def run_batch_pipeline(demo_mode: bool = False):
 
         print(f"\nPROCESSING JOB: {job.company_name} - {job.job_title} ({job.title_family})")
 
+        # Fetch existing opportunities for duplicate & velocity guardrails
+        all_opps = storage_adapter.fetch_all_opportunities()
+
         # 1. Run Qualification & Target Pay Calculator (60%-80%)
         fit_eval = JobQualificationService.evaluate(
             company_name=job.company_name,
@@ -70,7 +73,8 @@ def run_batch_pipeline(demo_mode: bool = False):
             preferred_skills=job.preferred_skills,
             salary_min=sal_min,
             salary_max=sal_max,
-            profile=profile
+            profile=profile,
+            existing_company_titles=all_opps
         )
         print(f"  FIT GUARDRAIL RESULT: {fit_eval.status} - {fit_eval.reasoning}")
         print(f"  TARGET PAY RANGE:     {fit_eval.pay_bounds.display_range}")
@@ -101,9 +105,14 @@ def run_batch_pipeline(demo_mode: bool = False):
 
         job.tokens_used = getattr(llm_adapter, "last_telemetry_tokens", 0) + getattr(llm_adapter, "last_report_tokens", 0)
 
-        # 5. Upload Assets to Drive Workspace
+        # 5. Upload Assets to Drive Workspace (Raw JD Document + PDF Resume + DOCX Report)
         if workspace.get("folder_id"):
-            jd_file_res = drive_adapter.upload_raw_job_description(workspace["folder_id"], job.raw_description)
+            jd_file_res = drive_adapter.upload_raw_job_description(
+                workspace["folder_id"],
+                job.raw_description,
+                company_name=job.company_name,
+                job_title=job.job_title
+            )
             if isinstance(jd_file_res, dict):
                 job.drive_jd_link = jd_file_res.get("file_link")
             if selected_resume and selected_resume.doc_id:

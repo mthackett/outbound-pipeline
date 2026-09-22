@@ -65,18 +65,30 @@ All dependencies are pre-installed in the local `.venv`.
 
 Before processing live applications, confirm the following settings:
 
-- [ ] **1. Google Drive Root Folder Permission**:
-  * Locate your service account email inside your `credentials.json` (under `"client_email"`).
-  * Open your root applications folder in Google Drive.
-  * Click **Share** and ensure the service account email is added as **Editor**.
-  * *(Without this, folder creation may fail with storage quota errors).*
+- [ ] **1. Google Authentication (OAuth 2.0 User Token vs Service Account)**:
+  * **Option A: Personal OAuth 2.0 (Recommended - Uses your 15 GB+ personal quota)**:
+    1. Open [Google Cloud Console](https://console.cloud.google.com/) with your project `job-application-tracker-471402`.
+    2. Go to **APIs & Services > OAuth consent screen**: Ensure User Type is **External** and your email (`M4tth@live.com`) is added as a **Test user**.
+    3. Go to **APIs & Services > Credentials**: Click **+ Create Credentials > OAuth client ID**.
+       - Application type: **Desktop app**
+       - Name: `Job Application Tracker Desktop`
+    4. Click **Create**, download the JSON file, and save it in the project root as `client_secret.json`.
+    5. Run the one-time interactive authorization:
+       ```powershell
+       .\.venv\Scripts\python -m job_pipeline.setup_oauth
+       ```
+       *Your browser will open to log in with `M4tth@live.com`. Once granted, `token.json` is generated.*
+    * **Benefit**: All Google Docs (Screening Questions, Raw JD) and DOCX uploads will be created directly under your personal account with full 15 GB quota!
+  * **Option B: Service Account Fallback (`credentials.json`)**:
+    * If `token.json` is not present, the pipeline automatically falls back to `credentials.json`.
+    * In Service Account mode, folders, spreadsheets, and shortcuts are created seamlessly, but creating physical Google Docs will be substituted with native shortcuts and local disk backups (`output_reports/`) due to GCP's 0-byte service account storage limit.
 
-- [ ] **2. Add Your Google Email to `.env`**:
-  * Open `.env` and add your personal Google account email:
+- [ ] **2. Google Drive Root Folder Permission**:
+  * If using Service Account fallback, share your root applications folder in Google Drive with the service account email as **Editor**.
+  * Add your personal email to `.env`:
     ```env
-    GOOGLE_USER_EMAIL=your_email@gmail.com
+    GOOGLE_USER_EMAIL=M4tth@live.com
     ```
-  * This ensures all newly created application folders grant direct edit/view permissions to your personal Google account so links open without authentication roadblocks.
 
 - [ ] **3. Candidate Resume Storage in Drive**:
   * Your configured Google Drive resume folder (`GOOGLE_RESUMES_FOLDER_ID`) currently holds:

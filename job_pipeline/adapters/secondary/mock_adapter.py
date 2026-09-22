@@ -1,7 +1,7 @@
 import os
 import uuid
 from typing import List, Dict, Any, Optional
-from job_pipeline.domain.models import JobPosting, FitEvaluation, RoleIntelligenceReport
+from job_pipeline.domain.models import JobPosting, FitEvaluation, RoleIntelligenceReport, ScreeningQA
 from job_pipeline.ports.storage_port import JobStoragePort, DocumentStoragePort
 from job_pipeline.ports.resume_port import ResumeRepositoryPort, ResumeFileRef
 from job_pipeline.ports.llm_port import LLMStrategyPort
@@ -10,6 +10,7 @@ from job_pipeline.ports.llm_port import LLMStrategyPort
 class MockJobStorageAdapter(JobStoragePort):
     def __init__(self):
         self.saved_jobs: List[Dict[str, Any]] = []
+        self.screening_qa_store: List[Dict[str, Any]] = []
 
     def fetch_pending_jobs(self) -> List[JobPosting]:
         return [
@@ -31,19 +32,90 @@ class MockJobStorageAdapter(JobStoragePort):
     def update_opportunity_status(self, opportunity_id: str, status: str, notes: Optional[str] = None) -> bool:
         return True
 
+    def fetch_all_opportunities(self) -> List[Dict[str, Any]]:
+        results = []
+        for item in self.saved_jobs:
+            j = item["job"]
+            fe = item["fit_eval"]
+            results.append({
+                "Company Name": j.company_name,
+                "Job Title": j.job_title,
+                "Date Created": j.date_created,
+                "Status": j.status,
+                "Opportunity ID": j.opportunity_id,
+                "Target Pay Range": fe.pay_bounds.display_range,
+                "Fit Warning": fe.reasoning,
+                "Drive Folder Link": j.drive_folder_link or "https://drive.google.com/mock_folder"
+            })
+        return results
+
+    def save_screening_qa(
+        self,
+        opportunity_id: str,
+        company_name: str,
+        job_title: str,
+        qa_items: List[ScreeningQA],
+        gdoc_link: Optional[str] = None
+    ) -> bool:
+        for q in qa_items:
+            self.screening_qa_store.append({
+                "opportunity_id": opportunity_id,
+                "company_name": company_name,
+                "job_title": job_title,
+                "question": q.question,
+                "answer": q.answer,
+                "category": q.category,
+                "timestamp": q.created_at,
+                "gdoc_link": gdoc_link or "https://docs.google.com/document/d/mock_screening_qa/edit"
+            })
+        return True
+
+    def fetch_screening_qa(self, opportunity_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        if opportunity_id:
+            return [q for q in self.screening_qa_store if q.get("opportunity_id") == opportunity_id]
+        return self.screening_qa_store
+
+    def append_call_note(self, opportunity_id: str, note_text: str, call_type: str = "Call", interviewer: str = "") -> bool:
+        for opp in self.saved_jobs:
+            if opp.get("Opportunity ID") == opportunity_id:
+                prev_notes = opp.get("Notes", "")
+                who = f" (with {interviewer.strip()})" if interviewer else ""
+                entry = f"[{call_type}{who}]: {note_text}"
+                opp["Notes"] = f"{prev_notes}\n{entry}" if prev_notes else entry
+                return True
+        return True
+
+    def update_opportunity_screening_doc(self, opportunity_id: str, gdoc_link: str, qa_count: int) -> bool:
+        for opp in self.saved_jobs:
+            if opp.get("Opportunity ID") == opportunity_id:
+                opp["Screening Doc Link"] = gdoc_link
+                opp["Screening QA Count"] = qa_count
+                return True
+        return True
+
 
 class MockDocumentStorageAdapter(DocumentStoragePort):
     def create_application_workspace(self, company_name: str, job_title: str) -> Dict[str, str]:
         return {"folder_id": "mock_drive_folder_id", "folder_link": "https://drive.google.com/mock_folder"}
 
-    def upload_raw_job_description(self, folder_id: str, raw_text: str) -> Optional[str]:
-        return "mock_raw_jd_file_id"
+    def upload_raw_job_description(self, folder_id: str, raw_text: str, company_name: str = "", job_title: str = "") -> Optional[Dict[str, str]]:
+        return {"file_id": "mock_raw_jd_file_id", "file_link": "https://docs.google.com/document/d/mock_raw_jd/edit"}
 
     def export_resume_pdf(self, resume_doc_id: str, folder_id: str, output_filename: str) -> Optional[str]:
         return "mock_pdf_resume_id"
 
     def upload_role_intelligence_report(self, folder_id: str, local_docx_path: str) -> Optional[str]:
         return "mock_docx_report_id"
+
+    def create_screening_questions_doc(
+        self,
+        folder_id: str,
+        company_name: str,
+        job_title: str,
+        qa_items: List[ScreeningQA],
+        opportunity_id: Optional[str] = None
+    ) -> Optional[Dict[str, str]]:
+        return {"file_id": "mock_screening_doc_id", "file_link": "https://docs.google.com/document/d/mock_screening_questions/edit"}
 
 
 class MockResumeRepositoryAdapter(ResumeRepositoryPort):

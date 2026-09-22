@@ -1,4 +1,6 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Literal
 

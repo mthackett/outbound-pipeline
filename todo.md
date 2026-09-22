@@ -45,8 +45,32 @@ A comprehensive system handbook, operational runbook, status checklist, and feat
 - **Batch Processor (`sheets_batch.py`)**: CLI orchestrator for bulk sheet evaluation.
 - **Single Job CLI (`cli_runner.py`)**: Command line tool for evaluating text files.
 
-### 4. Local Disk Backups
-- All raw JDs, candidate resumes, and DOCX reports are backed up locally under `output_reports/`.
+### 4. Application Guardrails & ATS Protection (`job_pipeline/domain/services.py`)
+- **Duplicate Prevention & Repost Detection**: Automatically checks new opportunities against historical applications. Distinguishes between recent duplicates (< 60 days, high ATS rejection risk) and potential renewed reposts (>= 60 days). Provides advisory warning with 1-click user override in Streamlit.
+- **Company Application Velocity Guardrail**: Enforces configurable concurrency limit (default: max 2 active/recent applications per company in a 60-day window) to prevent triggering recruiter spam filters.
+- **Pre-flight Advisory Confirmation**: Halts before consuming OpenAI tokens or generating Drive folders, presenting full historical context and allowing user to "Proceed Anyway" or "Cancel".
+
+### 5. Application Screening Questions & Answers System
+- **Interactive UI Recording**: Ingest screening questions and answers dynamically with category tagging (Technical, Salary, Experience, Culture, General) and optional 1-click "✨ Draft with AI" assist.
+- **Dedicated Google Doc ('Screening Questions')**: Automatically generated in the application's Google Drive workspace folder (`<Company>_<Role>_<Date>`) with clean formatting and direct web link.
+- **Cross-Job Reusable Library**: Synced to master Google Sheet (`Screening QA` worksheet) and searchable in the dashboard to reuse strong answers across applications.
+- **1-Tap ATS Application Kit**: Immediate clipboard copy blocks for lightning-fast application form submission.
+
+### 6. Personal OAuth 2.0 User Authentication (`google_auth.py`, `setup_oauth.py`)
+- Greenfielded OAuth 2.0 Desktop App authorization (`token.json`), linking pipeline directly to personal Google Account (`M4tth@live.com`) with 5 TB available quota.
+- Eliminated 0-byte Service Account Drive quota errors (`403 storageQuotaExceeded`).
+- Independent Google Doc copies of tailored resumes, raw job descriptions, and screening question documents created directly in application Drive folders.
+- Maintained backward-compatible fallback to Service Account (`credentials.json`) and zero-cost mock fixtures.
+
+### 7. CRM In-Place Application Editing & Live Drive Sync
+- **Structured Call & Interview Logger**: Record phone screens, recruiter calls, and hiring manager interviews with timestamps, interviewer metadata, and key takeaways appended to Google Sheets tracker.
+- **Per-Job Screening Q&A Manager**: Review past screening answers and append new questions with 1-click "✨ Draft with AI" assist.
+- **In-Place Drive Document Sync**: Idempotently updates the `Screening Questions` Google Doc in the application's Drive folder in place, preserving document URLs.
+
+### 8. Google Sheets Rate-Limiting & Quota Protections
+- **`st.form` Batching**: Encapsulated CRM note and Q&A editors inside `st.form`. Typing in fields no longer fires background API requests; requests execute strictly on Submit/Enter.
+- **120-Second TTL Caching**: Added in-memory caching to `fetch_all_opportunities` and `fetch_screening_qa`. Tab 2 indexes records into a dictionary in-memory with 0 extra Sheets API requests inside card loops.
+- **429 Rate Limit Guardrail**: Graceful fallback to cached data if Google Sheets 60 req/min quota is approached.
 
 ---
 
