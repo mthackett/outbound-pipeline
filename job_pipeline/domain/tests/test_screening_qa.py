@@ -15,6 +15,17 @@ class TestScreeningQAService(unittest.TestCase):
         self.assertEqual(item.category, "Culture")
         self.assertTrue(len(item.created_at) > 0)
 
+    def test_questions_for_company_category(self):
+        from job_pipeline.domain.models import SCREENING_CATEGORIES
+        self.assertIn("Questions for Company", SCREENING_CATEGORIES)
+        item = ScreeningQA(
+            question="Do you have any questions for us?",
+            answer="What are the highest-leverage milestones for this role during the first 90 days?",
+            category="Questions for Company"
+        )
+        self.assertEqual(item.category, "Questions for Company")
+
+
     def test_format_screening_gdoc_text(self):
         items = [
             ScreeningQA(

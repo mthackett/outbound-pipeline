@@ -64,6 +64,7 @@ A comprehensive system handbook, operational runbook, status checklist, and feat
 
 ### 7. CRM In-Place Application Editing & Live Drive Sync
 - **Structured Call & Interview Logger**: Record phone screens, recruiter calls, and hiring manager interviews with timestamps, interviewer metadata, and key takeaways appended to Google Sheets tracker.
+- **Reactive Stage & Status Synchronization**: Updating an application's interview stage (e.g. from `Processed` to `Applied` or `Recruiter Screen`) immediately synchronizes with Google Sheets, updates in-memory CRM state, and re-renders the Cockpit with `st.rerun()`.
 - **Per-Job Screening Q&A Manager**: Review past screening answers and append new questions with 1-click "✨ Draft with AI" assist.
 - **In-Place Drive Document Sync**: Idempotently updates the `Screening Questions` Google Doc in the application's Drive folder in place, preserving document URLs.
 
@@ -72,7 +73,16 @@ A comprehensive system handbook, operational runbook, status checklist, and feat
 - **120-Second TTL Caching**: Added in-memory caching to `fetch_all_opportunities` and `fetch_screening_qa`. Tab 2 indexes records into a dictionary in-memory with 0 extra Sheets API requests inside card loops.
 - **429 Rate Limit Guardrail**: Graceful fallback to cached data if Google Sheets 60 req/min quota is approached.
 
+### 9. Candidate Application Quicklinks Area & Config Manager
+- **Zero-Friction Retrieval**: 1-click clipboard copy (`st.code`) and direct browser navigation for common job application profile links (LinkedIn, GitHub, Personal Website / Portfolio, Calendly, etc.).
+- **Strategic Placement**:
+  - Persistent Sidebar Drawer: Always accessible across all Cockpit tabs.
+  - Tab 1 Fast Ingestion Bar & 1-Tap Application Kit: Directly embedded in the application submission workflow.
+  - All-in-one "Copy All Links" bundle for pasting into application forms or recruiter inquiries at once.
+- **In-App Interactive Configuration**: Add new custom links, edit labels, URLs, icons, and categories, or delete links with instant persistence to `quicklinks.json`.
+
 ---
+
 
 ## 🔮 Future Roadmap & Features (Milestone 3 Expansion)
 
@@ -97,6 +107,42 @@ A comprehensive system handbook, operational runbook, status checklist, and feat
 - [ ] **Relational Graph**: Visual UI mapping Companies $\leftrightarrow$ Contacts (Hiring Managers, Recruiters) $\leftrightarrow$ Applications $\leftrightarrow$ Touchpoints.
 - [ ] **Automated Follow-up Reminders**: Automated alerts for following up 5 days post-application.
 - [ ] **Custom Outreach Email Generator**: 1-click LLM cold outreach and networking email generator tailored to specific job pain points.
+
+### M3.6: Lightweight Analytics Dashboard
+- [ ] **Conversion Funnel Metrics**: Visual funnel tracking progression from Applied $\rightarrow$ Recruiter Screen $\rightarrow$ Hiring Manager $\rightarrow$ Technical Screen $\rightarrow$ Offer.
+- [ ] **Application Velocity & Cadence**: Weekly/monthly trend charts of jobs ingested vs applied to monitor search momentum.
+- [ ] **Compensation & Spread Analytics**: Distribution charts comparing posted salary ranges against 60%–80% target compensation anchors.
+- [ ] **Skill Demand Frequency**: Aggregated breakdown of most frequently requested tech stack requirements across all evaluated JDs.
+- [ ] **Response & Ghosting Rates**: Track average days to recruiter response and identify pipeline drop-off bottlenecks.
+- [ ] **LLM Cost & Token Analytics**: Total token consumption, cumulative dollar spend, and average cost per processed application.
+
+### M3.7: Hiring Process & Interview Stages Intelligence
+- [ ] **Automated Stage Extraction**: Upgrade OpenAI telemetry extractor to parse outlined hiring process steps from JD text (e.g. Initial Recruiter Screen $\rightarrow$ Take-Home / Assessment $\rightarrow$ Hiring Manager $\rightarrow$ Team Panel $\rightarrow$ Offer).
+- [ ] **Cockpit Apply Kit & Recall Card Integration**: Prominently display expected hiring stages in Tab 1 (1-Tap Apply Kit & 10-Second Recruiter Screen Recall Card) to prepare before speaking with recruiters.
+- [ ] **Interactive Stage Checklist in CRM**: Display the company's specific interview pipeline inside each application card in Tab 2 to track progress through their stated stages.
+- [ ] **Persistent Sheet & Doc Logging**: Save extracted interview stages into a dedicated column in Google Sheets (`Interview Process`) and embed into the generated Role Intelligence Report DOCX.
+
+### M3.8: LLM Token Usage & Cost Telemetry Tracker
+- [ ] **Comprehensive Token Accounting**: Track prompt (input) and completion (output) tokens across all LLM touchpoints: JD telemetry extraction, 2-stage role intelligence reports, and screening question AI drafts.
+- [ ] **Dynamic Cost Calculator**: Maintain model pricing tables (e.g. `gpt-4o-mini` at $0.15/1M input, $0.60/1M output) to calculate exact per-job and cumulative dollar spend.
+- [ ] **Google Sheets Cost Logging**: Add an `Estimated Cost ($)` column to the `Raw Ingestion` worksheet alongside existing `Tokens` data.
+- [ ] **Per-Application & Cockpit Visibility**: Display token and cost metrics in the Tab 1 Apply Kit summary and connection status sidebar.
+
+### M3.9: Company-Level Guardrail Overrides & Staffing Agency Whitelisting
+- [ ] **Staffing Agency / Recruiter Whitelist**: Allow designating companies as Staffing Agencies, Recruiters, or Job Aggregators (e.g. JobGether, CyberCoders, Robert Half) with zero or elevated application velocity limits.
+- [ ] **Granular Company-Level Overrides**: Ability to customize concurrency caps (max applications and rolling window days) on a per-company basis while preserving the global baseline (default: 2 apps / 60 days).
+- [ ] **Pre-Flight Warning Action ("Mark as Agency")**: When a velocity cap warning triggers, provide a 1-click option to designate the organization as a staffing agency and permanently exempt it from aggressive ATS velocity blocks.
+- [ ] **Persistent Rules Storage**: Store custom company rules in persistent storage (e.g. `company_guardrails.json` or a dedicated worksheet) with an interactive management table in Tab 3.
+
+### M3.10: Location-Aware Geo-Tiered Compensation Extraction
+- [ ] **Configurable Candidate Location**: Add candidate location configuration (default: `AZ` / `Phoenix, Arizona`) to `CandidateProfile`, `.env` (`CANDIDATE_LOCATION=AZ`), and Streamlit sidebar settings.
+- [ ] **Geo-Differentiated Salary Prompting**: Enhance OpenAI telemetry extractor to parse multi-tier pay tables (Zone A / B / C, geographic cost-of-labor tiers, or CA/NY/CO vs other US states) and choose the specific salary tier matching the candidate's location.
+- [ ] **External Geo-Zone Policy Link Catch**: Detect when compensation requires following an external company link to see regional/zone tier definitions (e.g. *"See our Geographic Pay Policy at https://..."*):
+  - Extract and surface the external policy URL in the Target Salary Box with a 1-click **"↗ Open Geo-Zone Policy Table"** button.
+  - Automatically flag the range as a wide national aggregate until verified.
+  - Optional automated enrichment: Fetch the linked page content via HTTP request to auto-resolve the candidate's AZ tier without manual lookup.
+- [ ] **Fallback Hierarchy**: If the candidate's exact state is not listed separately, automatically default to the national/remote baseline tier rather than inflating the anchor to Tier 1 (SF/NYC).
+- [ ] **Tier Selection Transparency**: Record a `salary_tier_matched` explanation (e.g., *"Matched Zone 3 (National/AZ) at $110k–$135k instead of Zone 1 (Bay Area) at $135k–$160k"*) in the Apply Kit and Google Sheets.
 
 ---
 

@@ -1,8 +1,12 @@
+import json
+import os
 import re
 from datetime import datetime
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import List, Optional, Dict, Any
-from job_pipeline.domain.models import TargetPayBounds, FitEvaluation, CandidateProfile, ScreeningQA
+from job_pipeline.domain.models import TargetPayBounds, FitEvaluation, CandidateProfile, ScreeningQA, QuickLink
+
 
 
 class PayCalculatorService:
@@ -385,3 +389,84 @@ class JobQualificationService:
             active_company_applications_count=len(active_company_apps),
             active_company_applications=active_company_apps
         )
+
+
+class QuickLinksService:
+    """Domain service for managing, persisting, and formatting candidate application quicklinks."""
+
+    DEFAULT_CONFIG_PATH = "quicklinks.json"
+
+    @classmethod
+    def get_default_quicklinks(cls) -> List[QuickLink]:
+        """Provides default common links required on job applications."""
+        return [
+            QuickLink(
+                id="link-linkedin",
+                title="LinkedIn Profile",
+                url="https://linkedin.com/in/matthew-hackett",
+                category="Profile",
+                icon="💼"
+            ),
+            QuickLink(
+                id="link-github",
+                title="GitHub Portfolio",
+                url="https://github.com/mthackett",
+                category="Portfolio",
+                icon="💻"
+            ),
+            QuickLink(
+                id="link-website",
+                title="Personal Website",
+                url="https://matthewhackett.dev",
+                category="Portfolio",
+                icon="🌐"
+            ),
+            QuickLink(
+                id="link-calendly",
+                title="Scheduling / Calendly",
+                url="https://calendly.com/matthew-hackett",
+                category="Calendar",
+                icon="📅"
+            ),
+        ]
+
+    @classmethod
+    def load_quicklinks(cls, filepath: Optional[str] = None) -> List[QuickLink]:
+        """Loads quicklinks from a JSON file, or falls back to defaults if not found or corrupted."""
+        path = Path(filepath or os.environ.get("QUICKLINKS_CONFIG_PATH", cls.DEFAULT_CONFIG_PATH))
+        if not path.exists():
+            defaults = cls.get_default_quicklinks()
+            cls.save_quicklinks(defaults, str(path))
+            return defaults
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                links = [QuickLink(**item) for item in data]
+                return links if links else cls.get_default_quicklinks()
+            return cls.get_default_quicklinks()
+        except Exception:
+            return cls.get_default_quicklinks()
+
+    @classmethod
+    def save_quicklinks(cls, links: List[QuickLink], filepath: Optional[str] = None) -> bool:
+        """Saves quicklinks list to a JSON file."""
+        path = Path(filepath or os.environ.get("QUICKLINKS_CONFIG_PATH", cls.DEFAULT_CONFIG_PATH))
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = [link.model_dump() for link in links]
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def format_clipboard_bundle(cls, links: List[QuickLink]) -> str:
+        """Formats all links into a clean plain-text block for fast copying into applications/emails."""
+        lines = []
+        for l in links:
+            lines.append(f"{l.title}: {l.url}")
+        return "\n".join(lines)
+

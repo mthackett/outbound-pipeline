@@ -1,6 +1,8 @@
+import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
+
 
 
 class TargetPayBounds(BaseModel):
@@ -12,11 +14,22 @@ class TargetPayBounds(BaseModel):
     display_range: str = "Not specified"
 
 
+SCREENING_CATEGORIES: List[str] = [
+    "General",
+    "Technical",
+    "Salary",
+    "Experience",
+    "Culture",
+    "Questions for Company"
+]
+
+
 class ScreeningQA(BaseModel):
     question: str
     answer: str
-    category: Optional[str] = None  # Salary, Technical, Experience, Culture, General
+    category: Optional[str] = None  # Salary, Technical, Experience, Culture, General, Questions for Company
     created_at: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
 
 
 class FitEvaluation(BaseModel):
@@ -110,3 +123,12 @@ class RoleIntelligenceReport(BaseModel):
     output_docx_path: str
     drive_file_id: Optional[str] = None
     manifest_path: Optional[str] = None
+
+
+class QuickLink(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
+    title: str
+    url: str
+    category: str = "Profile"  # Profile, Portfolio, Calendar, Other
+    icon: str = "🔗"
+

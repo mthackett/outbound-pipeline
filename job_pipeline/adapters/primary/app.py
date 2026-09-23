@@ -22,13 +22,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-from job_pipeline.domain.models import (
-    CandidateProfile, JobPosting, FitEvaluation, StakeholderContact, Touchpoint, ScreeningQA
-)
-from job_pipeline.domain.services import (
-    JobQualificationService, ApplicationGuardrailService, ScreeningQAService
-)
 import importlib
+import job_pipeline.domain.models as models_mod
+importlib.reload(models_mod)
+from job_pipeline.domain.models import (
+    CandidateProfile, JobPosting, FitEvaluation, StakeholderContact, Touchpoint, ScreeningQA, QuickLink, SCREENING_CATEGORIES
+)
+
+import job_pipeline.domain.services as services_mod
+importlib.reload(services_mod)
+from job_pipeline.domain.services import (
+    JobQualificationService, ApplicationGuardrailService, ScreeningQAService, QuickLinksService
+)
+
 import job_pipeline.adapters.secondary.google_sheets as gs_mod
 importlib.reload(gs_mod)
 from job_pipeline.adapters.secondary.google_sheets import GoogleSheetsAdapter
@@ -125,6 +131,88 @@ if "pending_guardrail_check" not in st.session_state:
 if "num_screening_qa" not in st.session_state:
     st.session_state.num_screening_qa = 0
 
+if "quicklinks" not in st.session_state:
+    st.session_state.quicklinks = QuickLinksService.load_quicklinks()
+
+
+def render_quicklinks_manager(context_key: str = "sb"):
+    """Interactive editor to add, update, remove, and reset candidate quicklinks."""
+    current_links = list(st.session_state.quicklinks)
+
+    st.markdown("##### ⚙️ Configured Links:")
+    for idx, link in enumerate(current_links):
+        with st.expander(f"{link.icon} {link.title}", expanded=False):
+            with st.form(key=f"{context_key}_edit_form_{link.id}_{idx}"):
+                ed_title = st.text_input("Title / Label", value=link.title, key=f"{context_key}_t_{link.id}_{idx}")
+                ed_url = st.text_input("URL", value=link.url, key=f"{context_key}_u_{link.id}_{idx}")
+                c_icon, c_cat = st.columns([1, 2])
+                with c_icon:
+                    ed_icon = st.text_input("Icon", value=link.icon, max_chars=4, key=f"{context_key}_i_{link.id}_{idx}")
+                with c_cat:
+                    cat_options = ["Profile", "Portfolio", "Calendar", "Other"]
+                    c_idx = cat_options.index(link.category) if link.category in cat_options else 0
+                    ed_cat = st.selectbox("Category", cat_options, index=c_idx, key=f"{context_key}_c_{link.id}_{idx}")
+
+                btn_update = st.form_submit_button("💾 Update Link")
+                if btn_update:
+                    if ed_title.strip() and ed_url.strip():
+                        current_links[idx] = QuickLink(
+                            id=link.id,
+                            title=ed_title.strip(),
+                            url=ed_url.strip(),
+                            category=ed_cat,
+                            icon=ed_icon.strip() or "🔗"
+                        )
+                        QuickLinksService.save_quicklinks(current_links)
+                        st.session_state.quicklinks = current_links
+                        st.success(f"Updated '{ed_title}'!")
+                        st.rerun()
+                    else:
+                        st.warning("Title and URL cannot be empty.")
+
+            if st.button("🗑️ Delete Link", key=f"{context_key}_del_{link.id}_{idx}"):
+                current_links.pop(idx)
+                QuickLinksService.save_quicklinks(current_links)
+                st.session_state.quicklinks = current_links
+                st.success(f"Deleted {link.title}!")
+                st.rerun()
+
+    st.markdown("---")
+    st.markdown("##### ➕ Add New Quicklink:")
+    with st.form(key=f"{context_key}_add_form", clear_on_submit=True):
+        new_title = st.text_input("Title / Label", placeholder="e.g. Substack or Personal Blog")
+        new_url = st.text_input("URL", placeholder="https://...")
+        c_n_icon, c_n_cat = st.columns([1, 2])
+        with c_n_icon:
+            new_icon = st.text_input("Icon Emoji", value="🔗", max_chars=4)
+        with c_n_cat:
+            new_cat = st.selectbox("Category", ["Profile", "Portfolio", "Calendar", "Other"], key=f"{context_key}_new_cat")
+
+        btn_add = st.form_submit_button("➕ Add Quicklink")
+        if btn_add:
+            if new_title.strip() and new_url.strip():
+                new_item = QuickLink(
+                    title=new_title.strip(),
+                    url=new_url.strip(),
+                    category=new_cat,
+                    icon=new_icon.strip() or "🔗"
+                )
+                current_links.append(new_item)
+                QuickLinksService.save_quicklinks(current_links)
+                st.session_state.quicklinks = current_links
+                st.success(f"Added '{new_item.title}'!")
+                st.rerun()
+            else:
+                st.warning("Please provide both a Title and a URL.")
+
+    if st.button("🔄 Reset to Default Links", key=f"{context_key}_reset_btn", help="Resets your quicklinks list to the default setup"):
+        defaults = QuickLinksService.get_default_quicklinks()
+        QuickLinksService.save_quicklinks(defaults)
+        st.session_state.quicklinks = defaults
+        st.info("Reset to default quicklinks.")
+        st.rerun()
+
+
 
 # Sidebar Configuration & Connections
 st.sidebar.image("https://img.icons8.com/color/96/briefcase.png", width=56)
@@ -182,6 +270,25 @@ with st.sidebar.expander("🛡️ Guardrail Rules & Limits", expanded=False):
 sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
 drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
 
+# Candidate Application Quicklinks Area
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚡ Candidate Quicklinks")
+with st.sidebar.expander("📋 Fast Application Links", expanded=True):
+    st.caption("1-click copy your links into job applications:")
+    for q_link in st.session_state.quicklinks:
+        st.markdown(f"**{q_link.icon} {q_link.title}**")
+        st.code(q_link.url, language=None)
+        st.link_button(f"↗ Open {q_link.title}", q_link.url, use_container_width=True)
+        st.write("")
+
+    bundle_text = QuickLinksService.format_clipboard_bundle(st.session_state.quicklinks)
+    with st.expander("📋 Copy All Links (Bundle)", expanded=False):
+        st.caption("All links formatted together:")
+        st.code(bundle_text, language=None)
+
+    with st.expander("⚙️ Configure Quicklinks", expanded=False):
+        render_quicklinks_manager(context_key="sb")
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔗 Quick Cloud Links")
 if sheet_id:
@@ -217,6 +324,20 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1: FAST INGESTION & APPLY KIT (ZERO FRICTION)
 # =====================================================================
 with tab1:
+    with st.expander("⚡ Candidate Quicklinks Bar (1-Click Copy for ATS Forms)", expanded=False):
+        st.caption("Instantly copy your essential profile links while filling out external job applications:")
+        tab1_bundle = QuickLinksService.format_clipboard_bundle(st.session_state.quicklinks)
+        num_cols = min(len(st.session_state.quicklinks), 4) or 1
+        ql_cols = st.columns(num_cols)
+        for q_idx, q_link in enumerate(st.session_state.quicklinks):
+            with ql_cols[q_idx % num_cols]:
+                st.markdown(f"**{q_link.icon} {q_link.title}**")
+                st.code(q_link.url, language=None)
+                st.link_button("↗ Open", q_link.url, use_container_width=True)
+
+        st.caption("Need all links formatted together?")
+        st.code(tab1_bundle, language=None)
+
     st.markdown("### 1. Paste Job Posting Text")
     st.caption("Paste the full job description from LinkedIn, Indeed, or company careers page. The AI automatically extracts the company, title, salary, skills, and matches your best resume.")
 
@@ -266,7 +387,7 @@ with tab1:
             with cq1:
                 q_text = st.text_input(f"Question Prompt", key=f"sq_q_{i}", placeholder="e.g. Describe your experience with Salesforce & dbt.")
             with cq2:
-                q_cat = st.selectbox(f"Category", ["General", "Technical", "Salary", "Experience", "Culture"], key=f"sq_cat_{i}")
+                q_cat = st.selectbox(f"Category", SCREENING_CATEGORIES, key=f"sq_cat_{i}")
 
             ca1, ca2 = st.columns([4, 1])
             with ca1:
@@ -659,16 +780,41 @@ with tab1:
 
         # Target Salary Negotiation Box
         pb = ev["fit_eval"].pay_bounds
+        if pb.target_min is not None and pb.target_max is not None:
+            form_advice = f"Anchor at <b>${pb.target_min:,.0f}</b> or enter range <b>${pb.target_min:,.0f} – ${pb.target_max:,.0f}</b>."
+            if pb.posted_min is not None and pb.posted_max is not None:
+                form_advice += f" (Calculated from posted base spread: ${pb.posted_min:,.0f} – ${pb.posted_max:,.0f})"
+            comp_strategy = f"Anchor base at <b>${pb.target_min:,.0f} – ${pb.target_max:,.0f}</b>."
+        elif pb.target_min is not None:
+            form_advice = f"Anchor at <b>${pb.target_min:,.0f}+</b>."
+            comp_strategy = f"Anchor base at <b>${pb.target_min:,.0f}+</b>."
+        elif pb.target_max is not None:
+            form_advice = f"Anchor up to <b>${pb.target_max:,.0f}</b>."
+            comp_strategy = f"Anchor base up to <b>${pb.target_max:,.0f}</b>."
+        else:
+            floor_val = st.session_state.profile.minimum_compensation_floor
+            form_advice = f"Base compensation undisclosed in job posting. Propose candidate floor <b>${floor_val:,.0f}+</b> or enter <i>'Competitive / Negotiable'</i>."
+            comp_strategy = f"Undisclosed (Target floor: <b>${floor_val:,.0f}+</b> or align with recruiter on screen)."
+
         st.markdown(f"""
         <div class="target-pay-box">
             <h4 style="margin:0; color:#C7D2FE;">💰 Desired Salary Answer (60% – 80% Target Anchor)</h4>
             <h2 style="margin:6px 0; color:#FFFFFF; font-weight:800;">{pb.display_range}</h2>
             <p style="margin:0; font-size:0.92rem; color:#A5B4FC;">
-                <b>For application form:</b> Anchor at <b>${pb.target_min:,.0f}</b> or enter range <b>${pb.target_min:,.0f} – ${pb.target_max:,.0f}</b>.
-                (Calculated from posted base spread: ${pb.posted_min:,.0f} – ${pb.posted_max:,.0f})
+                <b>For application form:</b> {form_advice}
             </p>
         </div>
         """, unsafe_allow_html=True)
+
+        # Quick Candidate Profile Links for Application Form
+        with st.expander("⚡ Candidate Profile Quicklinks (1-Click Copy for ATS)", expanded=False):
+            st.caption("Quickly grab your profile links to paste into this application form:")
+            ak_cols = st.columns(min(len(st.session_state.quicklinks), 4) or 1)
+            for q_idx, q_link in enumerate(st.session_state.quicklinks):
+                with ak_cols[q_idx % len(ak_cols)]:
+                    st.markdown(f"**{q_link.icon} {q_link.title}**")
+                    st.code(q_link.url, language=None)
+                    st.link_button("↗ Open", q_link.url, use_container_width=True)
 
         # Screening Q&A Display Box if submitted
         if ev.get("screening_qa"):
@@ -685,7 +831,7 @@ with tab1:
             <h3 style="margin:0 0 8px 0; color:#10B981;">📞 10-Second Phone Screen Recall Card</h3>
             <p style="margin:4px 0;"><b>Target Role:</b> {ev['title']} at {ev['company']} {'(Remote)' if ev.get('is_remote') else ''}</p>
             <p style="margin:4px 0;"><b>Matched Resume:</b> {ev['resume_name']}</p>
-            <p style="margin:4px 0;"><b>Compensation Strategy:</b> Anchor base at <b>${pb.target_min:,.0f} - ${pb.target_max:,.0f}</b>.</p>
+            <p style="margin:4px 0;"><b>Compensation Strategy:</b> {comp_strategy}</p>
             <p style="margin:4px 0;"><b>Core Pain Points:</b> {ev.get('pain_points') or 'Scaling revenue reporting, pipeline velocity, and cross-functional visibility.'}</p>
             <p style="margin:4px 0;"><b>Required Skills Highlight:</b> {', '.join(ev.get('req_skills', [])[:5]) or 'Salesforce, SQL, RevOps, dbt'}</p>
         </div>
@@ -841,11 +987,17 @@ with tab2:
                         if storage_adapter.is_connected:
                             success = storage_adapter.update_opportunity_status(opp_id, new_stage, new_notes)
                             if success:
+                                opp["Status"] = new_stage
+                                opp["Notes"] = new_notes
                                 st.success(f"Updated {comp} to '{new_stage}' in Google Sheets!")
+                                st.rerun()
                             else:
                                 st.error("Failed to update status in Google Sheets.")
                         else:
+                            opp["Status"] = new_stage
+                            opp["Notes"] = new_notes
                             st.info(f"Simulated update: {comp} set to '{new_stage}' (Demo Mode).")
+                            st.rerun()
 
                 # Section A: Structured Call & Interview Logger
                 with st.expander("📞 Log Call / Interview Notes", expanded=False):
@@ -947,7 +1099,7 @@ with tab2:
                                 st.error(f"AI draft notice: {d_err}")
 
                     # Form encapsulates typing to completely eliminate typing-time API calls
-                    with st.form(key=f"qa_form_{opp_id}_{idx}", clear_on_submit=False):
+                    with st.form(key=f"qa_form_{opp_id}_{idx}", clear_on_submit=True):
                         q_new_prompt = st.text_input(
                             "Screening Question Prompt",
                             value=ai_prompt_hint if ai_prompt_hint else "",
@@ -956,7 +1108,7 @@ with tab2:
                         )
                         q_new_cat = st.selectbox(
                             "Category",
-                            ["General", "Technical", "Salary", "Experience", "Culture"],
+                            SCREENING_CATEGORIES,
                             key=f"new_q_cat_{opp_id}_{idx}"
                         )
                         initial_ans = st.session_state.get(draft_ans_key, "")
@@ -1023,8 +1175,18 @@ with tab2:
                                 st.success(f"Saved screening question to Google Sheets{' and updated Screening Questions Google Doc in Drive!' if gdoc_url else '!'}")
                                 if gdoc_url:
                                     st.markdown(f"[📝 Open 'Screening Questions' Google Doc in Drive]({gdoc_url})")
-                                if draft_ans_key in st.session_state:
-                                    del st.session_state[draft_ans_key]
+
+                                # Clear all screening Q&A inputs so fields return to their default blank state
+                                for key_to_clear in [
+                                    f"ai_hint_{opp_id}_{idx}",
+                                    f"new_q_prompt_{opp_id}_{idx}",
+                                    f"new_q_ans_{opp_id}_{idx}",
+                                    f"new_q_cat_{opp_id}_{idx}",
+                                    draft_ans_key
+                                ]:
+                                    if key_to_clear in st.session_state:
+                                        del st.session_state[key_to_clear]
+
                                 st.rerun()
 
         # Cross-Job Screening Questions & Answers Library
@@ -1108,3 +1270,9 @@ with tab3:
         st.write(f"**Dealbreaker Tech Stack**: {', '.join(prof.dealbreaker_skills)}")
     with col_p2:
         st.write(f"**Core Strengths**: {', '.join(prof.core_strengths)}")
+
+    st.markdown("---")
+    st.markdown("#### ⚡ Candidate Application Quicklinks Configuration")
+    st.caption("Easily add, edit, or remove profile and portfolio links used on job application forms. Changes persist across application sessions in `quicklinks.json`.")
+    render_quicklinks_manager(context_key="tab3")
+

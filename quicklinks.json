@@ -1,0 +1,30 @@
+[
+  {
+    "id": "link-linkedin",
+    "title": "LinkedIn Profile",
+    "url": "https://linkedin.com/in/matthew-hackett",
+    "category": "Profile",
+    "icon": "💼"
+  },
+  {
+    "id": "link-github",
+    "title": "GitHub Portfolio",
+    "url": "https://github.com/mthackett",
+    "category": "Portfolio",
+    "icon": "💻"
+  },
+  {
+    "id": "link-website",
+    "title": "Personal Website",
+    "url": "https://matthewhackett.dev",
+    "category": "Portfolio",
+    "icon": "🌐"
+  },
+  {
+    "id": "link-calendly",
+    "title": "Scheduling / Calendly",
+    "url": "https://calendly.com/matthew-hackett",
+    "category": "Calendar",
+    "icon": "📅"
+  }
+]
