@@ -13,8 +13,11 @@ output_reports/
 *.manifest.json
 jd.txt
 
-# Local NoSQL Database
+# Local NoSQL Database & Personal Data
 outbound_db.json
+stories.json
+canonical_stories.json
+quicklinks.json
 
 # Virtual Environments
 .venv/
@@ -36,3 +39,5 @@ __pycache__/
 .idea/
 *.suo
 *.swp
+
+specs/

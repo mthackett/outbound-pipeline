@@ -1,0 +1,121 @@
+[
+  {
+    "story_id": "story-1",
+    "story_number": 1,
+    "title": "Example Project / Initiative Title",
+    "archetype_tags": [
+      "Process Improvement",
+      "Root Cause",
+      "Cross-Functional"
+    ],
+    "competencies": [
+      "Tool A",
+      "Analysis Skill",
+      "Workflow Automation"
+    ],
+    "industries": [
+      "Industry Sector A",
+      "Industry Sector B"
+    ],
+    "is_locked": false,
+    "is_canonical": true,
+    "hook": "Concise 1-sentence elevator pitch summarizing the initial challenge, action taken, and quantifiable business outcome.",
+    "problem": "Context outlining the operational bottleneck, business stakes, and friction experienced prior to intervention.",
+    "turning_point": "The analytical breakthrough, strategic decision, or implementation milestone that shifted project momentum.",
+    "result": "Quantifiable outcomes, efficiency gains, error rate reductions, and measurable financial/operational impact.",
+    "learning": "Strategic takeaway or foundational philosophy established as a result of solving this challenge.",
+    "breadcrumbs": [
+      {
+        "label": "The Signal",
+        "content": "Initial metric discrepancy or friction point detected.",
+        "kind": "context"
+      },
+      {
+        "label": "Action Taken",
+        "content": "Core analysis, system integration, or process workflow deployed.",
+        "kind": "pivot"
+      },
+      {
+        "label": "Key Milestone",
+        "content": "First breakthrough or pilot validation reached.",
+        "kind": "milestone"
+      },
+      {
+        "label": "Measurable Result",
+        "content": "Final percentage lift, hours saved, or dollar impact achieved.",
+        "kind": "metric"
+      }
+    ],
+    "trigger_keywords": [
+      "keyword 1",
+      "keyword 2",
+      "technique name",
+      "tool name"
+    ],
+    "target_question_types": [
+      "Tell me about a time you resolved an operational bottleneck.",
+      "Describe a project where you uncovered the root cause of a discrepancy.",
+      "How do you approach ambiguous business requirements?"
+    ],
+    "transitions": {
+      "story-2": "Transition phrase smoothly bridging to Story 2 when discussing related challenges..."
+    }
+  },
+  {
+    "story_id": "story-2",
+    "story_number": 2,
+    "title": "Example Architecture / Governance Initiative",
+    "archetype_tags": [
+      "Data Governance",
+      "Scalability",
+      "Change Management"
+    ],
+    "competencies": [
+      "Platform B",
+      "Data Modeling",
+      "Stakeholder Management"
+    ],
+    "industries": [
+      "Industry Sector A",
+      "Enterprise"
+    ],
+    "is_locked": false,
+    "is_canonical": true,
+    "hook": "Concise 1-sentence elevator pitch highlighting architecture modernization and team efficiency gains.",
+    "problem": "Legacy system fragility, manual spreadsheet reporting dependencies, and lack of verified single-source data.",
+    "turning_point": "Designing a modular data transformation model with automated schema testing and stakeholder training.",
+    "result": "Slashed manual report prep time by 60% and established trusted, self-serve executive reporting.",
+    "learning": "Long-term data adoption requires building guardrails and verified definitions rather than ad-hoc spreadsheets.",
+    "breadcrumbs": [
+      {
+        "label": "Legacy State",
+        "content": "Manual reporting friction and fragile data pipeline failures.",
+        "kind": "context"
+      },
+      {
+        "label": "Modernization",
+        "content": "Engineered testable data transformation layer with version control.",
+        "kind": "pivot"
+      },
+      {
+        "label": "Efficiency Win",
+        "content": "60% reduction in weekly manual maintenance overhead.",
+        "kind": "metric"
+      }
+    ],
+    "trigger_keywords": [
+      "governance",
+      "modernization",
+      "architecture",
+      "stakeholder enablement"
+    ],
+    "target_question_types": [
+      "Describe how you modernize legacy workflows or technical debt.",
+      "How do you balance speed with robust governance?",
+      "Tell me about a time you led user adoption for a new tool or process."
+    ],
+    "transitions": {
+      "story-1": "Transition connecting this governance work back to the diagnostic findings in Story 1..."
+    }
+  }
+]

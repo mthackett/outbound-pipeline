@@ -24,11 +24,78 @@ SCREENING_CATEGORIES: List[str] = [
 ]
 
 
+SCREENING_ARCHETYPES: Dict[str, str] = {
+    "COMPENSATION": "Compensation & Salary",
+    "WORK_AUTHORIZATION": "Work Authorization & Sponsorship",
+    "TECHNICAL_STACK": "Technical Stack & Tools",
+    "EXPERIENCE_DOMAIN": "Domain & Functional Experience",
+    "BEHAVIORAL_MOTIVATION": "Motivation & Culture Fit",
+    "REMOTE_LOCATION": "Location, Remote & Travel",
+    "LEADERSHIP_CONFLICT": "Leadership & Stakeholder Conflict",
+    "PROCESS_GOVERNANCE": "Process & Governance",
+    "QUESTIONS_FOR_COMPANY": "Questions for the Company",
+    "GENERAL": "General Inquiries"
+}
+
+
 class ScreeningQA(BaseModel):
     question: str
     answer: str
     category: Optional[str] = None  # Salary, Technical, Experience, Culture, General, Questions for Company
+    archetype: Optional[str] = None
+    competency_signals: List[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+
+class ScreeningMatchResult(BaseModel):
+    query: str
+    matched_question: str
+    matched_answer: str
+    similarity_score: float
+    archetype: str = "GENERAL"
+    company_name: Optional[str] = None
+    created_at: Optional[str] = None
+    competency_signals: List[str] = Field(default_factory=list)
+
+
+class StoryBreadcrumb(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
+    label: str
+    content: str
+    kind: str = "milestone"  # "context", "milestone", "pivot", "metric", "learning"
+
+
+class CanonicalStory(BaseModel):
+    story_id: str
+    story_number: int
+    title: str
+    archetype_tags: List[str] = Field(default_factory=list)
+    competencies: List[str] = Field(default_factory=list)
+    industries: List[str] = Field(default_factory=list)
+    is_locked: bool = False
+    is_canonical: bool = True
+    hook: str
+    problem: str
+    turning_point: str
+    result: str
+    learning: str
+    breadcrumbs: List[StoryBreadcrumb] = Field(default_factory=list)
+    trigger_keywords: List[str] = Field(default_factory=list)
+    target_question_types: List[str] = Field(default_factory=list)
+    transitions: Dict[str, str] = Field(default_factory=dict)
+
+
+class StoryCueCard(BaseModel):
+    story_id: str
+    story_number: int
+    title: str
+    keywords: List[str] = Field(default_factory=list)
+    turning_point: str
+    result: str
+    target_question_types: List[str] = Field(default_factory=list)
+    recommended_angle: str = "Core Impact"
+    relevance_reason: str = ""
+    active_breadcrumbs: List[StoryBreadcrumb] = Field(default_factory=list)
 
 
 

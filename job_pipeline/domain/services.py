@@ -5,7 +5,12 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from job_pipeline.domain.models import TargetPayBounds, FitEvaluation, CandidateProfile, ScreeningQA, QuickLink
+from job_pipeline.domain.models import (
+    TargetPayBounds, FitEvaluation, CandidateProfile, ScreeningQA, QuickLink,
+    ScreeningMatchResult
+)
+from job_pipeline.domain.screening_intelligence import ScreeningIntelligenceService
+from job_pipeline.domain.story_bank import StoryBankService
 
 
 
@@ -403,28 +408,28 @@ class QuickLinksService:
             QuickLink(
                 id="link-linkedin",
                 title="LinkedIn Profile",
-                url="https://linkedin.com/in/matthew-hackett",
+                url="https://linkedin.com/in/your-profile",
                 category="Profile",
                 icon="💼"
             ),
             QuickLink(
                 id="link-github",
                 title="GitHub Portfolio",
-                url="https://github.com/mthackett",
+                url="https://github.com/your-username",
                 category="Portfolio",
                 icon="💻"
             ),
             QuickLink(
                 id="link-website",
                 title="Personal Website",
-                url="https://matthewhackett.dev",
+                url="https://your-portfolio.com",
                 category="Portfolio",
                 icon="🌐"
             ),
             QuickLink(
                 id="link-calendly",
                 title="Scheduling / Calendly",
-                url="https://calendly.com/matthew-hackett",
+                url="https://calendly.com/your-calendar",
                 category="Calendar",
                 icon="📅"
             ),

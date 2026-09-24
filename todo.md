@@ -73,16 +73,22 @@ A comprehensive system handbook, operational runbook, status checklist, and feat
 - **120-Second TTL Caching**: Added in-memory caching to `fetch_all_opportunities` and `fetch_screening_qa`. Tab 2 indexes records into a dictionary in-memory with 0 extra Sheets API requests inside card loops.
 - **429 Rate Limit Guardrail**: Graceful fallback to cached data if Google Sheets 60 req/min quota is approached.
 
-### 9. Candidate Application Quicklinks Area & Config Manager
-- **Zero-Friction Retrieval**: 1-click clipboard copy (`st.code`) and direct browser navigation for common job application profile links (LinkedIn, GitHub, Personal Website / Portfolio, Calendly, etc.).
-- **Strategic Placement**:
-  - Persistent Sidebar Drawer: Always accessible across all Cockpit tabs.
-  - Tab 1 Fast Ingestion Bar & 1-Tap Application Kit: Directly embedded in the application submission workflow.
-  - All-in-one "Copy All Links" bundle for pasting into application forms or recruiter inquiries at once.
-- **In-App Interactive Configuration**: Add new custom links, edit labels, URLs, icons, and categories, or delete links with instant persistence to `quicklinks.json`.
+### 9. Screening Question Intelligence & Similarity/Archetyping
+- **Question Archetype Taxonomy**: Automatically classifies screening questions into canonical archetypes (`Compensation`, `Work Authorization`, `Technical Experience`, `Domain/Lifecycle`, `Behavioral Motivation`, `Remote/Location`, `Leadership/Conflict`, `Questions for Company`).
+- **Fuzzy & Lexical Similarity Matching**: Zero-cost, offline-first similarity search across all historical screening Q&As using token overlap and sequence ratio scoring.
+- **Prior-Answer 1-Click Recall**: In Tab 1 (Apply Kit) and Tab 2 (CRM), detects similar questions as the user types, surfacing prior answers, company context, and a 1-tap "📋 Use Prior Answer" button.
+- **Competency Signal Tagging**: Automatically extracts target competencies and skills evaluated by the question (e.g. `SQL`, `Pipeline Diagnostics`, `Stakeholder Communication`).
+- **Archetype Grouping in CRM**: Tab 2 Cross-Job Q&A library with archetype filtering, competency pills, and similarity grouping.
+
+### 10. Global Professional Story Bank & Breadcrumb Visual Map
+- **12 Global Canonical Stories (`stories.json`)**: High-impact RevOps/GTM behavioral stories seeded from `canonical_stories.json` and persisted locally on disk (`The Revenue Pipeline Black Box`, `Lead Routing & SLA Crisis`, `Modernizing Reporting Stack`, `Disputed Attribution`, `Silent CRM Sync Breakdown`, `Territory Realignment`, `Rep Process Adoption`, `Executive Fire Drill`, `Churn Signal Model`, `Self-Serve Enablement`, `Vendor Consolidation`, `M&A Integration`). A generic 2-story schema template with placeholders is provided in `stories.json.example`.
+- **High-Visibility Breadcrumb Stepper Cards**: Prominently display narrative progression milestones with bold step numbers, category badges (`CONTEXT`, `PIVOT`, `METRIC`), and high-contrast soundbite taglines for instant recall on phone or Zoom calls.
+- **Full In-App Story & Breadcrumb Editor**: Complete editing interface in Tab 3 to modify story titles, archetype tags, competency signals, target industries, narrative blocks (hook, problem, turning point, result, learning), trigger keywords, behavioral question types, and breadcrumb milestones (edit, add, delete).
+- **Story Control & Lock / Unlock Guardrails**: Enforce `is_locked: bool` protection to safeguard approved personal stories against automated system rewrites while allowing direct user overrides.
+- **Context-Aware Story Cue Cards**: Dynamically matches and surfaces 3–4 targeted Story Cue Cards in Tab 1 (Apply Kit) and Tab 2 (CRM) based on JD tech stack, pain points, resume match, and industry.
+- **Story Navigator & Behavioral Recon Tool**: Dedicated cockpit interface for browsing canonical stories, story transitions, and testing behavioral prompts against the narrative map.
 
 ---
-
 
 ## 🔮 Future Roadmap & Features (Milestone 3 Expansion)
 
@@ -117,7 +123,7 @@ A comprehensive system handbook, operational runbook, status checklist, and feat
 - [ ] **LLM Cost & Token Analytics**: Total token consumption, cumulative dollar spend, and average cost per processed application.
 
 ### M3.7: Hiring Process & Interview Stages Intelligence
-- [ ] **Automated Stage Extraction**: Upgrade OpenAI telemetry extractor to parse outlined hiring process steps from JD text (e.g. Initial Recruiter Screen $\rightarrow$ Take-Home / Assessment $\rightarrow$ Hiring Manager $\rightarrow$ Team Panel $\rightarrow$ Offer).
+- [ ] **Automated Stage Extraction**: Upgrade OpenAI telemetry extractor to parse outlined hiring process steps from JD text when available (e.g. Initial Recruiter Screen $\rightarrow$ Take-Home / Assessment $\rightarrow$ Hiring Manager $\rightarrow$ Team Panel $\rightarrow$ Offer).
 - [ ] **Cockpit Apply Kit & Recall Card Integration**: Prominently display expected hiring stages in Tab 1 (1-Tap Apply Kit & 10-Second Recruiter Screen Recall Card) to prepare before speaking with recruiters.
 - [ ] **Interactive Stage Checklist in CRM**: Display the company's specific interview pipeline inside each application card in Tab 2 to track progress through their stated stages.
 - [ ] **Persistent Sheet & Doc Logging**: Save extracted interview stages into a dedicated column in Google Sheets (`Interview Process`) and embed into the generated Role Intelligence Report DOCX.
@@ -144,33 +150,63 @@ A comprehensive system handbook, operational runbook, status checklist, and feat
 - [ ] **Fallback Hierarchy**: If the candidate's exact state is not listed separately, automatically default to the national/remote baseline tier rather than inflating the anchor to Tier 1 (SF/NYC).
 - [ ] **Tier Selection Transparency**: Record a `salary_tier_matched` explanation (e.g., *"Matched Zone 3 (National/AZ) at $110k–$135k instead of Zone 1 (Bay Area) at $135k–$160k"*) in the Apply Kit and Google Sheets.
 
+### M3.11: Application Source & Channel Tracking (Configurable Dropdown)
+- [ ] **Configurable Application Sources**: Support a customizable channel list (defaults: `LinkedIn`, `Indeed`, `ZipRecruiter`, `Direct (Company Website)`, `Referral`, `JobGether`, `Other`) managed via `sources.json` or persistent config.
+- [ ] **Tab 1 Ingestion Integration**: Add an "Application Source / Channel" selector when ingesting or evaluating new job descriptions.
+- [ ] **Tab 2 CRM Card Selector**: Add an interactive source dropdown in the application card header / "Update Stage & Recruiter Contact" block with immediate Google Sheets synchronization.
+- [ ] **Master Google Sheet Column**: Add and auto-provision an `Application Source` column in the `Raw Ingestion` worksheet.
+- [ ] **Channel Analytics (M3.6 Tie-in)**: Track and visualize response rates, conversion-to-screen rates, and velocity broken down by job board / source.
+
+### M3.12: Reinforcement / Retrieval Layer & Semantic Idea Graph (Future TODO)
+- [x] **Architecture Spec**: Complete architecture and data model specification in `docs/specs/03-reinforcement-retrieval-layer-todo.md`.
+- [ ] **Semantic Linking Graph**:
+  - Connect related **Screening / Behavioral Questions ⟷ Canonical Stories** (and specific narrative angles).
+  - Connect **Stories ⟷ Job Postings** (linking specific employer pains to candidate proof points).
+  - Connect **Stories ⟷ Modular Breadcrumbs** for structured recall.
+- [ ] **Real-Time Interview Breadcrumb Navigator**: Surface the right breadcrumbs, metrics, and segue transitions dynamically during live phone screens and interviews to keep conversations flowing smoothly.
+- [ ] **Per-Application Custom Stories**: Allow authoring role-specific bespoke stories that branch off the global canonical library when an application requires a unique case study.
+- [ ] **Hybrid Semantic Retrieval**: Combine lexical BM25 matching with vector embeddings (e.g. OpenAI `text-embedding-3-small`) for deep semantic retrieval of prior questions and story segments.
+- [ ] **Post-Interview Flywheel Feedback Loop**: Structured capture of interview questions and recruiter reactions to reinforce, grade, and improve future application prep (`application → capture → classify → connect → prepare → use → learn → improve`).
+
 ---
 
 ## 📁 Key File Map
 
 ```text
 outbound-pipeline/
+├── docs/
+│   └── specs/
+│       ├── 01-screening-question-intelligence.md     # Feature 1: Screening Archetyping & Recall
+│       ├── 02-professional-story-bank.md             # Feature 2: 12 Canonical Stories & Narrative Map
+│       └── 03-reinforcement-retrieval-layer-todo.md  # Feature 3: Semantic Idea Graph & Flywheel (TODO)
+├── stories.json                       # Local story bank & custom breadcrumbs
+├── stories.json.example               # Story bank schema template
+├── quicklinks.json                    # Local candidate application quicklinks store 
+├── quicklinks.json.example            # Candidate application quicklinks template
 ├── job_pipeline/
 │   ├── domain/
-│   │   ├── models.py              # Pure domain models (JobPosting, FitEvaluation, etc.)
-│   │   └── services.py            # Pay calculator (60-80%) & dealbreaker fit service
+│   │   ├── models.py                  # Domain models (JobPosting, Story, Breadcrumb, CueCard, etc.)
+│   │   ├── canonical_stories.json     # Pristine seed dataset of 12 canonical RevOps stories
+│   │   ├── story_bank.py              # 12 Canonical stories bank, storage, locks & cue card suggester
+│   │   ├── screening_intelligence.py  # Archetype classification, competency signals & similarity recall
+│   │   └── services.py                # Pay calculator, guardrails & service facades
 │   ├── ports/
-│   │   └── storage_port.py        # Interface definitions for storage & LLM ports
+│   │   └── storage_port.py            # Interface definitions for storage & LLM ports
 │   ├── adapters/
 │   │   ├── primary/
-│   │   │   ├── app.py             # Streamlit CRM Dashboard (localhost:8501)
-│   │   │   ├── cli_runner.py      # Single job evaluator CLI
-│   │   │   └── sheets_batch.py    # Batch Google Sheets processor CLI
+│   │   │   ├── app.py                 # Streamlit CRM Dashboard (Tabs 1-4)
+│   │   │   ├── cli_runner.py          # Single job evaluator CLI
+│   │   │   └── sheets_batch.py        # Batch Google Sheets processor CLI
 │   │   └── secondary/
-│   │       ├── google_sheets.py   # Raw Ingestion & Requirements Extraction adapter
-│   │       ├── google_drive.py    # Drive folder & zero-quota Google Docs adapter
-│   │       ├── openai_adapter.py  # Structured extraction & LLM strategy runner
-│   │       ├── resume_selector.py # Title-based resume router
-│   │       ├── twilio_adapter.py  # Phone screen SMS & voice adapter
-│   │       └── gmail_adapter.py   # Email alert ingestion adapter
-│   └── role_intelligence_runner.py # 2-stage LLM strategy + recall sheet composer
-├── output_reports/                # Local disk backup folder for JDs and DOCX reports
-├── .env                           # API keys & Google Cloud Folder IDs
-├── credentials.json               # Google Service Account credentials
-└── todo.md                        # Master project handbook & roadmap
+│   │       ├── google_sheets.py       # Raw Ingestion & Requirements Extraction adapter
+│   │       ├── google_drive.py        # Drive folder & zero-quota Google Docs adapter
+│   │       ├── openai_adapter.py      # Structured extraction & LLM strategy runner
+│   │       ├── resume_selector.py     # Title-based resume router
+│   │       ├── twilio_adapter.py      # Phone screen SMS & voice adapter
+│   │       └── gmail_adapter.py       # Email alert ingestion adapter
+│   └── role_intelligence_runner.py   # 2-stage LLM strategy + recall sheet composer
+├── output_reports/                    # Local disk backup folder for JDs and DOCX reports
+├── .env                               # API keys & Google Cloud Folder IDs
+├── credentials.json                   # Google Service Account credentials
+└── todo.md                            # Master project handbook & roadmap
 ```
