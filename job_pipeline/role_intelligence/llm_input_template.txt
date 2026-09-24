@@ -1,9 +1,0 @@
-Use `source_bundle_template.json` as the canonical input structure.
-
-Recommended workflow:
-
-1. Fill the source bundle with JAT metadata + selected resume text.
-2. Run `prepare_source_bundle.py` to add J### and R### source tags.
-3. Send the tagged bundle with `prompts/value_match_strategy_prompt.md`.
-4. Send the strategy + tagged bundle with `prompts/cockpit_composition_prompt.md`.
-5. Validate and render.

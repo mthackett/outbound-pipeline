@@ -7,13 +7,16 @@ from dotenv import load_dotenv
 load_dotenv()
 from openai import OpenAI
 
-# Add role_intelligence directory to sys.path for internal imports
 PROJECT_ROOT = Path(__file__).resolve().parent
-ROLE_INTEL_DIR = PROJECT_ROOT / "role_intelligence"
-sys.path.insert(0, str(ROLE_INTEL_DIR))
+REPO_ROOT = PROJECT_ROOT.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from prepare_source_bundle import prepare_source_bundle
-from recall_sheet_generator import generate_recall_sheet, load_json
+PROMPTS_DIR = PROJECT_ROOT / "resources" / "prompts"
+FIXTURES_DIR = PROJECT_ROOT / "examples" / "fixtures"
+
+from job_pipeline.domain.role_intelligence import prepare_source_bundle
+from job_pipeline.adapters.secondary.docx_report_generator import generate_recall_sheet, load_json
 
 
 class RoleIntelligenceRunner:
@@ -66,9 +69,7 @@ class RoleIntelligenceRunner:
 
         if demo_mode or not self.api_key:
             print("INFO: Running Role Intelligence Runner in Demo Mode (using cached fixtures)...")
-            fixture_path = PROJECT_ROOT / "examples" / "fixtures" / "mock_cockpit_content.json"
-            if not fixture_path.exists():
-                fixture_path = ROLE_INTEL_DIR / "example_content.json"
+            fixture_path = FIXTURES_DIR / "mock_cockpit_content.json"
             content_json = load_json(fixture_path)
             
             # Dynamic title override for fixture output
@@ -80,8 +81,8 @@ class RoleIntelligenceRunner:
             print(f"RUNNING: Role Intelligence LLM Strategy & Composition for {company}...")
             
             # Load prompts
-            strategy_prompt_path = ROLE_INTEL_DIR / "prompts" / "value_match_strategy_prompt.md"
-            compose_prompt_path = ROLE_INTEL_DIR / "prompts" / "cockpit_composition_prompt.md"
+            strategy_prompt_path = PROMPTS_DIR / "value_match_strategy_prompt.md"
+            compose_prompt_path = PROMPTS_DIR / "cockpit_composition_prompt.md"
             
             strategy_prompt = strategy_prompt_path.read_text(encoding="utf-8")
             compose_prompt = compose_prompt_path.read_text(encoding="utf-8")
@@ -131,21 +132,38 @@ class RoleIntelligenceRunner:
                             content_json = content_json[k]
                             break
 
-                # Normalize 1D list of section objects into 2D list of columns
+                # Normalize column structure and section kinds
                 if "pages" in content_json and isinstance(content_json["pages"], list):
                     for page in content_json["pages"]:
                         if isinstance(page, dict) and "columns" in page and isinstance(page["columns"], list):
                             cols = page["columns"]
+                            # If LLM returned 1D list of section objects instead of 2D list of columns:
                             if cols and isinstance(cols[0], dict):
-                                mid = max(1, len(cols) // 2)
-                                page["columns"] = [cols[:mid], cols[mid:]]
+                                n_cols = 3
+                                chunk_size = max(1, (len(cols) + n_cols - 1) // n_cols)
+                                page["columns"] = [cols[i:i + chunk_size] for i in range(0, len(cols), chunk_size)]
+                                while len(page["columns"]) < n_cols:
+                                    page["columns"].append([])
+
+                            # Normalize section kinds and item formats
+                            for col in page["columns"]:
+                                if isinstance(col, list):
+                                    for sec in col:
+                                        if isinstance(sec, dict):
+                                            skind = str(sec.get("kind", "bullets")).lower()
+                                            if skind in ("text", "paragraph", "paragraphs", "prose"):
+                                                sec["kind"] = "lines"
+                                            elif skind in ("list", "bullet"):
+                                                sec["kind"] = "bullets"
+                                            elif skind in ("skill", "skill_matrix"):
+                                                sec["kind"] = "skills"
+                                            if isinstance(sec.get("items"), str):
+                                                sec["items"] = [sec["items"]]
 
             # Fallback if invalid structure
             if not isinstance(content_json, dict) or ("pages" not in content_json and "title" not in content_json):
                 print("WARNING: LLM composition JSON missing top-level 'pages'. Falling back to mock fixture layout...")
-                fixture_path = PROJECT_ROOT / "examples" / "fixtures" / "mock_cockpit_content.json"
-                if not fixture_path.exists():
-                    fixture_path = ROLE_INTEL_DIR / "example_content.json"
+                fixture_path = FIXTURES_DIR / "mock_cockpit_content.json"
                 content_json = load_json(fixture_path)
 
         # Prepare runtime variables for template pay substitution
@@ -172,9 +190,7 @@ class RoleIntelligenceRunner:
             )
         except Exception as render_err:
             print(f"WARNING: Role Intelligence DOCX render validation error ({render_err}). Falling back to fixture layout...")
-            fixture_path = PROJECT_ROOT / "examples" / "fixtures" / "mock_cockpit_content.json"
-            if not fixture_path.exists():
-                fixture_path = ROLE_INTEL_DIR / "example_content.json"
+            fixture_path = FIXTURES_DIR / "mock_cockpit_content.json"
             fallback_json = load_json(fixture_path)
             generate_recall_sheet(
                 fallback_json,

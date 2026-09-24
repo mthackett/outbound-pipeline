@@ -189,6 +189,7 @@ outbound-pipeline/
 │   │   ├── canonical_stories.json     # Pristine seed dataset of 12 canonical RevOps stories
 │   │   ├── story_bank.py              # 12 Canonical stories bank, storage, locks & cue card suggester
 │   │   ├── screening_intelligence.py  # Archetype classification, competency signals & similarity recall
+│   │   ├── role_intelligence.py       # Source bundle preparation & provenance tagging
 │   │   └── services.py                # Pay calculator, guardrails & service facades
 │   ├── ports/
 │   │   └── storage_port.py            # Interface definitions for storage & LLM ports
@@ -201,9 +202,14 @@ outbound-pipeline/
 │   │       ├── google_sheets.py       # Raw Ingestion & Requirements Extraction adapter
 │   │       ├── google_drive.py        # Drive folder & zero-quota Google Docs adapter
 │   │       ├── openai_adapter.py      # Structured extraction & LLM strategy runner
+│   │       ├── docx_report_generator.py # Formatted 2-page DOCX recall sheet generator
 │   │       ├── resume_selector.py     # Title-based resume router
 │   │       ├── twilio_adapter.py      # Phone screen SMS & voice adapter
 │   │       └── gmail_adapter.py       # Email alert ingestion adapter
+│   ├── resources/
+│   │   ├── prompts/                   # Strategy & composition LLM prompt templates
+│   │   ├── schemas/                   # JSON schemas for payloads and report structures
+│   │   └── report_config.json         # Typography, margins & layout styling parameters
 │   └── role_intelligence_runner.py   # 2-stage LLM strategy + recall sheet composer
 ├── output_reports/                    # Local disk backup folder for JDs and DOCX reports
 ├── .env                               # API keys & Google Cloud Folder IDs

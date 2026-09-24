@@ -1,7 +1,0 @@
-__pycache__/
-*.pyc
-.venv/
-venv/
-rendered/
-*.tmp
-.DS_Store

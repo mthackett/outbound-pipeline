@@ -10,8 +10,11 @@ project/
 
 # Generated Reports & Output Artifacts
 output_reports/
+rendered/
 *.manifest.json
 jd.txt
+*.tmp
+.DS_Store
 
 # Local NoSQL Database & Personal Data
 outbound_db.json

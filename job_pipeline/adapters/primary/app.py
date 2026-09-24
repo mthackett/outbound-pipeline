@@ -342,15 +342,21 @@ drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚡ Candidate Quicklinks")
 with st.sidebar.expander("📋 Fast Application Links", expanded=True):
-    st.caption("Hover over titles to view URLs, or click to open:")
-    for q_link in st.session_state.quicklinks:
-        st.markdown(
-            f'<div title="{q_link.url}" style="font-weight: 600; font-size: 0.95rem; margin-bottom: 2px; cursor: default;">{q_link.icon} {q_link.title}</div>',
-            unsafe_allow_html=True,
-            help=q_link.url
-        )
-        st.link_button(f"↗ Open {q_link.title}", q_link.url, use_container_width=True, help=q_link.url)
-        st.write("")
+    for q_idx, q_link in enumerate(st.session_state.quicklinks):
+        col_title, col_btn = st.columns([3.2, 2.0])
+        with col_title:
+            st.markdown(
+                f'<a href="{q_link.url}" target="_blank" style="text-decoration: none; color: #60A5FA; font-weight: 600; font-size: 0.90rem; display: block; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="Open {q_link.title} in new tab ({q_link.url})">{q_link.icon} {q_link.title} ↗</a>',
+                unsafe_allow_html=True
+            )
+        with col_btn:
+            if st.button("Copy", key=f"sb_cp_{q_link.id}_{q_idx}", use_container_width=True, help=f"Copy {q_link.title} URL to clipboard"):
+                try:
+                    import pyperclip
+                    pyperclip.copy(q_link.url)
+                    st.toast(f"Copied {q_link.title} link!")
+                except Exception as cp_err:
+                    st.error(f"Copy failed: {cp_err}")
 
     bundle_text = QuickLinksService.format_clipboard_bundle(st.session_state.quicklinks)
     with st.expander("📋 Copy All Links (Bundle)", expanded=False):
@@ -1286,60 +1292,60 @@ with tab2:
                             if not q_new_prompt.strip() or not q_new_ans.strip():
                                 st.warning("Please enter both the question and answer.")
                             else:
-                                new_qa_obj = ScreeningQA(
-                                    question=q_new_prompt.strip(),
-                                    answer=q_new_ans.strip(),
-                                    category=q_new_cat,
-                                    archetype=ScreeningIntelligenceService.classify_archetype(q_new_prompt.strip()),
-                                    competency_signals=ScreeningIntelligenceService.extract_competency_signals(q_new_prompt.strip())
-                                )
-
-                                # 1. Save to Google Sheets
-                                if storage_adapter.is_connected:
-                                    storage_adapter.save_screening_qa(
-                                        opportunity_id=opp_id,
-                                        company_name=comp,
-                                        job_title=title,
-                                        qa_items=[new_qa_obj]
+                                with st.spinner("💾 Saving screening question & syncing to Google Drive..."):
+                                    new_qa_obj = ScreeningQA(
+                                        question=q_new_prompt.strip(),
+                                        answer=q_new_ans.strip(),
+                                        category=q_new_cat,
+                                        archetype=ScreeningIntelligenceService.classify_archetype(q_new_prompt.strip()),
+                                        competency_signals=ScreeningIntelligenceService.extract_competency_signals(q_new_prompt.strip())
                                     )
 
-                                # 2. Extract folder_id from drive_link if available and sync Google Doc
-                                gdoc_url = None
-                                folder_id_match = re.search(r'folders/([a-zA-Z0-9_-]+)', drive_link) if drive_link else None
-                                folder_target_id = folder_id_match.group(1) if folder_id_match else None
-
-                                if drive_adapter.is_connected and folder_target_id:
-                                    current_all_qa = [
-                                        ScreeningQA(
-                                            question=item.get("question", ""),
-                                            answer=item.get("answer", ""),
-                                            category=item.get("category", ""),
-                                            created_at=item.get("timestamp", "")
+                                    # 1. Save to Google Sheets
+                                    if storage_adapter.is_connected:
+                                        storage_adapter.save_screening_qa(
+                                            opportunity_id=opp_id,
+                                            company_name=comp,
+                                            job_title=title,
+                                            qa_items=[new_qa_obj]
                                         )
-                                        for item in opp_qa_list
-                                    ] + [new_qa_obj]
 
-                                    doc_result = drive_adapter.create_screening_questions_doc(
-                                        folder_id=folder_target_id,
-                                        company_name=comp,
-                                        job_title=title,
-                                        qa_items=current_all_qa,
-                                        opportunity_id=opp_id
-                                    )
-                                    if doc_result and doc_result.get("file_link"):
-                                        gdoc_url = doc_result["file_link"]
-                                        if storage_adapter.is_connected and hasattr(storage_adapter, "update_opportunity_screening_doc"):
-                                            storage_adapter.update_opportunity_screening_doc(
-                                                opportunity_id=opp_id,
-                                                gdoc_link=gdoc_url,
-                                                qa_count=len(current_all_qa)
+                                    # 2. Extract folder_id from drive_link if available and sync Google Doc
+                                    gdoc_url = None
+                                    folder_id_match = re.search(r'folders/([a-zA-Z0-9_-]+)', drive_link) if drive_link else None
+                                    folder_target_id = folder_id_match.group(1) if folder_id_match else None
+
+                                    if drive_adapter.is_connected and folder_target_id:
+                                        current_all_qa = [
+                                            ScreeningQA(
+                                                question=item.get("question", ""),
+                                                answer=item.get("answer", ""),
+                                                category=item.get("category", ""),
+                                                created_at=item.get("timestamp", "")
                                             )
+                                            for item in opp_qa_list
+                                        ] + [new_qa_obj]
 
-                                if gdoc_url:
-                                    st.success("Saved screening question to Google Sheets and updated Screening Questions Google Doc in Drive!")
-                                    st.markdown(f"[📝 Open 'Screening Questions' Google Doc in Drive]({gdoc_url})")
-                                else:
-                                    st.success("Saved screening question to Google Sheets!")
+                                        doc_result = drive_adapter.create_screening_questions_doc(
+                                            folder_id=folder_target_id,
+                                            company_name=comp,
+                                            job_title=title,
+                                            qa_items=current_all_qa,
+                                            opportunity_id=opp_id
+                                        )
+                                        if doc_result and doc_result.get("file_link"):
+                                            gdoc_url = doc_result["file_link"]
+                                            if storage_adapter.is_connected and hasattr(storage_adapter, "update_opportunity_screening_doc"):
+                                                storage_adapter.update_opportunity_screening_doc(
+                                                    opportunity_id=opp_id,
+                                                    gdoc_link=gdoc_url,
+                                                    qa_count=len(current_all_qa)
+                                                )
+
+                                    if gdoc_url:
+                                        st.success("Saved screening question to Google Sheets and updated Screening Questions Google Doc in Drive!")
+                                    else:
+                                        st.success("Saved screening question to Google Sheets!")
 
                                 # Clear all screening Q&A inputs so fields return to their default blank state
                                 for key_to_clear in [

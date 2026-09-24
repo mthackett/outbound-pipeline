@@ -43,8 +43,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
-PACKAGE_DIR = Path(__file__).resolve().parent
-DEFAULT_CONFIG_PATH = PACKAGE_DIR / "default_config.json"
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG_PATH = PACKAGE_ROOT / "resources" / "report_config.json"
 VAR_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
 TOOL_VERSION = "1.0.0"
 
@@ -93,7 +93,11 @@ def _pages_from_content(content: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 def validate_content(content: Mapping[str, Any]) -> None:
     """Dependency-free structural validation with useful error messages."""
     pages = _pages_from_content(content)
-    allowed_kinds = {"bullets", "lines", "skills", "mixed"}
+    allowed_kinds = {
+        "bullets", "lines", "skills", "mixed",
+        "text", "paragraph", "paragraphs", "prose",
+        "list", "bullet", "skill", "skill_matrix"
+    }
 
     for pi, page in enumerate(pages):
         if not isinstance(page.get("title"), str) or not page["title"].strip():
@@ -283,6 +287,12 @@ def _add_bullet(cell, item, cfg):
     p.paragraph_format.first_line_indent = Pt(-cfg["bullet_hanging_pt"])
     bullet = p.add_run("• ")
     _set_font(bullet, cfg, size=cfg["body_font_pt"], color=cfg["body_color"])
+
+    if isinstance(item, str):
+        r = p.add_run(item)
+        _set_font(r, cfg, size=cfg["body_font_pt"], color=cfg["body_color"])
+        return p
+
     lead = item.get("lead", "")
     rest = item.get("rest", "")
     if lead:
@@ -307,6 +317,11 @@ def _add_line(cell, item, cfg):
         after=cfg["spacing"]["line_after_pt"],
         line=cfg["spacing"]["body_line"],
     )
+    if isinstance(item, str):
+        r = p.add_run(item)
+        _set_font(r, cfg, size=cfg["body_font_pt"], color=cfg["body_color"])
+        return p
+
     label = item.get("label", "")
     value = item.get("value", "")
     if label:
@@ -381,27 +396,39 @@ def _add_note(cell, text, cfg):
 
 def _render_section(cell, section, cfg):
     _add_section_banner(cell, section["title"], cfg)
-    kind = section.get("kind", "bullets")
+    raw_kind = section.get("kind", "bullets")
+    kind = raw_kind.lower() if isinstance(raw_kind, str) else "bullets"
+
+    if kind in ("text", "paragraph", "paragraphs", "prose"):
+        kind = "lines"
+    elif kind in ("list", "bullet"):
+        kind = "bullets"
+    elif kind in ("skill", "skill_matrix"):
+        kind = "skills"
+
+    items = section.get("items", [])
+    if isinstance(items, str):
+        items = [items]
 
     if kind == "bullets":
-        for item in section.get("items", []):
+        for item in items:
             _add_bullet(cell, item, cfg)
     elif kind == "lines":
-        for item in section.get("items", []):
+        for item in items:
             _add_line(cell, item, cfg)
     elif kind == "skills":
-        _add_skill_matrix(cell, section.get("items", []), cfg)
+        _add_skill_matrix(cell, items, cfg)
     elif kind == "mixed":
         for block in section.get("blocks", []):
-            bkind = block.get("kind")
-            if bkind == "bullet":
+            bkind = block.get("kind", "line")
+            if bkind in ("bullet", "list"):
                 _add_bullet(cell, block, cfg)
-            elif bkind == "line":
+            elif bkind in ("line", "text", "paragraph", "prose"):
                 _add_line(cell, block, cfg)
             elif bkind == "note":
                 _add_note(cell, block.get("text", ""), cfg)
             else:
-                raise ValueError(f"Unsupported mixed block kind: {bkind}")
+                _add_line(cell, block, cfg)
 
     if section.get("note"):
         _add_note(cell, section["note"], cfg)
