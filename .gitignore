@@ -44,3 +44,8 @@ __pycache__/
 *.swp
 
 specs/
+
+# Personal Notes, Roadmap & Planning Documents
+todo.md
+IMPLEMENTATION_PLAN.md
+COLD_OUTREACH_EXTENSION_ARCHITECTURE.md
