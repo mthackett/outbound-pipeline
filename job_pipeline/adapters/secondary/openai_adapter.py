@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 load_dotenv()
 from pydantic import BaseModel, Field
@@ -73,6 +74,9 @@ class JobRequirementsSchema(BaseModel):
     guaranteed_hours: Optional[bool] = Field(
         None, description="True if guaranteed hours are explicitly mentioned, null if unspecified."
     )
+    telemetry_warnings: List[str] = Field(
+        default_factory=list, description="List of warning labels or infractions detected based on the configured warning criteria or job post conditions."
+    )
 
 
 class JobExtractionPayload(BaseModel):
@@ -94,10 +98,32 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         self.last_telemetry_tokens: int = 0
         self.last_report_tokens: int = 0
 
-    def extract_job_telemetry(self, raw_jd: str) -> JobExtractionPayload:
-        """Parses raw job description text into structured JobExtractionPayload using gpt-4o-mini."""
+    def extract_job_telemetry(
+        self,
+        raw_jd: str,
+        warning_rules: Optional[List[Dict[str, Any]]] = None
+    ) -> JobExtractionPayload:
+        """Parses raw job description text into structured JobExtractionPayload using gpt-4o-mini and user warning rules."""
+        if warning_rules is None:
+            try:
+                from job_pipeline.domain.services import PipelineConfigService
+                warning_rules = PipelineConfigService.get_active_warning_rules()
+            except Exception:
+                warning_rules = []
+
         if not self.api_key:
             self.last_telemetry_tokens = 0
+            offline_warnings: List[str] = []
+            if warning_rules:
+                for rule in warning_rules:
+                    r_name = rule.get("name", "Warning")
+                    for kw in rule.get("keywords", []):
+                        if kw and kw.strip():
+                            pattern = r'(?:\b|_)' + re.escape(kw.strip()) + r'(?:\b|_)'
+                            if re.search(pattern, raw_jd, re.IGNORECASE):
+                                offline_warnings.append(f"[{r_name}]: Keyword match detected ('{kw.strip()}').")
+                                break
+
             return JobExtractionPayload(
                 company_name="Target Company",
                 job_title="Revenue Operations Analyst",
@@ -108,11 +134,34 @@ class OpenAIEngineAdapter(LLMStrategyPort):
                     core_pain_points="Unifying funnel analytics and pipeline velocity across CRM tools.",
                     is_remote=True,
                     employment_arrangement="Employee",
-                    pay_basis="Annual"
+                    pay_basis="Annual",
+                    telemetry_warnings=offline_warnings
                 )
             )
 
         client = self._runner.client
+        warning_section = ""
+        if warning_rules:
+            rule_lines = []
+            for idx, r in enumerate(warning_rules, start=1):
+                name = r.get("name", f"Rule {idx}")
+                category = r.get("category", "General")
+                severity = r.get("severity", "Warning")
+                keywords = ", ".join(r.get("keywords", []))
+                concept = r.get("concept_description", "")
+                rule_lines.append(
+                    f"{idx}. {name} (Category: {category}, Severity: {severity})\n"
+                    f"   - Trigger Keywords: {keywords or 'None specified'}\n"
+                    f"   - Target Concept/Condition: {concept}"
+                )
+            warning_section = (
+                "\n\nCONFIGURABLE TELEMETRY WARNING RULES:\n"
+                "Evaluate the job post against each rule below. If any keyword, concept, or condition is present or implied,\n"
+                "add a distinct infraction to the 'telemetry_warnings' list in the format '[<Rule Name>]: <Brief reason/quote>'.\n"
+                "Do NOT combine multiple violations into one string; record every matching rule infraction as a separate item:\n"
+                + "\n".join(rule_lines)
+            )
+
         system_instruction = (
             "You are a precise B2B GTM intelligence engine. Analyze the job description "
             "to extract high-fidelity structured data, required tech stack, preferred tools, pain points, compensation, and contract terms.\n\n"
@@ -126,6 +175,7 @@ class OpenAIEngineAdapter(LLMStrategyPort):
             "7. Staffing Agency & Client: Extract staffing_agency and client_company only when identifiable from the text.\n"
             "8. Expected Hours: Extract expected_hours_per_week only when explicitly stated. Do NOT invent hours.\n"
             "9. Never fill missing contract values using industry assumptions; preserve them as null."
+            + warning_section
         )
 
         completion = client.beta.chat.completions.parse(
@@ -137,7 +187,28 @@ class OpenAIEngineAdapter(LLMStrategyPort):
             response_format=JobExtractionPayload
         )
         self.last_telemetry_tokens = getattr(completion.usage, "total_tokens", 0) if hasattr(completion, "usage") else 0
-        return completion.choices[0].message.parsed
+        parsed = completion.choices[0].message.parsed
+
+        # Hybrid scanning: Ensure deterministic keyword matches are guaranteed to be flagged
+        detected_warnings = list(parsed.requirements.telemetry_warnings or [])
+        if warning_rules:
+            for rule in warning_rules:
+                r_name = rule.get("name", "Warning")
+                keywords = rule.get("keywords", [])
+                matched_kws = []
+                for kw in keywords:
+                    if not kw or not kw.strip():
+                        continue
+                    pattern = r'(?:\b|_)' + re.escape(kw.strip()) + r'(?:\b|_)'
+                    if re.search(pattern, raw_jd, re.IGNORECASE):
+                        matched_kws.append(kw.strip())
+                if matched_kws:
+                    already_flagged = any(r_name.lower() in w.lower() for w in detected_warnings)
+                    if not already_flagged:
+                        kws_str = ", ".join(f"'{k}'" for k in set(matched_kws))
+                        detected_warnings.append(f"[{r_name}]: Keyword match detected ({kws_str}).")
+        parsed.requirements.telemetry_warnings = detected_warnings
+        return parsed
 
     def generate_role_intelligence_report(
         self,

@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from job_pipeline.domain.models import CandidateProfile, JobPosting
-from job_pipeline.domain.services import JobQualificationService
+from job_pipeline.domain.services import JobQualificationService, PipelineConfigService
 from job_pipeline.adapters.secondary.google_sheets import GoogleSheetsAdapter
 from job_pipeline.adapters.secondary.google_drive import GoogleDriveAdapter
 from job_pipeline.adapters.secondary.openai_adapter import OpenAIEngineAdapter
@@ -41,10 +41,12 @@ def run_batch_pipeline(demo_mode: bool = False):
     for job in pending_jobs:
         # 0. Extract Telemetry via OpenAI gpt-4o-mini if raw JD text is present
         sal_min, sal_max = None, None
-        if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter) and len(job.raw_description) >= 20:
+        warning_rules = PipelineConfigService.get_active_warning_rules()
+        telemetry_warnings = []
+        if len(job.raw_description) >= 20:
             try:
                 print(f"\nEXTRACTING LLM Telemetry from raw JD text...")
-                telemetry = llm_adapter.extract_job_telemetry(job.raw_description)
+                telemetry = llm_adapter.extract_job_telemetry(job.raw_description, warning_rules=warning_rules)
                 if telemetry.company_name and (not job.company_name or len(job.company_name.strip()) < 2):
                     job.company_name = telemetry.company_name
                 if telemetry.job_title and (not job.job_title or len(job.job_title.strip()) < 2):
@@ -56,9 +58,11 @@ def run_batch_pipeline(demo_mode: bool = False):
                 job.preferred_skills = telemetry.requirements.preferred_tech_stack
                 sal_min = telemetry.requirements.salary_min
                 sal_max = telemetry.requirements.salary_max
+                telemetry_warnings = telemetry.requirements.telemetry_warnings or []
             except Exception as e:
                 print(f"WARNING: Telemetry extraction notice: {e}")
 
+        job.telemetry_warnings = telemetry_warnings
         print(f"\nPROCESSING JOB: {job.company_name} - {job.job_title} ({job.title_family})")
 
         # Fetch existing opportunities for duplicate & velocity guardrails
@@ -74,10 +78,13 @@ def run_batch_pipeline(demo_mode: bool = False):
             salary_min=sal_min,
             salary_max=sal_max,
             profile=profile,
-            existing_company_titles=all_opps
+            existing_company_titles=all_opps,
+            telemetry_warnings=telemetry_warnings
         )
         print(f"  FIT GUARDRAIL RESULT: {fit_eval.status} - {fit_eval.reasoning}")
         print(f"  TARGET PAY RANGE:     {fit_eval.pay_bounds.display_range}")
+        if telemetry_warnings:
+            print(f"  TELEMETRY WARNINGS:   {len(telemetry_warnings)} flagged: {', '.join(telemetry_warnings)}")
 
         # 2. Select Best-Fit Resume by Title
         selected_resume = resume_repo.select_best_fit_resume(job.job_title, job.title_family)

@@ -29,7 +29,8 @@ from job_pipeline.domain.models import (
     SCREENING_CATEGORIES, SCREENING_ARCHETYPES, StoryBreadcrumb, CanonicalStory, StoryCueCard, ScreeningMatchResult,
     APPLICATION_CATEGORIES, CATEGORY_ICONS, APPLICATION_STAGES,
     DEFAULT_APPLICATION_SOURCES, DEFAULT_PRIORITIES, PRIORITY_ICONS, SOURCE_ICONS,
-    EMPLOYMENT_ARRANGEMENTS, PAY_BASES, WORKER_CLASSIFICATIONS
+    EMPLOYMENT_ARRANGEMENTS, PAY_BASES, WORKER_CLASSIFICATIONS,
+    TELEMETRY_WARNING_CATEGORIES, DEFAULT_TELEMETRY_WARNING_RULES, TelemetryWarningRule
 )
 
 from job_pipeline.domain.services import (
@@ -294,6 +295,84 @@ def render_quicklinks_manager(context_key: str = "sb"):
         st.rerun()
 
 
+def render_telemetry_warnings_manager(key_prefix: str = "sb"):
+    """Renders manager for user-defined telemetry warning criteria forwarded to the LLM."""
+    warning_rules = PipelineConfigService.get_warning_rules()
+    active_count = sum(1 for r in warning_rules if r.get("enabled", True))
+    st.caption(f"Configured criteria are forwarded directly to the LLM during job post extraction to flag suspicious conditions or dealbreakers. ({active_count}/{len(warning_rules)} active)")
+
+    with st.expander("➕ Add New Warning Rule", expanded=False):
+        with st.form(f"{key_prefix}_add_warning_rule_form", clear_on_submit=True):
+            rule_name = st.text_input("Rule Name *", placeholder="e.g. Mandatory Weekend Support", autocomplete="off")
+            r_col1, r_col2 = st.columns(2)
+            with r_col1:
+                category = st.selectbox("Category", TELEMETRY_WARNING_CATEGORIES, index=0, key=f"{key_prefix}_cat_sel")
+            with r_col2:
+                severity = st.selectbox("Severity", ["Warning", "Flag"], index=0, key=f"{key_prefix}_sev_sel", help="'Flag' marks evaluation as FLAGGED_TELEMETRY; 'Warning' highlights infractions.")
+            keywords_raw = st.text_input("Trigger Keywords (comma separated)", placeholder="e.g. on-call, weekend, 24/7, pagerduty", autocomplete="off")
+            concept = st.text_area("Concept / Condition for LLM *", placeholder="Describe the condition or requirement the LLM should detect in the job posting text...", height=70)
+            enabled = st.checkbox("Enable immediately", value=True, key=f"{key_prefix}_en_chk")
+
+            if st.form_submit_button("💾 Save Warning Rule"):
+                if rule_name.strip() and concept.strip():
+                    kws = [k.strip() for k in keywords_raw.split(",") if k.strip()]
+                    PipelineConfigService.add_warning_rule({
+                        "name": rule_name.strip(),
+                        "category": category,
+                        "keywords": kws,
+                        "concept_description": concept.strip(),
+                        "severity": severity,
+                        "enabled": enabled
+                    })
+                    st.success(f"Added warning rule '{rule_name.strip()}'!")
+                    st.rerun()
+                else:
+                    st.warning("Please provide both a Rule Name and Concept Description.")
+
+    st.markdown("###### 📋 Configured Telemetry Rules:")
+    for idx, rule in enumerate(warning_rules):
+        rid = rule.get("id", f"rule-{idx}")
+        rname = rule.get("name", "Unnamed Rule")
+        rcat = rule.get("category", "Other")
+        rsev = rule.get("severity", "Warning")
+        renabled = rule.get("enabled", True)
+        rkws = rule.get("keywords", [])
+        rdesc = rule.get("concept_description", "")
+
+        sev_color = "#EF4444" if rsev == "Flag" else "#F59E0B"
+
+        with st.container():
+            c_top1, c_top2 = st.columns([3.8, 1.4])
+            with c_top1:
+                status_icon = "🟢" if renabled else "⚪"
+                st.markdown(
+                    f"<div style='font-size:0.88rem; font-weight:600; color:{'#FFFFFF' if renabled else '#94A3B8'};'>"
+                    f"{status_icon} {rname} "
+                    f"<span style='font-size:0.75rem; background:#334155; color:#94A3B8; padding:2px 6px; border-radius:4px; margin-left:4px;'>{rcat}</span> "
+                    f"<span style='font-size:0.75rem; background:{sev_color}22; color:{sev_color}; padding:2px 6px; border-radius:4px;'>{rsev}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+                if rkws:
+                    st.caption(f"Keywords: {', '.join(rkws)}")
+                if rdesc:
+                    st.caption(f"Concept: {rdesc}")
+            with c_top2:
+                btn_toggle_label = "Disable" if renabled else "Enable"
+                if st.button(btn_toggle_label, key=f"{key_prefix}_tgl_{rid}", help="Toggle rule on/off", use_container_width=True):
+                    PipelineConfigService.toggle_warning_rule(rid)
+                    st.rerun()
+                if st.button("🗑️ Del", key=f"{key_prefix}_del_{rid}", help="Delete rule", use_container_width=True):
+                    PipelineConfigService.remove_warning_rule(rid)
+                    st.rerun()
+            st.markdown("<hr style='margin:4px 0 6px 0; border:none; border-top:1px solid #1E293B;'/>", unsafe_allow_html=True)
+
+    if st.button("🔄 Reset to Default Rules", key=f"{key_prefix}_reset_warn_rules", help="Restores the standard 5 telemetry warning rules."):
+        PipelineConfigService.reset_default_warning_rules()
+        st.toast("Restored default warning rules.")
+        st.rerun()
+
+
 
 # Sidebar Configuration & Connections
 st.sidebar.title("💼 Pipeline Controls")
@@ -366,6 +445,11 @@ with st.sidebar.expander("🛡️ Guardrail Rules & Limits", expanded=False):
     st.session_state.profile.max_company_applications_limit = s_max_apps
     st.session_state.profile.company_application_window_days = s_window
     st.session_state.profile.repost_detection_threshold_days = s_repost
+
+# Telemetry Warning Rules (LLM Criteria) Expander in Sidebar
+active_rules_count = len(PipelineConfigService.get_active_warning_rules())
+with st.sidebar.expander(f"⚠️ Telemetry Warnings ({active_rules_count} Active)", expanded=False):
+    render_telemetry_warnings_manager(key_prefix="sb")
 
 # Direct External Links
 sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
@@ -670,6 +754,7 @@ with tab1:
             final_fte = job_payload.get("fte_conversion_possible")
             final_agency = job_payload.get("staffing_agency")
             final_client = job_payload.get("client_company")
+            final_telemetry_warnings = job_payload.get("telemetry_warnings", [])
 
             # 1. Fit Qualification & Target Pay Calculator (60%-80%)
             log_action(f"🎯 Evaluating fit qualifications & 60%-80% target pay bounds for '{final_title}'...")
@@ -687,7 +772,8 @@ with tab1:
                 expected_hours_per_week=final_hours,
                 expected_hours_per_week_is_assumed=(final_hours is None),
                 contract_length_months=final_months,
-                contract_length_weeks=final_weeks
+                contract_length_weeks=final_weeks,
+                telemetry_warnings=final_telemetry_warnings
             )
 
             # 2. Select Best Fit Resume
@@ -788,6 +874,7 @@ with tab1:
                 stage_history=[{"stage": final_status, "entered_at": now_iso}],
                 required_skills=req_skills,
                 preferred_skills=pref_skills,
+                telemetry_warnings=final_telemetry_warnings,
                 selected_resume_name=resume_name,
                 drive_folder_link=folder_link,
                 drive_jd_link=drive_jd_link,
@@ -834,6 +921,7 @@ with tab1:
                 "pref_skills": pref_skills,
                 "pain_points": pain_points,
                 "is_remote": is_remote,
+                "telemetry_warnings": final_telemetry_warnings,
                 "opp_id": opp_id
             }
 
@@ -908,9 +996,11 @@ with tab1:
                 extracted_agency = None
                 extracted_client = None
 
+                warning_rules = PipelineConfigService.get_active_warning_rules()
+                extracted_telemetry_warnings = []
                 if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
                     try:
-                        telemetry = llm_adapter.extract_job_telemetry(jd_text_input)
+                        telemetry = llm_adapter.extract_job_telemetry(jd_text_input, warning_rules=warning_rules)
                         extracted_company = telemetry.company_name
                         extracted_title = telemetry.job_title
                         extracted_family = telemetry.title_family
@@ -931,10 +1021,17 @@ with tab1:
                         extracted_fte = telemetry.requirements.fte_conversion_possible
                         extracted_agency = telemetry.requirements.staffing_agency
                         extracted_client = telemetry.requirements.client_company
+                        extracted_telemetry_warnings = telemetry.requirements.telemetry_warnings or []
                     except Exception as e:
                         st.warning(f"Telemetry auto-extraction notice: {e}")
                         req_skills, pref_skills = ["Salesforce", "SQL", "Tableau", "Clari"], ["dbt"]
                 else:
+                    if hasattr(llm_adapter, "extract_job_telemetry"):
+                        try:
+                            mock_telemetry = llm_adapter.extract_job_telemetry(jd_text_input, warning_rules=warning_rules)
+                            extracted_telemetry_warnings = mock_telemetry.requirements.telemetry_warnings or []
+                        except Exception:
+                            extracted_telemetry_warnings = []
                     extracted_company = "Planful"
                     extracted_title = "Sales Operations Analyst"
                     extracted_family = "revenue_operations"
@@ -1005,7 +1102,8 @@ with tab1:
                     "jd_text": jd_text_input,
                     "all_opps": all_opps,
                     "dup": dup_res,
-                    "vel": vel_res
+                    "vel": vel_res,
+                    "telemetry_warnings": extracted_telemetry_warnings
                 }
 
                 # Check if Guardrails are tripped
@@ -1033,6 +1131,23 @@ with tab1:
             st.metric("Skill Match Score", f"{int(ev['fit_eval'].fit_score * 100)}%")
         with m3:
             st.metric("Company & Role", f"{ev['company']} — {ev['title']}")
+
+        # Telemetry Warnings Alert Box (Highlighting each individual warning infraction)
+        if ev["fit_eval"].warnings:
+            has_flag = any("FLAG" in w.upper() or "dealbreaker" in w.lower() or "floor" in w.lower() for w in ev["fit_eval"].warnings)
+            box_border = "#EF4444" if has_flag else "#F59E0B"
+            box_bg = "#450A0A55" if has_flag else "#451A0355"
+            warn_items_html = "".join(f"<li style='margin-bottom: 4px; color: #FDE68A;'><b>⚠️</b> {w}</li>" for w in ev["fit_eval"].warnings)
+            st.markdown(f"""
+            <div style="margin: 12px 0; padding: 12px 16px; background: {box_bg}; border: 1px solid {box_border}; border-radius: 8px;">
+                <h4 style="margin: 0 0 8px 0; color: {'#F87171' if has_flag else '#FBBF24'}; font-size: 1.05rem;">
+                    {'🚨 Critical Dealbreaker / Flagged Inaccuracies' if has_flag else '⚠️ Job Telemetry Warnings Detected'} ({len(ev['fit_eval'].warnings)})
+                </h4>
+                <ul style="margin: 0; padding-left: 20px;">
+                    {warn_items_html}
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
 
         # Primary Action Bar (Buttons to open Resume, Drive Folder, Docs, Sheet)
         st.markdown("#### ⚡ Immediate Application Actions:")
@@ -1352,31 +1467,36 @@ with tab2:
     available_sources = pipeline_cfg.get("sources", DEFAULT_APPLICATION_SOURCES)
     available_priorities = pipeline_cfg.get("priorities", DEFAULT_PRIORITIES)
 
-    # Configuration Manager Expander for Sources & Priorities
-    with st.expander("⚙️ Configure Pipeline Attributes (Sources & Priorities)", expanded=False):
-        st.caption("Customize where you apply from and your priority tiers. Additions persist and appear across all dropdowns.")
-        cfg_c1, cfg_c2 = st.columns(2)
-        with cfg_c1:
-            st.markdown("###### 🌐 Application Sources / Platforms")
-            st.caption(f"Current: {', '.join(available_sources)}")
-            with st.form("cfg_add_source_form", clear_on_submit=True):
-                new_src_name = st.text_input("Add Source", placeholder="e.g. Wellfound, Otta, Referral...", autocomplete="off")
-                if st.form_submit_button("➕ Save New Source"):
-                    if new_src_name.strip():
-                        PipelineConfigService.add_source(new_src_name.strip())
-                        st.success(f"Added source: '{new_src_name.strip()}'")
-                        st.rerun()
+    # Configuration Manager Expander for Sources, Priorities & Telemetry Warnings
+    with st.expander("⚙️ Configure Pipeline Attributes & Telemetry Rules", expanded=False):
+        st.caption("Customize where you apply from, your priority tiers, and telemetry warnings sent to the LLM.")
+        cfg_t1, cfg_t2 = st.tabs(["🌐 Sources & Priorities", "⚠️ Telemetry Warnings (LLM)"])
+        with cfg_t1:
+            cfg_c1, cfg_c2 = st.columns(2)
+            with cfg_c1:
+                st.markdown("###### 🌐 Application Sources / Platforms")
+                st.caption(f"Current: {', '.join(available_sources)}")
+                with st.form("cfg_add_source_form", clear_on_submit=True):
+                    new_src_name = st.text_input("Add Source", placeholder="e.g. Wellfound, Otta, Referral...", autocomplete="off")
+                    if st.form_submit_button("➕ Save New Source"):
+                        if new_src_name.strip():
+                            PipelineConfigService.add_source(new_src_name.strip())
+                            st.success(f"Added source: '{new_src_name.strip()}'")
+                            st.rerun()
 
-        with cfg_c2:
-            st.markdown("###### 🎯 Priority Tiers")
-            st.caption(f"Current: {', '.join(available_priorities)}")
-            with st.form("cfg_add_priority_form", clear_on_submit=True):
-                new_pri_name = st.text_input("Add Priority Level", placeholder="e.g. Critical, Dream, Tier 1...", autocomplete="off")
-                if st.form_submit_button("➕ Save New Priority"):
-                    if new_pri_name.strip():
-                        PipelineConfigService.add_priority(new_pri_name.strip())
-                        st.success(f"Added priority: '{new_pri_name.strip()}'")
-                        st.rerun()
+            with cfg_c2:
+                st.markdown("###### 🎯 Priority Tiers")
+                st.caption(f"Current: {', '.join(available_priorities)}")
+                with st.form("cfg_add_priority_form", clear_on_submit=True):
+                    new_pri_name = st.text_input("Add Priority Level", placeholder="e.g. Critical, Dream, Tier 1...", autocomplete="off")
+                    if st.form_submit_button("➕ Save New Priority"):
+                        if new_pri_name.strip():
+                            PipelineConfigService.add_priority(new_pri_name.strip())
+                            st.success(f"Added priority: '{new_pri_name.strip()}'")
+                            st.rerun()
+
+        with cfg_t2:
+            render_telemetry_warnings_manager(key_prefix="tab2")
 
     # Map screening QA by opportunity_id in-memory (0 extra Sheets API calls)
     opp_qa_map = {}
@@ -1649,7 +1769,13 @@ with tab2:
                     if screening_doc:
                         st.markdown(f"[📝 Open Screening Questions Doc]({screening_doc})")
                     if opp.get("Fit Warning"):
-                        st.caption(f"🛡️ Guardrail Note: {opp.get('Fit Warning')}")
+                        warn_val = str(opp.get("Fit Warning"))
+                        st.markdown(
+                            f"<div style='margin: 4px 0 8px 0; padding: 6px 10px; background: #451A0344; border: 1px solid #F59E0B66; border-radius: 6px; font-size: 0.85rem; color: #FDE68A;'>"
+                            f"<b>⚠️ Fit & Telemetry Note:</b> {warn_val}"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
 
                     # Stage Progression History Timeline
                     st.markdown("---")

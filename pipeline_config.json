@@ -10,5 +10,109 @@
     "High",
     "Medium",
     "Low"
+  ],
+  "telemetry_warnings": [
+    {
+      "id": "warn-on-call",
+      "name": "On-Call / Weekend Support Required",
+      "category": "Scope",
+      "keywords": [
+        "on-call",
+        "24/7",
+        "pagerduty",
+        "weekend coverage",
+        "after-hours",
+        "night shift"
+      ],
+      "concept_description": "Role requires regular on-call rotation, 24/7 availability, off-hours incident response, or mandatory weekend work.",
+      "severity": "Warning",
+      "enabled": true
+    },
+    {
+      "id": "warn-excessive-travel",
+      "name": "Excessive Travel (>25%)",
+      "category": "Scope",
+      "keywords": [
+        "travel 50%",
+        "travel 75%",
+        "frequent travel",
+        "extensive travel",
+        "road warrior"
+      ],
+      "concept_description": "Role requires heavy or frequent travel (more than 25% travel commitment).",
+      "severity": "Warning",
+      "enabled": true
+    },
+    {
+      "id": "warn-no-benefits",
+      "name": "No Benefits / Commission Only",
+      "category": "Benefits",
+      "keywords": [
+        "commission only",
+        "no benefits",
+        "unpaid",
+        "equity only",
+        "stipend only"
+      ],
+      "concept_description": "Role does not offer standard benefits, is commission-only, equity-only, or unpaid.",
+      "severity": "Warning",
+      "enabled": true
+    },
+    {
+      "id": "warn-legacy-stack",
+      "name": "Outdated / Legacy Tech Stack",
+      "category": "Skills",
+      "keywords": [
+        "COBOL",
+        "Visual Basic",
+        "VB6",
+        "Fortran",
+        "Lotus Notes",
+        "Access database",
+        "legacy monolithic"
+      ],
+      "concept_description": "Role heavily relies on legacy, deprecated, or obsolete programming languages and architectures.",
+      "severity": "Warning",
+      "enabled": true
+    },
+    {
+      "id": "warn-overbroad-scope",
+      "name": "Overbroad Scope / Multi-Department Trap",
+      "category": "Scope",
+      "keywords": [
+        "wear many hats",
+        "handle IT and sales and marketing",
+        "one-person department",
+        "do-it-all"
+      ],
+      "concept_description": "Job description expects a single person to handle IT helpdesk, office management, sales, and engineering simultaneously without dedicated team support.",
+      "severity": "Warning",
+      "enabled": true
+    },
+    {
+      "name": "Clearance",
+      "category": "Other",
+      "keywords": [
+        "Clearance",
+        "must get clearance",
+        "government clearance"
+      ],
+      "concept_description": "Clearance required for role.",
+      "severity": "Flag",
+      "enabled": true,
+      "id": "warn-ad5f99"
+    },
+    {
+      "name": "Government Job",
+      "category": "Scope",
+      "keywords": [
+        "Government",
+        "Government Contractor"
+      ],
+      "concept_description": "Job is posted by a US government or a US government contractor.",
+      "severity": "Flag",
+      "enabled": true,
+      "id": "warn-38abc3"
+    }
   ]
 }

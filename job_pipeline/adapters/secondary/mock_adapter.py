@@ -203,7 +203,53 @@ class MockResumeRepositoryAdapter(ResumeRepositoryPort):
         return resumes[0]
 
 
+import re
+from job_pipeline.adapters.secondary.openai_adapter import JobExtractionPayload, JobRequirementsSchema
+
+
 class MockLLMStrategyAdapter(LLMStrategyPort):
+    def extract_job_telemetry(
+        self,
+        raw_jd: str,
+        warning_rules: Optional[List[Dict[str, Any]]] = None
+    ) -> JobExtractionPayload:
+        if warning_rules is None:
+            try:
+                from job_pipeline.domain.services import PipelineConfigService
+                warning_rules = PipelineConfigService.get_active_warning_rules()
+            except Exception:
+                warning_rules = []
+
+        detected_warnings: List[str] = []
+        if warning_rules:
+            for rule in warning_rules:
+                r_name = rule.get("name", "Warning")
+                keywords = rule.get("keywords", [])
+                matched_kws = []
+                for kw in keywords:
+                    if kw and kw.strip():
+                        pattern = r'(?:\b|_)' + re.escape(kw.strip()) + r'(?:\b|_)'
+                        if re.search(pattern, raw_jd, re.IGNORECASE):
+                            matched_kws.append(kw.strip())
+                if matched_kws:
+                    kws_str = ", ".join(f"'{k}'" for k in set(matched_kws))
+                    detected_warnings.append(f"[{r_name}]: Keyword match detected ({kws_str}).")
+
+        return JobExtractionPayload(
+            company_name="Mock Target Company",
+            job_title="Revenue Operations Analyst",
+            title_family="revenue_operations",
+            requirements=JobRequirementsSchema(
+                required_tech_stack=["Salesforce", "SQL", "Tableau", "dbt"],
+                preferred_tech_stack=["HubSpot", "Clari"],
+                core_pain_points="Pipeline acceleration and telemetry orchestration.",
+                is_remote=True,
+                employment_arrangement="Employee",
+                pay_basis="Annual",
+                telemetry_warnings=detected_warnings
+            )
+        )
+
     def generate_role_intelligence_report(
         self,
         job_data: Dict[str, Any],
@@ -223,3 +269,4 @@ class MockLLMStrategyAdapter(LLMStrategyPort):
             job_title=job_data.get("title", "Mock Title"),
             output_docx_path=output_docx_path
         )
+

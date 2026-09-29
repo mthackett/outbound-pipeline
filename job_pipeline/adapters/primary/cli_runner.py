@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from job_pipeline.domain.models import CandidateProfile, JobPosting
-from job_pipeline.domain.services import JobQualificationService
+from job_pipeline.domain.services import JobQualificationService, PipelineConfigService
 from job_pipeline.adapters.secondary.google_sheets import GoogleSheetsAdapter
 from job_pipeline.adapters.secondary.google_drive import GoogleDriveAdapter
 from job_pipeline.adapters.secondary.openai_adapter import OpenAIEngineAdapter
@@ -35,7 +35,6 @@ def evaluate_single_job(
         drive_adapter = MockDocumentStorageAdapter()
         resume_repo = MockResumeRepositoryAdapter()
         llm_adapter = MockLLMStrategyAdapter()
-        telemetry = None
     else:
         print(f"RUNNING: Evaluating Job Posting '{company_name} - {job_title}' via LLM Telemetry Extractor...")
         storage_adapter = GoogleSheetsAdapter()
@@ -43,25 +42,27 @@ def evaluate_single_job(
         resume_repo = drive_adapter
         llm_adapter = OpenAIEngineAdapter()
         
-        # 0. Extract Telemetry via OpenAI gpt-4o-mini
-        try:
-            telemetry = llm_adapter.extract_job_telemetry(raw_jd)
-            if company_name in ["Planful", "Stripe Analytics", "Target Company"] and telemetry.company_name:
-                company_name = telemetry.company_name
-            if job_title in ["Sales Operations Analyst", "Senior Revenue Operations Analyst", "Target Role"] and telemetry.job_title:
-                job_title = telemetry.job_title
-            if telemetry.title_family:
-                title_family = telemetry.title_family
-            if salary_min is None or salary_min == 0:
-                salary_min = telemetry.requirements.salary_min
-            if salary_max is None or salary_max == 0:
-                salary_max = telemetry.requirements.salary_max
-        except Exception as e:
-            print(f"WARNING: Telemetry extraction fallback: {e}")
-            telemetry = None
+    # 0. Extract Telemetry with Configurable Telemetry Warnings
+    warning_rules = PipelineConfigService.get_active_warning_rules()
+    try:
+        telemetry = llm_adapter.extract_job_telemetry(raw_jd, warning_rules=warning_rules)
+        if company_name in ["Planful", "Stripe Analytics", "Target Company"] and telemetry.company_name:
+            company_name = telemetry.company_name
+        if job_title in ["Sales Operations Analyst", "Senior Revenue Operations Analyst", "Target Role"] and telemetry.job_title:
+            job_title = telemetry.job_title
+        if telemetry.title_family:
+            title_family = telemetry.title_family
+        if salary_min is None or salary_min == 0:
+            salary_min = telemetry.requirements.salary_min
+        if salary_max is None or salary_max == 0:
+            salary_max = telemetry.requirements.salary_max
+    except Exception as e:
+        print(f"WARNING: Telemetry extraction fallback: {e}")
+        telemetry = None
 
     req_skills = telemetry.requirements.required_tech_stack if telemetry else []
     pref_skills = telemetry.requirements.preferred_tech_stack if telemetry else []
+    telemetry_warnings = telemetry.requirements.telemetry_warnings if (telemetry and telemetry.requirements) else []
 
     # 1. Run Qualification & Pay Calculator
     fit_eval = JobQualificationService.evaluate(
@@ -72,12 +73,17 @@ def evaluate_single_job(
         preferred_skills=pref_skills,
         salary_min=salary_min,
         salary_max=salary_max,
-        profile=profile
+        profile=profile,
+        telemetry_warnings=telemetry_warnings
     )
     print("\n--- FIT QUALIFICATION RESULT ---")
     print(f"Status:      {fit_eval.status}")
     print(f"Reasoning:   {fit_eval.reasoning}")
     print(f"Target Pay:  {fit_eval.pay_bounds.display_range}")
+    if telemetry_warnings:
+        print(f"Telemetry Warnings ({len(telemetry_warnings)}):")
+        for tw in telemetry_warnings:
+            print(f"  [WARN] {tw}")
     if req_skills:
         print(f"Required Tech: {', '.join(req_skills)}")
     if pref_skills:
@@ -138,6 +144,7 @@ def evaluate_single_job(
         raw_description=raw_jd,
         required_skills=req_skills,
         preferred_skills=pref_skills,
+        telemetry_warnings=telemetry_warnings,
         selected_resume_name=resume_name,
         drive_folder_link=folder_link,
         drive_jd_link=drive_jd_link,
@@ -160,9 +167,12 @@ def main():
     parser.add_argument("--demo", action="store_true", help="Run in zero-cost demo mode")
     args = parser.parse_args()
 
-    if args.jd and os.path.exists(args.jd):
-        with open(args.jd, "r", encoding="utf-8") as f:
-            raw_jd = f.read()
+    if args.jd:
+        if os.path.exists(args.jd):
+            with open(args.jd, "r", encoding="utf-8") as f:
+                raw_jd = f.read()
+        else:
+            raw_jd = args.jd
     else:
         raw_jd = (
             "Seeking a Senior RevOps Analyst to own Salesforce architecture, build dbt models in BigQuery, "

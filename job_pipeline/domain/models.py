@@ -21,6 +21,74 @@ WORKER_CLASSIFICATIONS: List[str] = [
     "C2C"
 ]
 
+TELEMETRY_WARNING_CATEGORIES: List[str] = [
+    "Scope",
+    "Skills",
+    "Experience",
+    "Benefits",
+    "Culture",
+    "Compensation",
+    "Other"
+]
+
+DEFAULT_TELEMETRY_WARNING_RULES: List[Dict[str, Any]] = [
+    {
+        "id": "warn-on-call",
+        "name": "On-Call / Weekend Support Required",
+        "category": "Scope",
+        "keywords": ["on-call", "24/7", "pagerduty", "weekend coverage", "after-hours", "night shift"],
+        "concept_description": "Role requires regular on-call rotation, 24/7 availability, off-hours incident response, or mandatory weekend work.",
+        "severity": "Warning",
+        "enabled": True
+    },
+    {
+        "id": "warn-excessive-travel",
+        "name": "Excessive Travel (>25%)",
+        "category": "Scope",
+        "keywords": ["travel 50%", "travel 75%", "frequent travel", "extensive travel", "road warrior"],
+        "concept_description": "Role requires heavy or frequent travel (more than 25% travel commitment).",
+        "severity": "Warning",
+        "enabled": True
+    },
+    {
+        "id": "warn-no-benefits",
+        "name": "No Benefits / Commission Only",
+        "category": "Benefits",
+        "keywords": ["commission only", "no benefits", "unpaid", "equity only", "stipend only"],
+        "concept_description": "Role does not offer standard benefits, is commission-only, equity-only, or unpaid.",
+        "severity": "Warning",
+        "enabled": True
+    },
+    {
+        "id": "warn-legacy-stack",
+        "name": "Outdated / Legacy Tech Stack",
+        "category": "Skills",
+        "keywords": ["COBOL", "Visual Basic", "VB6", "Fortran", "Lotus Notes", "Access database", "legacy monolithic"],
+        "concept_description": "Role heavily relies on legacy, deprecated, or obsolete programming languages and architectures.",
+        "severity": "Warning",
+        "enabled": True
+    },
+    {
+        "id": "warn-overbroad-scope",
+        "name": "Overbroad Scope / Multi-Department Trap",
+        "category": "Scope",
+        "keywords": ["wear many hats", "handle IT and sales and marketing", "one-person department", "do-it-all"],
+        "concept_description": "Job description expects a single person to handle IT helpdesk, office management, sales, and engineering simultaneously without dedicated team support.",
+        "severity": "Warning",
+        "enabled": True
+    }
+]
+
+
+class TelemetryWarningRule(BaseModel):
+    id: str = Field(default_factory=lambda: f"warn-{uuid.uuid4().hex[:6]}")
+    name: str = Field(..., description="Short descriptive title for this warning criterion.")
+    category: str = Field(default="Scope", description="Category: Scope, Skills, Experience, Benefits, Culture, Compensation, Other.")
+    keywords: List[str] = Field(default_factory=list, description="Specific keywords or phrases that trigger this warning.")
+    concept_description: str = Field(default="", description="Semantic concept or condition for the LLM to watch for.")
+    severity: str = Field(default="Warning", description="'Warning' or 'Flag'.")
+    enabled: bool = Field(default=True, description="Whether this warning rule is active.")
+
 
 class TargetPayBounds(BaseModel):
     posted_min: Optional[float] = None
@@ -239,6 +307,7 @@ class JobPosting(BaseModel):
     drive_jd_link: Optional[str] = None
     drive_screening_doc_link: Optional[str] = None
     screening_qa: List[ScreeningQA] = Field(default_factory=list)
+    telemetry_warnings: List[str] = Field(default_factory=list)
     row_index: Optional[int] = None
     tokens_used: int = 0
 
