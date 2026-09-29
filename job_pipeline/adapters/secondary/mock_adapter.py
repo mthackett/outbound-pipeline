@@ -37,7 +37,16 @@ class MockJobStorageAdapter(JobStoragePort):
         stage_history: Optional[List[Dict[str, str]]] = None,
         category: Optional[str] = None,
         applied_via: Optional[str] = None,
-        priority: Optional[str] = None
+        priority: Optional[str] = None,
+        employment_arrangement: Optional[str] = None,
+        worker_classification: Optional[str] = None,
+        pay_basis: Optional[str] = None,
+        contract_length_raw: Optional[str] = None,
+        contract_value_display: Optional[str] = None,
+        staffing_agency: Optional[str] = None,
+        client_company: Optional[str] = None,
+        extension_possible: Optional[bool] = None,
+        fte_conversion_possible: Optional[bool] = None
     ) -> bool:
         for item in self.saved_jobs:
             j = item["job"]
@@ -51,6 +60,24 @@ class MockJobStorageAdapter(JobStoragePort):
                     j.applied_via = applied_via
                 if priority is not None:
                     j.priority = priority
+                if employment_arrangement is not None:
+                    j.employment_arrangement = employment_arrangement
+                if worker_classification is not None:
+                    j.worker_classification = worker_classification
+                if pay_basis is not None:
+                    j.pay_basis = pay_basis
+                if contract_length_raw is not None:
+                    j.contract_length_raw = contract_length_raw
+                if contract_value_display is not None:
+                    j.contract_value_display = contract_value_display
+                if staffing_agency is not None:
+                    j.staffing_agency = staffing_agency
+                if client_company is not None:
+                    j.client_company = client_company
+                if extension_possible is not None:
+                    j.extension_possible = extension_possible
+                if fte_conversion_possible is not None:
+                    j.fte_conversion_possible = fte_conversion_possible
                 item["notes"] = notes
                 return True
         return True
@@ -69,6 +96,15 @@ class MockJobStorageAdapter(JobStoragePort):
                 "Category": j.category or "Target",
                 "Applied Via": j.applied_via or "LinkedIn",
                 "Priority": j.priority or "High",
+                "Employment Arrangement": j.employment_arrangement or "Employee",
+                "Worker Classification": j.worker_classification or "",
+                "Pay Basis": j.pay_basis or "Annual",
+                "Contract Duration": j.contract_length_raw or "",
+                "Contract Value": j.contract_value_display or (fe.pay_bounds.contract_value_display or ""),
+                "Staffing Agency": j.staffing_agency or "",
+                "Client Company": j.client_company or "",
+                "Extension Possible": "Yes" if j.extension_possible is True else ("No" if j.extension_possible is False else ""),
+                "FTE Conversion": "Yes" if j.fte_conversion_possible is True else ("No" if j.fte_conversion_possible is False else ""),
                 "Stage History": sh,
                 "stage_history": sh,
                 "Notes": item.get("notes", ""),

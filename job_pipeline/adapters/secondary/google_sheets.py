@@ -7,6 +7,10 @@ from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
+import socket
+# Set default socket timeout to prevent any indefinite hangs on dead connections
+socket.setdefaulttimeout(25)
+
 import gspread
 
 from job_pipeline.adapters.secondary.google_auth import get_google_credentials
@@ -43,6 +47,7 @@ class GoogleSheetsAdapter(JobStoragePort):
         self._cached_screening_qa = None
         self._screening_qa_cache_time = 0
         self._cache_ttl_seconds = 120
+        self._headers_cache = None
         self._init_connection()
 
     def _init_connection(self):
@@ -59,6 +64,7 @@ class GoogleSheetsAdapter(JobStoragePort):
 
         try:
             self._client = gspread.authorize(creds)
+            self._client.set_timeout(25)
             self._spreadsheet = self._client.open_by_key(self.spreadsheet_id)
             print(f"INFO: Google Sheets Adapter initialized successfully (Auth Type: {self.auth_type}).")
         except Exception as e:
@@ -111,12 +117,22 @@ class GoogleSheetsAdapter(JobStoragePort):
             required_cols = [
                 "Opportunity ID", "Tokens", "Fit Warning", "Selected Resume",
                 "Target Pay Range", "Drive Folder Link", "Screening Doc Link", "Screening QA Count",
-                "Stage History", "Category", "Applied Via", "Priority"
+                "Stage History", "Category", "Applied Via", "Priority",
+                "Employment Arrangement", "Worker Classification", "Pay Basis",
+                "Contract Duration", "Contract Value", "Staffing Agency",
+                "Client Company", "Extension Possible", "FTE Conversion"
             ]
-            for col in required_cols:
-                if col not in headers:
-                    ingest_ws.update_cell(1, len(headers) + 1, col)
-                    headers.append(col)
+            missing_cols = [col for col in required_cols if col not in headers]
+            if missing_cols:
+                needed_total = len(headers) + len(missing_cols)
+                if needed_total > ingest_ws.col_count:
+                    ingest_ws.add_cols(needed_total - ingest_ws.col_count + 5)
+                header_cells = [
+                    gspread.Cell(row=1, col=len(headers) + 1 + i, value=col_name)
+                    for i, col_name in enumerate(missing_cols)
+                ]
+                ingest_ws.update_cells(header_cells)
+                headers.extend(missing_cols)
 
             header_indices = {header: idx + 1 for idx, header in enumerate(headers)}
             records = ingest_ws.get_all_records()
@@ -161,6 +177,27 @@ class GoogleSheetsAdapter(JobStoragePort):
                 queue("Screening Doc Link", job.drive_screening_doc_link)
             if job.screening_qa:
                 queue("Screening QA Count", len(job.screening_qa))
+
+            # Contract & Arrangement attributes
+            if job.employment_arrangement:
+                queue("Employment Arrangement", job.employment_arrangement)
+            if job.worker_classification:
+                queue("Worker Classification", job.worker_classification)
+            if job.pay_basis:
+                queue("Pay Basis", job.pay_basis)
+            if job.contract_length_raw:
+                queue("Contract Duration", job.contract_length_raw)
+            c_val = job.contract_value_display or (fit_eval.pay_bounds.contract_value_display if fit_eval and fit_eval.pay_bounds else None)
+            if c_val:
+                queue("Contract Value", c_val)
+            if job.staffing_agency:
+                queue("Staffing Agency", job.staffing_agency)
+            if job.client_company:
+                queue("Client Company", job.client_company)
+            if job.extension_possible is not None:
+                queue("Extension Possible", "Yes" if job.extension_possible else "No")
+            if job.fte_conversion_possible is not None:
+                queue("FTE Conversion", "Yes" if job.fte_conversion_possible else "No")
 
             final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
             queue("Status", final_status)
@@ -308,65 +345,147 @@ class GoogleSheetsAdapter(JobStoragePort):
         stage_history: Optional[List[Dict[str, str]]] = None,
         category: Optional[str] = None,
         applied_via: Optional[str] = None,
-        priority: Optional[str] = None
+        priority: Optional[str] = None,
+        employment_arrangement: Optional[str] = None,
+        worker_classification: Optional[str] = None,
+        pay_basis: Optional[str] = None,
+        contract_length_raw: Optional[str] = None,
+        contract_value_display: Optional[str] = None,
+        staffing_agency: Optional[str] = None,
+        client_company: Optional[str] = None,
+        extension_possible: Optional[bool] = None,
+        fte_conversion_possible: Optional[bool] = None
     ) -> bool:
         if not self.is_connected:
             return False
         try:
             ingest_ws = self._spreadsheet.worksheet("Raw Ingestion")
-            records = ingest_ws.get_all_records()
-            headers = [h.strip() for h in ingest_ws.row_values(1)]
+            if not self._headers_cache:
+                self._headers_cache = [h.strip() for h in ingest_ws.row_values(1)]
+            headers = list(self._headers_cache)
 
-            # Ensure Stage History, Category, Applied Via, Priority columns exist in header
-            for col in ["Stage History", "Category", "Applied Via", "Priority"]:
-                if col not in headers:
-                    ingest_ws.update_cell(1, len(headers) + 1, col)
-                    headers.append(col)
+            # Ensure all needed columns exist in header
+            needed_cols = [
+                "Stage History", "Category", "Applied Via", "Priority",
+                "Employment Arrangement", "Worker Classification", "Pay Basis",
+                "Contract Duration", "Contract Value", "Staffing Agency",
+                "Client Company", "Extension Possible", "FTE Conversion"
+            ]
+            missing_cols = [col for col in needed_cols if col not in headers]
+            if missing_cols:
+                needed_total = len(headers) + len(missing_cols)
+                if needed_total > ingest_ws.col_count:
+                    ingest_ws.add_cols(needed_total - ingest_ws.col_count + 5)
+                header_cells = [
+                    gspread.Cell(row=1, col=len(headers) + 1 + i, value=col_name)
+                    for i, col_name in enumerate(missing_cols)
+                ]
+                ingest_ws.update_cells(header_cells)
+                headers.extend(missing_cols)
+                self._headers_cache = headers
 
+            opp_id_col = headers.index("Opportunity ID") + 1 if "Opportunity ID" in headers else 10
             status_col = headers.index("Status") + 1 if "Status" in headers else 7
             notes_col = headers.index("Notes") + 1 if "Notes" in headers else None
             stage_hist_col = headers.index("Stage History") + 1 if "Stage History" in headers else None
             cat_col = headers.index("Category") + 1 if "Category" in headers else None
             applied_via_col = headers.index("Applied Via") + 1 if "Applied Via" in headers else None
             priority_col = headers.index("Priority") + 1 if "Priority" in headers else None
+            arr_col = headers.index("Employment Arrangement") + 1 if "Employment Arrangement" in headers else None
+            wc_col = headers.index("Worker Classification") + 1 if "Worker Classification" in headers else None
+            pb_col = headers.index("Pay Basis") + 1 if "Pay Basis" in headers else None
+            cd_col = headers.index("Contract Duration") + 1 if "Contract Duration" in headers else None
+            cv_col = headers.index("Contract Value") + 1 if "Contract Value" in headers else None
+            sa_col = headers.index("Staffing Agency") + 1 if "Staffing Agency" in headers else None
+            cc_col = headers.index("Client Company") + 1 if "Client Company" in headers else None
+            ext_col = headers.index("Extension Possible") + 1 if "Extension Possible" in headers else None
+            fte_col = headers.index("FTE Conversion") + 1 if "FTE Conversion" in headers else None
 
-            for idx, rec in enumerate(records, start=2):
-                if str(rec.get("Opportunity ID", "")).strip() == opportunity_id:
-                    cell_updates = [gspread.Cell(row=idx, col=status_col, value=status)]
-                    if notes is not None and notes_col:
-                        cell_updates.append(gspread.Cell(row=idx, col=notes_col, value=notes))
-                    if stage_history is not None and stage_hist_col:
-                        cell_updates.append(gspread.Cell(row=idx, col=stage_hist_col, value=json.dumps(stage_history)))
-                    if category is not None and cat_col:
-                        cell_updates.append(gspread.Cell(row=idx, col=cat_col, value=category))
-                    if applied_via is not None and applied_via_col:
-                        cell_updates.append(gspread.Cell(row=idx, col=applied_via_col, value=applied_via))
-                    if priority is not None and priority_col:
-                        cell_updates.append(gspread.Cell(row=idx, col=priority_col, value=priority))
-                    ingest_ws.update_cells(cell_updates)
-                    if self._cached_opportunities is not None:
-                        for item in self._cached_opportunities:
-                            if str(item.get("Opportunity ID", "")).strip() == opportunity_id:
-                                item["Status"] = status
-                                if notes is not None:
-                                    item["Notes"] = notes
-                                if stage_history is not None:
-                                    item["Stage History"] = stage_history
-                                    item["stage_history"] = stage_history
-                                if category is not None:
-                                    item["Category"] = category
-                                if applied_via is not None:
-                                    item["Applied Via"] = applied_via
-                                    item["applied_via"] = applied_via
-                                if priority is not None:
-                                    item["Priority"] = priority
-                                    item["priority"] = priority
-                                break
-                        self._opportunities_cache_time = time.time()
-                    return True
+            # Fast row lookup by Opportunity ID column values instead of downloading entire sheet
+            id_column_values = ingest_ws.col_values(opp_id_col)
+            target_row = None
+            for r_idx, val in enumerate(id_column_values[1:], start=2):
+                if str(val).strip() == opportunity_id:
+                    target_row = r_idx
+                    break
+
+            if target_row:
+                idx = target_row
+                print(f"INFO: Updating opportunity '{opportunity_id}' in Google Sheets (Row {idx})...", flush=True)
+                cell_updates = [gspread.Cell(row=idx, col=status_col, value=status)]
+                if notes is not None and notes_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=notes_col, value=notes))
+                if stage_history is not None and stage_hist_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=stage_hist_col, value=json.dumps(stage_history)))
+                if category is not None and cat_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=cat_col, value=category))
+                if applied_via is not None and applied_via_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=applied_via_col, value=applied_via))
+                if priority is not None and priority_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=priority_col, value=priority))
+                if employment_arrangement is not None and arr_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=arr_col, value=employment_arrangement))
+                if worker_classification is not None and wc_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=wc_col, value=worker_classification))
+                if pay_basis is not None and pb_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=pb_col, value=pay_basis))
+                if contract_length_raw is not None and cd_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=cd_col, value=contract_length_raw))
+                if contract_value_display is not None and cv_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=cv_col, value=contract_value_display))
+                if staffing_agency is not None and sa_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=sa_col, value=staffing_agency))
+                if client_company is not None and cc_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=cc_col, value=client_company))
+                if extension_possible is not None and ext_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=ext_col, value="Yes" if extension_possible else "No"))
+                if fte_conversion_possible is not None and fte_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=fte_col, value="Yes" if fte_conversion_possible else "No"))
+
+                ingest_ws.update_cells(cell_updates)
+                if self._cached_opportunities is not None:
+                    for item in self._cached_opportunities:
+                        if str(item.get("Opportunity ID", "")).strip() == opportunity_id:
+                            item["Status"] = status
+                            if notes is not None:
+                                item["Notes"] = notes
+                            if stage_history is not None:
+                                item["Stage History"] = stage_history
+                                item["stage_history"] = stage_history
+                            if category is not None:
+                                item["Category"] = category
+                            if applied_via is not None:
+                                item["Applied Via"] = applied_via
+                                item["applied_via"] = applied_via
+                            if priority is not None:
+                                item["Priority"] = priority
+                                item["priority"] = priority
+                            if employment_arrangement is not None:
+                                item["Employment Arrangement"] = employment_arrangement
+                            if worker_classification is not None:
+                                item["Worker Classification"] = worker_classification
+                            if pay_basis is not None:
+                                item["Pay Basis"] = pay_basis
+                            if contract_length_raw is not None:
+                                item["Contract Duration"] = contract_length_raw
+                            if contract_value_display is not None:
+                                item["Contract Value"] = contract_value_display
+                            if staffing_agency is not None:
+                                item["Staffing Agency"] = staffing_agency
+                            if client_company is not None:
+                                item["Client Company"] = client_company
+                            if extension_possible is not None:
+                                item["Extension Possible"] = "Yes" if extension_possible else "No"
+                            if fte_conversion_possible is not None:
+                                item["FTE Conversion"] = "Yes" if fte_conversion_possible else "No"
+                            break
+                    self._opportunities_cache_time = time.time()
+                print(f"INFO: Successfully updated opportunity '{opportunity_id}' in Google Sheets.", flush=True)
+                return True
+            print(f"WARNING: Opportunity ID '{opportunity_id}' not found in Google Sheets rows.", flush=True)
             return False
         except Exception as e:
-            print(f"ERROR: Failed to update status in Google Sheets: {e}")
+            print(f"ERROR: Failed to update status in Google Sheets: {e}", flush=True)
             return False
 
     def append_call_note(self, opportunity_id: str, note_text: str, call_type: str = "Call", interviewer: str = "") -> bool:

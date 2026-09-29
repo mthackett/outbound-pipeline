@@ -23,7 +23,16 @@ class JobStoragePort(ABC):
         stage_history: Optional[List[Dict[str, str]]] = None,
         category: Optional[str] = None,
         applied_via: Optional[str] = None,
-        priority: Optional[str] = None
+        priority: Optional[str] = None,
+        employment_arrangement: Optional[str] = None,
+        worker_classification: Optional[str] = None,
+        pay_basis: Optional[str] = None,
+        contract_length_raw: Optional[str] = None,
+        contract_value_display: Optional[str] = None,
+        staffing_agency: Optional[str] = None,
+        client_company: Optional[str] = None,
+        extension_possible: Optional[bool] = None,
+        fte_conversion_possible: Optional[bool] = None
     ) -> bool:
         pass
 

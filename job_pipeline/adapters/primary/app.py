@@ -28,8 +28,10 @@ from job_pipeline.domain.models import (
     CandidateProfile, JobPosting, FitEvaluation, StakeholderContact, Touchpoint, ScreeningQA, QuickLink,
     SCREENING_CATEGORIES, SCREENING_ARCHETYPES, StoryBreadcrumb, CanonicalStory, StoryCueCard, ScreeningMatchResult,
     APPLICATION_CATEGORIES, CATEGORY_ICONS, APPLICATION_STAGES,
-    DEFAULT_APPLICATION_SOURCES, DEFAULT_PRIORITIES, PRIORITY_ICONS, SOURCE_ICONS
+    DEFAULT_APPLICATION_SOURCES, DEFAULT_PRIORITIES, PRIORITY_ICONS, SOURCE_ICONS,
+    EMPLOYMENT_ARRANGEMENTS, PAY_BASES, WORKER_CLASSIFICATIONS
 )
+
 from job_pipeline.domain.services import (
     JobQualificationService, ApplicationGuardrailService, ScreeningQAService, QuickLinksService,
     ScreeningIntelligenceService, StoryBankService, PipelineConfigService
@@ -209,11 +211,11 @@ def render_quicklinks_manager(context_key: str = "sb"):
     for idx, link in enumerate(current_links):
         with st.expander(f"{link.icon} {link.title}", expanded=False):
             with st.form(key=f"{context_key}_edit_form_{link.id}_{idx}"):
-                ed_title = st.text_input("Title / Label", value=link.title, key=f"{context_key}_t_{link.id}_{idx}")
-                ed_url = st.text_input("URL", value=link.url, key=f"{context_key}_u_{link.id}_{idx}")
+                ed_title = st.text_input("Title / Label", value=link.title, key=f"{context_key}_t_{link.id}_{idx}", autocomplete="off")
+                ed_url = st.text_input("URL", value=link.url, key=f"{context_key}_u_{link.id}_{idx}", autocomplete="off")
                 c_icon, c_cat = st.columns([1, 2])
                 with c_icon:
-                    ed_icon = st.text_input("Icon", value=link.icon, max_chars=4, key=f"{context_key}_i_{link.id}_{idx}")
+                    ed_icon = st.text_input("Icon", value=link.icon, max_chars=4, key=f"{context_key}_i_{link.id}_{idx}", autocomplete="off")
                 with c_cat:
                     cat_options = ["Profile", "Portfolio", "Calendar", "Other"]
                     c_idx = cat_options.index(link.category) if link.category in cat_options else 0
@@ -246,11 +248,11 @@ def render_quicklinks_manager(context_key: str = "sb"):
     st.markdown("---")
     st.markdown("##### ➕ Add New Quicklink:")
     with st.form(key=f"{context_key}_add_form", clear_on_submit=True):
-        new_title = st.text_input("Title / Label", placeholder="e.g. Substack or Personal Blog")
-        new_url = st.text_input("URL", placeholder="https://...")
+        new_title = st.text_input("Title / Label", placeholder="e.g. Substack or Personal Blog", autocomplete="off")
+        new_url = st.text_input("URL", placeholder="https://...", autocomplete="off")
         c_n_icon, c_n_cat = st.columns([1, 2])
         with c_n_icon:
-            new_icon = st.text_input("Icon Emoji", value="🔗", max_chars=4)
+            new_icon = st.text_input("Icon Emoji", value="🔗", max_chars=4, autocomplete="off")
         with c_n_cat:
             new_cat = st.selectbox("Category", ["Profile", "Portfolio", "Calendar", "Other"], key=f"{context_key}_new_cat")
 
@@ -428,8 +430,8 @@ with tab1:
             )
             manual_url = st.text_input("Job Source URL", placeholder="https://linkedin.com/jobs/...")
         with col_ov3:
-            manual_min_pay = st.number_input("Override Min Salary ($)", value=0, step=5000)
-            manual_max_pay = st.number_input("Override Max Salary ($)", value=0, step=5000)
+            manual_min_pay = st.number_input("Override Min Pay ($ / hr or yr)", value=0, step=5, help="Enter hourly rate (e.g. 65) or annual salary (e.g. 120000)")
+            manual_max_pay = st.number_input("Override Max Pay ($ / hr or yr)", value=0, step=5, help="Enter hourly rate (e.g. 75) or annual salary (e.g. 140000)")
 
         st.markdown("---")
         pipeline_cfg = PipelineConfigService.load_config()
@@ -459,6 +461,44 @@ with tab1:
                 priorities_list,
                 index=0,
                 help="Priority level for this application."
+            )
+
+        st.markdown("---")
+        st.markdown("###### 💼 Contract & Employment Arrangement Overrides (Optional)")
+        col_arr1, col_arr2, col_arr3 = st.columns(3)
+        with col_arr1:
+            manual_arrangement = st.selectbox(
+                "Employment Arrangement",
+                ["Auto-Detect", "Employee", "Contract"],
+                help="Specify whether this role is a direct Employee or Contract arrangement."
+            )
+        with col_arr2:
+            manual_pay_basis = st.selectbox(
+                "Pay Basis",
+                ["Auto-Detect", "Annual", "Hourly"],
+                help="Specify Annual salary or Hourly rate."
+            )
+        with col_arr3:
+            manual_worker_class = st.selectbox(
+                "Worker Classification",
+                ["Auto-Detect", "Not Specified", "W2", "1099", "C2C"],
+                help="W2, 1099, or C2C classification (only if explicitly known)."
+            )
+
+        col_dur1, col_dur2 = st.columns(2)
+        with col_dur1:
+            manual_duration = st.text_input(
+                "Contract Duration",
+                placeholder="e.g. 6 months, 12-month contract-to-hire",
+                help="Specified contract length or duration.",
+                autocomplete="off"
+            )
+        with col_dur2:
+            manual_agency_client = st.text_input(
+                "Staffing Agency / Client Company",
+                placeholder="e.g. Acme Staffing supporting Contoso",
+                help="Staffing agency and/or client company if role is through an agency.",
+                autocomplete="off"
             )
 
     # 2. Optional Application Screening Questions & Answers
@@ -589,6 +629,19 @@ with tab1:
             jd_text = job_payload["jd_text"]
             all_opps = job_payload["all_opps"]
 
+            # Contract & Arrangement attributes
+            final_arrangement = job_payload.get("employment_arrangement", "Employee")
+            final_worker_class = job_payload.get("worker_classification")
+            final_pay_basis = job_payload.get("pay_basis", "Annual")
+            final_duration = job_payload.get("contract_length_raw")
+            final_months = job_payload.get("contract_length_months")
+            final_weeks = job_payload.get("contract_length_weeks")
+            final_hours = job_payload.get("expected_hours_per_week")
+            final_ext = job_payload.get("extension_possible")
+            final_fte = job_payload.get("fte_conversion_possible")
+            final_agency = job_payload.get("staffing_agency")
+            final_client = job_payload.get("client_company")
+
             # 1. Fit Qualification & Target Pay Calculator (60%-80%)
             fit_eval = JobQualificationService.evaluate(
                 company_name=final_company,
@@ -599,7 +652,12 @@ with tab1:
                 salary_min=final_min_pay,
                 salary_max=final_max_pay,
                 profile=st.session_state.profile,
-                existing_company_titles=all_opps
+                existing_company_titles=all_opps,
+                pay_basis=final_pay_basis,
+                expected_hours_per_week=final_hours,
+                expected_hours_per_week_is_assumed=(final_hours is None),
+                contract_length_months=final_months,
+                contract_length_weeks=final_weeks
             )
 
             # 2. Select Best Fit Resume
@@ -675,6 +733,21 @@ with tab1:
                 category=manual_category,
                 applied_via=manual_applied_via,
                 priority=manual_priority,
+                employment_arrangement=final_arrangement,
+                worker_classification=final_worker_class,
+                pay_basis=final_pay_basis,
+                expected_hours_per_week=fit_eval.pay_bounds.expected_hours_per_week,
+                expected_hours_per_week_is_assumed=fit_eval.pay_bounds.expected_hours_per_week_is_assumed,
+                contract_length_months=final_months,
+                contract_length_weeks=final_weeks,
+                contract_length_raw=final_duration,
+                contract_value_min=fit_eval.pay_bounds.contract_value_min,
+                contract_value_max=fit_eval.pay_bounds.contract_value_max,
+                contract_value_display=fit_eval.pay_bounds.contract_value_display,
+                extension_possible=final_ext,
+                fte_conversion_possible=final_fte,
+                staffing_agency=final_agency,
+                client_company=final_client,
                 stage_history=[{"stage": final_status, "entered_at": now_iso}],
                 required_skills=req_skills,
                 preferred_skills=pref_skills,
@@ -699,6 +772,17 @@ with tab1:
                 "category": manual_category,
                 "applied_via": manual_applied_via,
                 "priority": manual_priority,
+                "employment_arrangement": final_arrangement,
+                "worker_classification": final_worker_class,
+                "pay_basis": final_pay_basis,
+                "contract_length_raw": final_duration,
+                "contract_length_months": final_months,
+                "contract_length_weeks": final_weeks,
+                "contract_value_display": fit_eval.pay_bounds.contract_value_display,
+                "extension_possible": final_ext,
+                "fte_conversion_possible": final_fte,
+                "staffing_agency": final_agency,
+                "client_company": final_client,
                 "stage_history": job_posting.stage_history,
                 "selected_resume": selected_resume,
                 "resume_name": resume_name,
@@ -775,6 +859,18 @@ with tab1:
                 pain_points = ""
                 is_remote = False
 
+                extracted_arrangement = None
+                extracted_worker_class = None
+                extracted_pay_basis = None
+                extracted_duration_raw = None
+                extracted_months = None
+                extracted_weeks = None
+                extracted_hours = None
+                extracted_ext = None
+                extracted_fte = None
+                extracted_agency = None
+                extracted_client = None
+
                 if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
                     try:
                         telemetry = llm_adapter.extract_job_telemetry(jd_text_input)
@@ -787,6 +883,17 @@ with tab1:
                         pref_skills = telemetry.requirements.preferred_tech_stack
                         pain_points = telemetry.requirements.core_pain_points or ""
                         is_remote = telemetry.requirements.is_remote
+                        extracted_arrangement = telemetry.requirements.employment_arrangement
+                        extracted_worker_class = telemetry.requirements.worker_classification
+                        extracted_pay_basis = telemetry.requirements.pay_basis
+                        extracted_duration_raw = telemetry.requirements.contract_length_raw
+                        extracted_months = telemetry.requirements.contract_length_months
+                        extracted_weeks = telemetry.requirements.contract_length_weeks
+                        extracted_hours = telemetry.requirements.expected_hours_per_week
+                        extracted_ext = telemetry.requirements.extension_possible
+                        extracted_fte = telemetry.requirements.fte_conversion_possible
+                        extracted_agency = telemetry.requirements.staffing_agency
+                        extracted_client = telemetry.requirements.client_company
                     except Exception as e:
                         st.warning(f"Telemetry auto-extraction notice: {e}")
                         req_skills, pref_skills = ["Salesforce", "SQL", "Tableau", "Clari"], ["dbt"]
@@ -807,6 +914,16 @@ with tab1:
                 final_min_pay = manual_min_pay if manual_min_pay > 0 else extracted_min
                 final_max_pay = manual_max_pay if manual_max_pay > 0 else extracted_max
                 final_url = manual_url.strip() if manual_url and manual_url.strip() else (telemetry.source_url if telemetry else None)
+
+                # Resolve Contract & Arrangement Overrides
+                final_arrangement = manual_arrangement if manual_arrangement != "Auto-Detect" else (extracted_arrangement or "Employee")
+                final_pay_basis = manual_pay_basis if manual_pay_basis != "Auto-Detect" else (
+                    extracted_pay_basis or ("Hourly" if (final_min_pay and final_min_pay < 500) else "Annual")
+                )
+                final_worker_class = (None if manual_worker_class in ["Auto-Detect", "Not Specified"] else manual_worker_class) if manual_worker_class != "Auto-Detect" else extracted_worker_class
+                final_duration = manual_duration.strip() if manual_duration and manual_duration.strip() else extracted_duration_raw
+                final_agency = manual_agency_client.strip() if manual_agency_client and manual_agency_client.strip() else extracted_agency
+                final_client = extracted_client
 
                 # Fetch all existing opportunities for guardrail checking
                 all_opps = storage_adapter.fetch_all_opportunities()
@@ -836,6 +953,17 @@ with tab1:
                     "pref_skills": pref_skills,
                     "pain_points": pain_points,
                     "is_remote": is_remote,
+                    "employment_arrangement": final_arrangement,
+                    "worker_classification": final_worker_class,
+                    "pay_basis": final_pay_basis,
+                    "contract_length_raw": final_duration,
+                    "contract_length_months": extracted_months,
+                    "contract_length_weeks": extracted_weeks,
+                    "expected_hours_per_week": extracted_hours,
+                    "extension_possible": extracted_ext,
+                    "fte_conversion_possible": extracted_fte,
+                    "staffing_agency": final_agency,
+                    "client_company": final_client,
                     "screening_qa": screening_inputs,
                     "jd_text": jd_text_input,
                     "all_opps": all_opps,
@@ -930,33 +1058,85 @@ with tab1:
                         use_container_width=True
                     )
 
-        # Target Salary Negotiation Box
+        # Target Compensation Negotiation Box
         pb = ev["fit_eval"].pay_bounds
-        if pb.target_min is not None and pb.target_max is not None:
-            form_advice = f"Anchor at <b>${pb.target_min:,.0f}</b> or enter range <b>${pb.target_min:,.0f} – ${pb.target_max:,.0f}</b>."
-            if pb.posted_min is not None and pb.posted_max is not None:
-                form_advice += f" (Calculated from posted base spread: ${pb.posted_min:,.0f} – ${pb.posted_max:,.0f})"
-            comp_strategy = f"Anchor base at <b>${pb.target_min:,.0f} – ${pb.target_max:,.0f}</b>."
-        elif pb.target_min is not None:
-            form_advice = f"Anchor at <b>${pb.target_min:,.0f}+</b>."
-            comp_strategy = f"Anchor base at <b>${pb.target_min:,.0f}+</b>."
-        elif pb.target_max is not None:
-            form_advice = f"Anchor up to <b>${pb.target_max:,.0f}</b>."
-            comp_strategy = f"Anchor base up to <b>${pb.target_max:,.0f}</b>."
-        else:
-            floor_val = st.session_state.profile.minimum_compensation_floor
-            form_advice = f"Base compensation undisclosed in job posting. Propose candidate floor <b>${floor_val:,.0f}+</b> or enter <i>'Competitive / Negotiable'</i>."
-            comp_strategy = f"Undisclosed (Target floor: <b>${floor_val:,.0f}+</b> or align with recruiter on screen)."
+        is_hourly = (pb.pay_basis == "Hourly")
+        if is_hourly:
+            if pb.hourly_min is not None and pb.hourly_max is not None:
+                form_advice = f"Propose hourly rate <b>${pb.hourly_min:,.0f} – ${pb.hourly_max:,.0f}/hr</b> (~${pb.annualized_min:,.0f} – ${pb.annualized_max:,.0f} annualized)."
+                comp_strategy = f"Target hourly rate: <b>${pb.hourly_min:,.0f} – ${pb.hourly_max:,.0f}/hr</b>."
+            elif pb.hourly_min is not None:
+                form_advice = f"Propose hourly rate <b>${pb.hourly_min:,.0f}+/hr</b> (~${pb.annualized_min:,.0f}+ annualized)."
+                comp_strategy = f"Target hourly rate: <b>${pb.hourly_min:,.0f}+/hr</b>."
+            else:
+                form_advice = "Hourly compensation undisclosed. Align with recruiter on screen."
+                comp_strategy = "Hourly rate undisclosed."
 
-        st.markdown(f"""
-        <div class="target-pay-box">
-            <h4 style="margin:0; color:#C7D2FE;">💰 Desired Salary Answer (60% – 80% Target Anchor)</h4>
-            <h2 style="margin:6px 0; color:#FFFFFF; font-weight:800;">{pb.display_range}</h2>
-            <p style="margin:0; font-size:0.92rem; color:#A5B4FC;">
-                <b>For application form:</b> {form_advice}
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+            hours_label = f"{pb.expected_hours_per_week:.0f} hrs/week assumed" if pb.expected_hours_per_week_is_assumed else f"{pb.expected_hours_per_week:.0f} hrs/week stated"
+            contract_val_line = f"<p style='margin:4px 0 0 0; color:#FCD34D; font-size:1.05rem; font-weight:700;'>💰 {pb.contract_value_display}</p>" if pb.contract_value_display else ""
+
+            # Contract metadata summary pills
+            c_meta_pills = []
+            dur_val = ev.get("contract_length_raw")
+            if dur_val:
+                c_meta_pills.append(f"⏱️ {dur_val}")
+            wc_val = ev.get("worker_classification")
+            c_meta_pills.append(f"🏷️ Classification: {wc_val if wc_val else 'Not specified'}")
+            ext_val = ev.get("extension_possible")
+            ext_str = "Possible" if ext_val is True else ("No" if ext_val is False else "Not specified")
+            c_meta_pills.append(f"🔄 Extension: {ext_str}")
+            fte_val = ev.get("fte_conversion_possible")
+            fte_str = "Possible" if fte_val is True else ("No" if fte_val is False else "Not specified")
+            c_meta_pills.append(f"🚀 FTE Conversion: {fte_str}")
+            sa_val = ev.get("staffing_agency")
+            cc_val = ev.get("client_company")
+            if sa_val or cc_val:
+                c_meta_pills.append(f"🏢 Agency: {sa_val or 'Direct'} ➔ Client: {cc_val or 'Direct'}")
+
+            meta_html = " &nbsp;|&nbsp; ".join(f"<span style='color:#E2E8F0; font-size:0.84rem;'>{p}</span>" for p in c_meta_pills)
+
+            st.markdown(f"""
+            <div class="target-pay-box">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h4 style="margin:0; color:#C7D2FE;">💼 Hourly Compensation & Contract Terms</h4>
+                    <span style="background:#4338CA; color:#E0E7FF; padding:2px 8px; border-radius:4px; font-size:0.8rem; font-weight:600;">{hours_label}</span>
+                </div>
+                <h2 style="margin:8px 0 4px 0; color:#FFFFFF; font-weight:800;">{pb.display_range}</h2>
+                {contract_val_line}
+                <div style="margin:8px 0; padding:6px 10px; background:#1E1B4B88; border-radius:6px; border:1px solid #4F46E544;">
+                    {meta_html}
+                </div>
+                <p style="margin:6px 0 0 0; font-size:0.92rem; color:#A5B4FC;">
+                    <b>For application form:</b> {form_advice}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            if pb.target_min is not None and pb.target_max is not None:
+                form_advice = f"Anchor at <b>${pb.target_min:,.0f}</b> or enter range <b>${pb.target_min:,.0f} – ${pb.target_max:,.0f}</b>."
+                if pb.posted_min is not None and pb.posted_max is not None:
+                    form_advice += f" (Calculated from posted base spread: ${pb.posted_min:,.0f} – ${pb.posted_max:,.0f})"
+                comp_strategy = f"Anchor base at <b>${pb.target_min:,.0f} – ${pb.target_max:,.0f}</b>."
+            elif pb.target_min is not None:
+                form_advice = f"Anchor at <b>${pb.target_min:,.0f}+</b>."
+                comp_strategy = f"Anchor base at <b>${pb.target_min:,.0f}+</b>."
+            elif pb.target_max is not None:
+                form_advice = f"Anchor up to <b>${pb.target_max:,.0f}</b>."
+                comp_strategy = f"Anchor base up to <b>${pb.target_max:,.0f}</b>."
+            else:
+                floor_val = st.session_state.profile.minimum_compensation_floor
+                form_advice = f"Base compensation undisclosed in job posting. Propose candidate floor <b>${floor_val:,.0f}+</b> or enter <i>'Competitive / Negotiable'</i>."
+                comp_strategy = f"Undisclosed (Target floor: <b>${floor_val:,.0f}+</b> or align with recruiter on screen)."
+
+            st.markdown(f"""
+            <div class="target-pay-box">
+                <h4 style="margin:0; color:#C7D2FE;">💰 Desired Salary Answer (60% – 80% Target Anchor)</h4>
+                <h2 style="margin:6px 0; color:#FFFFFF; font-weight:800;">{pb.display_range}</h2>
+                <p style="margin:0; font-size:0.92rem; color:#A5B4FC;">
+                    <b>For application form:</b> {form_advice}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
 
         # Quick Candidate Profile Links for Application Form
         with st.expander("⚡ Candidate Profile Quicklinks (1-Click Copy for ATS)", expanded=False):
@@ -1039,6 +1219,10 @@ with tab2:
     st.subheader("📊 Live Application Pipeline & CRM")
     st.caption("Active applications synced in real-time from your Google Sheet (`Raw Ingestion`). Update stages, add recruiter contact info, and track interview progress.")
 
+    # Flash notification for saved updates
+    if "crm_flash_message" in st.session_state and st.session_state["crm_flash_message"]:
+        st.success(st.session_state.pop("crm_flash_message"), icon="✅")
+
     col_btn_refresh, col_sheet_link = st.columns([1, 2])
     with col_btn_refresh:
         refresh_clicked = st.button("🔄 Refresh Pipeline from Google Sheets")
@@ -1075,6 +1259,15 @@ with tab2:
                 ],
                 "Target Pay Range": "$125,000 - $130,000",
                 "Date Created": "2026-09-22",
+                "Employment Arrangement": "Employee",
+                "Worker Classification": "",
+                "Pay Basis": "Annual",
+                "Contract Duration": "",
+                "Contract Value": "",
+                "Staffing Agency": "",
+                "Client Company": "",
+                "Extension Possible": "",
+                "FTE Conversion": "",
                 "Selected Resume": "Matthew Hackett Revenue Operations Analyst Resume",
                 "Drive Folder Link": "https://drive.google.com",
                 "Notes": "Sarah Jenkins (Recruiter) - Position closed internally; stay in touch for Q4 headcount."
@@ -1087,6 +1280,15 @@ with tab2:
                 "Category": "Stretch",
                 "Applied Via": "Company Website",
                 "Priority": "Medium",
+                "Employment Arrangement": "Contract",
+                "Worker Classification": "W2",
+                "Pay Basis": "Hourly",
+                "Contract Duration": "6-month contract",
+                "Contract Value": "$78,000 - $83,200",
+                "Staffing Agency": "Apex Systems",
+                "Client Company": "Braze",
+                "Extension Possible": "Yes",
+                "FTE Conversion": "Yes",
                 "Stage History": [
                     {"stage": "Processed", "entered_at": "2026-09-23T10:00:00"},
                     {"stage": "Applied", "entered_at": "2026-09-23T11:15:00"},
@@ -1097,7 +1299,7 @@ with tab2:
                     {"stage": "Applied", "entered_at": "2026-09-23T11:15:00"},
                     {"stage": "Recruiter Screen", "entered_at": "2026-09-26T09:30:00"}
                 ],
-                "Target Pay Range": "$145,000 - $160,000",
+                "Target Pay Range": "$75.00 – $80.00 / hr ($156,000 – $166,400/yr)",
                 "Date Created": "2026-09-23",
                 "Selected Resume": "Matthew Hackett GTM Engineer Resume",
                 "Drive Folder Link": "https://drive.google.com",
@@ -1119,7 +1321,7 @@ with tab2:
             st.markdown("###### 🌐 Application Sources / Platforms")
             st.caption(f"Current: {', '.join(available_sources)}")
             with st.form("cfg_add_source_form", clear_on_submit=True):
-                new_src_name = st.text_input("Add Source", placeholder="e.g. Wellfound, Otta, Referral...")
+                new_src_name = st.text_input("Add Source", placeholder="e.g. Wellfound, Otta, Referral...", autocomplete="off")
                 if st.form_submit_button("➕ Save New Source"):
                     if new_src_name.strip():
                         PipelineConfigService.add_source(new_src_name.strip())
@@ -1130,7 +1332,7 @@ with tab2:
             st.markdown("###### 🎯 Priority Tiers")
             st.caption(f"Current: {', '.join(available_priorities)}")
             with st.form("cfg_add_priority_form", clear_on_submit=True):
-                new_pri_name = st.text_input("Add Priority Level", placeholder="e.g. Critical, Dream, Tier 1...")
+                new_pri_name = st.text_input("Add Priority Level", placeholder="e.g. Critical, Dream, Tier 1...", autocomplete="off")
                 if st.form_submit_button("➕ Save New Priority"):
                     if new_pri_name.strip():
                         PipelineConfigService.add_priority(new_pri_name.strip())
@@ -1180,9 +1382,14 @@ with tab2:
         )
 
         # Multi-attribute Search & Filter Bar
-        col_search, col_cat_filt, col_pri_filt, col_src_filt = st.columns([2, 1, 1, 1])
+        col_search, col_arr_filt, col_cat_filt, col_pri_filt, col_src_filt = st.columns([2, 1, 1, 1, 1])
         with col_search:
-            search_query = st.text_input("🔍 Search Applications", placeholder="e.g. Planful, Analyst, Recruiter Screen...")
+            search_query = st.text_input("🔍 Search Applications", placeholder="e.g. Planful, Analyst, Recruiter Screen...", autocomplete="off")
+        with col_arr_filt:
+            arr_filter = st.selectbox(
+                "Filter Type",
+                ["All Types", "Employee", "Contract"]
+            )
         with col_cat_filt:
             cat_filter = st.selectbox(
                 "Filter Category",
@@ -1200,6 +1407,9 @@ with tab2:
             )
 
         filtered_opps = opportunities
+        if arr_filter != "All Types":
+            filtered_opps = [o for o in filtered_opps if str(o.get("Employment Arrangement") or o.get("employment_arrangement") or "").strip() == arr_filter]
+
         if cat_filter != "All Categories":
             if cat_filter == "Unassigned":
                 filtered_opps = [o for o in filtered_opps if str(o.get("Category", "")).strip() not in APPLICATION_CATEGORIES]
@@ -1229,6 +1439,10 @@ with tab2:
                 or sq in str(o.get("Category", "")).lower()
                 or sq in str(o.get("Priority", "")).lower()
                 or sq in str(o.get("Applied Via", "")).lower()
+                or sq in str(o.get("Employment Arrangement", "")).lower()
+                or sq in str(o.get("Worker Classification", "")).lower()
+                or sq in str(o.get("Staffing Agency", "")).lower()
+                or sq in str(o.get("Client Company", "")).lower()
             ]
 
         st.markdown(f"Showing **{len(filtered_opps)}** opportunities (newest first):")
@@ -1251,6 +1465,27 @@ with tab2:
             curr_src = str(opp.get("Applied Via") or opp.get("applied_via") or "").strip()
             src_ico = SOURCE_ICONS.get(curr_src, "🌐")
             src_badge = f"  |  *Via:* `{src_ico} {curr_src}`" if curr_src and curr_src != "Not Specified" else ""
+
+            # Contract & Arrangement attributes
+            curr_arr = str(opp.get("Employment Arrangement") or opp.get("employment_arrangement") or "").strip()
+            curr_wc = str(opp.get("Worker Classification") or opp.get("worker_classification") or "").strip()
+            curr_pb = str(opp.get("Pay Basis") or opp.get("pay_basis") or "").strip()
+            curr_cd = str(opp.get("Contract Duration") or opp.get("contract_duration") or opp.get("contract_length_raw") or "").strip()
+            curr_cv = str(opp.get("Contract Value") or opp.get("contract_value") or opp.get("contract_value_display") or "").strip()
+            curr_sa = str(opp.get("Staffing Agency") or opp.get("staffing_agency") or "").strip()
+            curr_cc = str(opp.get("Client Company") or opp.get("client_company") or "").strip()
+            curr_ext = opp.get("Extension Possible") if opp.get("Extension Possible") is not None else opp.get("extension_possible")
+            curr_fte = opp.get("FTE Conversion") if opp.get("FTE Conversion") is not None else opp.get("fte_conversion_possible")
+
+            if curr_arr == "Contract":
+                c_parts = ["💼 Contract"]
+                if curr_wc:
+                    c_parts.append(curr_wc)
+                if curr_cd:
+                    c_parts.append(curr_cd)
+                arr_badge = f"  |  *Type:* `{' · '.join(c_parts)}`"
+            else:
+                arr_badge = ""
 
             target_pay = opp.get("Target Pay Range", "N/A")
             opp_id = opp.get("Opportunity ID", f"row-{idx}")
@@ -1287,7 +1522,7 @@ with tab2:
                 s_icon = "📋"
 
             is_card_open = (st.session_state.get("active_opp_card") == opp_id)
-            with st.expander(f"{s_icon} **{comp}** — {title}  |  *Status:* `{curr_status}`{cat_badge}{pri_badge}{src_badge}  |  *Pay:* `{target_pay}`", expanded=is_card_open):
+            with st.expander(f"{s_icon} **{comp}** — {title}  |  *Status:* `{curr_status}`{cat_badge}{pri_badge}{src_badge}{arr_badge}  |  *Pay:* `{target_pay}`", expanded=is_card_open):
                 c_card1, c_card2 = st.columns([1, 1])
 
                 with c_card1:
@@ -1308,6 +1543,29 @@ with tab2:
                         st.markdown(f"**Applied Via**: {src_ico} `{curr_src}`")
                     else:
                         st.markdown("**Applied Via**: *⚪ Not Specified*")
+
+                    if curr_arr == "Contract":
+                        st.markdown("###### 💼 Contract & Engagement Details")
+                        contract_pills = []
+                        contract_pills.append("**Type:** Contract")
+                        if curr_wc:
+                            contract_pills.append(f"**Classification:** `{curr_wc}`")
+                        if curr_pb:
+                            contract_pills.append(f"**Basis:** `{curr_pb}`")
+                        if curr_cd:
+                            contract_pills.append(f"**Duration:** `{curr_cd}`")
+                        if curr_cv:
+                            contract_pills.append(f"**Est. Value:** `{curr_cv}`")
+                        if curr_sa or curr_cc:
+                            contract_pills.append(f"**Agency ➔ Client:** {curr_sa or 'Direct'} ➔ {curr_cc or 'Direct'}")
+
+                        ext_str = "Yes" if (curr_ext is True or str(curr_ext).lower() in ["yes", "true"]) else ("No" if (curr_ext is False or str(curr_ext).lower() in ["no", "false"]) else "Not specified")
+                        fte_str = "Yes" if (curr_fte is True or str(curr_fte).lower() in ["yes", "true"]) else ("No" if (curr_fte is False or str(curr_fte).lower() in ["no", "false"]) else "Not specified")
+                        contract_pills.append(f"**Extension:** {ext_str}")
+                        contract_pills.append(f"**FTE Conversion:** {fte_str}")
+
+                        c_pills_html = " &nbsp;|&nbsp; ".join(f"<span style='color:#E2E8F0; font-size:0.83rem;'>{p}</span>" for p in contract_pills)
+                        st.markdown(f"<div style='margin-bottom:8px; padding:6px 10px; background:#1E1B4B55; border-radius:6px; border:1px solid #4F46E544;'>{c_pills_html}</div>", unsafe_allow_html=True)
 
                     if drive_link:
                         st.markdown(f"[📁 Open Application Drive Folder]({drive_link})")
@@ -1346,14 +1604,14 @@ with tab2:
                     ]
                     current_idx = stage_options.index(curr_status) if curr_status in stage_options else 1
 
-                    with st.form(key=f"edit_card_form_{opp_id}_{idx}"):
+                    with st.form(key=f"edit_card_form_{opp_id}"):
                         col_stage_sel, col_cat_sel = st.columns([1, 1])
                         with col_stage_sel:
                             new_stage = st.selectbox(
                                 "Interview Stage",
                                 stage_options,
                                 index=current_idx,
-                                key=f"stage_sel_{opp_id}_{idx}"
+                                key=f"stage_sel_{opp_id}"
                             )
                         with col_cat_sel:
                             cat_options = ["Unassigned", "Target", "Stretch", "Opportunistic", "Practice", "Fallback"]
@@ -1362,7 +1620,7 @@ with tab2:
                                 "Application Category",
                                 cat_options,
                                 index=current_cat_idx,
-                                key=f"cat_sel_{opp_id}_{idx}",
+                                key=f"cat_sel_{opp_id}",
                                 help="Primary strategic category for this role."
                             )
 
@@ -1374,14 +1632,15 @@ with tab2:
                                 "Applied Via / Platform",
                                 src_options,
                                 index=src_cur_idx,
-                                key=f"src_sel_{opp_id}_{idx}",
+                                key=f"src_sel_{opp_id}",
                                 help="Platform where you submitted your application."
                             )
                             custom_src_input = st.text_input(
                                 "Or Add New Source",
                                 placeholder="e.g. Wellfound, Otta...",
-                                key=f"c_src_{opp_id}_{idx}",
-                                help="Leave blank if selecting from dropdown above."
+                                key=f"c_src_{opp_id}",
+                                help="Leave blank if selecting from dropdown above.",
+                                autocomplete="off"
                             )
 
                         with col_pri_sel:
@@ -1391,27 +1650,63 @@ with tab2:
                                 "Priority Level",
                                 pri_options,
                                 index=pri_cur_idx,
-                                key=f"pri_sel_{opp_id}_{idx}",
+                                key=f"pri_sel_{opp_id}",
                                 help="Priority level for this application."
                             )
                             custom_pri_input = st.text_input(
                                 "Or Add New Priority",
                                 placeholder="e.g. Critical, Dream...",
-                                key=f"c_pri_{opp_id}_{idx}",
-                                help="Leave blank if selecting from dropdown above."
+                                key=f"c_pri_{opp_id}",
+                                help="Leave blank if selecting from dropdown above.",
+                                autocomplete="off"
                             )
+
+                        # Contract & Arrangement editable fields
+                        col_arr_sel, col_wc_sel = st.columns([1, 1])
+                        with col_arr_sel:
+                            arr_options = ["Employee", "Contract"]
+                            arr_idx = arr_options.index(curr_arr) if curr_arr in arr_options else 0
+                            new_arr = st.selectbox("Employment Arrangement", arr_options, index=arr_idx, key=f"arr_sel_{opp_id}")
+                        with col_wc_sel:
+                            wc_options = ["Not Specified", "W2", "1099", "C2C"]
+                            wc_idx = wc_options.index(curr_wc) if curr_wc in wc_options else 0
+                            new_wc = st.selectbox("Worker Classification", wc_options, index=wc_idx, key=f"wc_sel_{opp_id}")
+
+                        col_cd_in, col_cv_in = st.columns([1, 1])
+                        with col_cd_in:
+                            new_cd = st.text_input("Contract Duration", value=curr_cd, placeholder="e.g. 6-month contract", key=f"cd_in_{opp_id}", autocomplete="off")
+                        with col_cv_in:
+                            new_cv = st.text_input("Estimated Contract Value", value=curr_cv, placeholder="e.g. $62,400 - $72,800", key=f"cv_in_{opp_id}", autocomplete="off")
+
+                        col_sa_in, col_cc_in = st.columns([1, 1])
+                        with col_sa_in:
+                            new_sa = st.text_input("Staffing Agency", value=curr_sa, placeholder="e.g. Apex Systems, Insight Global...", key=f"sa_in_{opp_id}", autocomplete="off")
+                        with col_cc_in:
+                            new_cc = st.text_input("End-Client Company", value=curr_cc, placeholder="e.g. Braze, Planful...", key=f"cc_in_{opp_id}", autocomplete="off")
+
+                        col_ext_sel, col_fte_sel = st.columns([1, 1])
+                        ext_opts = ["Not Specified", "Yes", "No"]
+                        ext_current_str = "Yes" if (curr_ext is True or str(curr_ext).lower() in ["yes", "true"]) else ("No" if (curr_ext is False or str(curr_ext).lower() in ["no", "false"]) else "Not Specified")
+                        fte_current_str = "Yes" if (curr_fte is True or str(curr_fte).lower() in ["yes", "true"]) else ("No" if (curr_fte is False or str(curr_fte).lower() in ["no", "false"]) else "Not Specified")
+
+                        with col_ext_sel:
+                            new_ext_str = st.selectbox("Extension Possible?", ext_opts, index=ext_opts.index(ext_current_str), key=f"ext_sel_{opp_id}")
+                        with col_fte_sel:
+                            new_fte_str = st.selectbox("FTE Conversion Possible?", ext_opts, index=ext_opts.index(fte_current_str), key=f"fte_sel_{opp_id}")
 
                         new_notes = st.text_area(
                             "Recruiter Contacts & Interview Notes",
                             value=notes,
                             height=70,
                             placeholder="e.g. Recruiter Sarah (sjenkins@planful.com). Focus on ARR metrics.",
-                            key=f"notes_ta_{opp_id}_{idx}"
+                            key=f"notes_ta_{opp_id}"
                         )
 
-                        btn_save_details = st.form_submit_button("💾 Save Application Details", use_container_width=True)
+                        st.caption("💡 *Click 'Save Application Details' below to persist changes to Google Sheets.*")
+                        btn_save_details = st.form_submit_button("💾 Save Application Details", use_container_width=True, type="primary")
 
                     if btn_save_details:
+                        print(f"INFO: [CRM Form Submit] Updating opportunity '{comp}' ({opp_id}): Arrangement='{new_arr}', Stage='{new_stage}', Classification='{new_wc}'", flush=True)
                         st.session_state.active_opp_card = opp_id
                         st.session_state.active_sub_card = None
 
@@ -1436,6 +1731,11 @@ with tab2:
                         # Resolve Category
                         saved_cat = new_cat if new_cat != "Unassigned" else ""
 
+                        # Resolve Contract Attributes
+                        new_ext_val = True if new_ext_str == "Yes" else (False if new_ext_str == "No" else None)
+                        new_fte_val = True if new_fte_str == "Yes" else (False if new_fte_str == "No" else None)
+                        new_wc_val = new_wc if new_wc != "Not Specified" else ""
+
                         # Check if stage changed to record in stage_history
                         now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
                         updated_stage_hist = [dict(h) for h in stage_hist]
@@ -1456,9 +1756,19 @@ with tab2:
                                     stage_history=updated_stage_hist,
                                     category=saved_cat,
                                     applied_via=final_src,
-                                    priority=final_pri
+                                    priority=final_pri,
+                                    employment_arrangement=new_arr,
+                                    worker_classification=new_wc_val,
+                                    pay_basis="Hourly" if new_arr == "Contract" else (curr_pb or "Annual"),
+                                    contract_length_raw=new_cd,
+                                    contract_value_display=new_cv,
+                                    staffing_agency=new_sa,
+                                    client_company=new_cc,
+                                    extension_possible=new_ext_val,
+                                    fte_conversion_possible=new_fte_val
                                 )
                                 if success:
+                                    print(f"INFO: [CRM Form Submit] Successfully saved '{comp}' to Google Sheets!", flush=True)
                                     opp["Status"] = new_stage
                                     opp["Notes"] = new_notes
                                     opp["Category"] = saved_cat
@@ -1466,13 +1776,31 @@ with tab2:
                                     opp["applied_via"] = final_src
                                     opp["Priority"] = final_pri
                                     opp["priority"] = final_pri
+                                    opp["Employment Arrangement"] = new_arr
+                                    opp["employment_arrangement"] = new_arr
+                                    opp["Worker Classification"] = new_wc_val
+                                    opp["worker_classification"] = new_wc_val
+                                    opp["Contract Duration"] = new_cd
+                                    opp["contract_length_raw"] = new_cd
+                                    opp["Contract Value"] = new_cv
+                                    opp["contract_value_display"] = new_cv
+                                    opp["Staffing Agency"] = new_sa
+                                    opp["staffing_agency"] = new_sa
+                                    opp["Client Company"] = new_cc
+                                    opp["client_company"] = new_cc
+                                    opp["Extension Possible"] = "Yes" if new_ext_val is True else ("No" if new_ext_val is False else "")
+                                    opp["extension_possible"] = new_ext_val
+                                    opp["FTE Conversion"] = "Yes" if new_fte_val is True else ("No" if new_fte_val is False else "")
+                                    opp["fte_conversion_possible"] = new_fte_val
                                     opp["Stage History"] = updated_stage_hist
                                     opp["stage_history"] = updated_stage_hist
-                                    st.toast(f"✅ Successfully updated {comp} in Google Sheets!", icon="🚀")
+                                    st.session_state["crm_flash_message"] = f"Successfully updated **{comp}** to **{new_arr}** ({new_stage})!"
                                     st.rerun()
                                 else:
+                                    print(f"ERROR: [CRM Form Submit] Failed to update '{comp}' in Google Sheets.", flush=True)
                                     st.error("Failed to update status in Google Sheets.")
                             else:
+                                print(f"INFO: [CRM Form Submit] Simulated save for '{comp}' (Demo Mode).", flush=True)
                                 opp["Status"] = new_stage
                                 opp["Notes"] = new_notes
                                 opp["Category"] = saved_cat
@@ -1480,9 +1808,25 @@ with tab2:
                                 opp["applied_via"] = final_src
                                 opp["Priority"] = final_pri
                                 opp["priority"] = final_pri
+                                opp["Employment Arrangement"] = new_arr
+                                opp["employment_arrangement"] = new_arr
+                                opp["Worker Classification"] = new_wc_val
+                                opp["worker_classification"] = new_wc_val
+                                opp["Contract Duration"] = new_cd
+                                opp["contract_length_raw"] = new_cd
+                                opp["Contract Value"] = new_cv
+                                opp["contract_value_display"] = new_cv
+                                opp["Staffing Agency"] = new_sa
+                                opp["staffing_agency"] = new_sa
+                                opp["Client Company"] = new_cc
+                                opp["client_company"] = new_cc
+                                opp["Extension Possible"] = "Yes" if new_ext_val is True else ("No" if new_ext_val is False else "")
+                                opp["extension_possible"] = new_ext_val
+                                opp["FTE Conversion"] = "Yes" if new_fte_val is True else ("No" if new_fte_val is False else "")
+                                opp["fte_conversion_possible"] = new_fte_val
                                 opp["Stage History"] = updated_stage_hist
                                 opp["stage_history"] = updated_stage_hist
-                                st.toast(f"Simulated update for {comp} (Demo Mode).", icon="ℹ️")
+                                st.session_state["crm_flash_message"] = f"Simulated update for **{comp}** (Demo Mode)."
                                 st.rerun()
 
                 # Section: Targeted Behavioral Story Cue Cards for this Role

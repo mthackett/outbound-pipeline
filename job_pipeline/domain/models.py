@@ -5,6 +5,23 @@ from pydantic import BaseModel, Field
 
 
 
+EMPLOYMENT_ARRANGEMENTS: List[str] = [
+    "Employee",
+    "Contract"
+]
+
+PAY_BASES: List[str] = [
+    "Annual",
+    "Hourly"
+]
+
+WORKER_CLASSIFICATIONS: List[str] = [
+    "W2",
+    "1099",
+    "C2C"
+]
+
+
 class TargetPayBounds(BaseModel):
     posted_min: Optional[float] = None
     posted_max: Optional[float] = None
@@ -12,6 +29,17 @@ class TargetPayBounds(BaseModel):
     target_max: Optional[float] = None
     currency: str = "USD"
     display_range: str = "Not specified"
+    pay_basis: str = "Annual"  # "Annual" or "Hourly"
+    hourly_min: Optional[float] = None
+    hourly_max: Optional[float] = None
+    annualized_min: Optional[float] = None
+    annualized_max: Optional[float] = None
+    expected_hours_per_week: float = 40.0
+    expected_hours_per_week_is_assumed: bool = True
+    contract_value_min: Optional[float] = None
+    contract_value_max: Optional[float] = None
+    contract_value_is_estimated: bool = True
+    contract_value_display: Optional[str] = None
 
 
 SCREENING_CATEGORIES: List[str] = [
@@ -185,6 +213,23 @@ class JobPosting(BaseModel):
     category: Optional[str] = None
     applied_via: Optional[str] = None
     priority: Optional[str] = None
+    employment_arrangement: Optional[str] = None  # "Employee", "Contract", or None
+    worker_classification: Optional[str] = None  # "W2", "1099", "C2C", or None
+    pay_basis: Optional[str] = "Annual"  # "Annual", "Hourly", or None
+    expected_hours_per_week: Optional[float] = 40.0
+    expected_hours_per_week_is_assumed: bool = True
+    contract_length_months: Optional[float] = None
+    contract_length_weeks: Optional[float] = None
+    contract_length_raw: Optional[str] = None
+    contract_value_min: Optional[float] = None
+    contract_value_max: Optional[float] = None
+    contract_value_display: Optional[str] = None
+    extension_possible: Optional[bool] = None  # True, False, None
+    fte_conversion_possible: Optional[bool] = None  # True, False, None
+    staffing_agency: Optional[str] = None
+    client_company: Optional[str] = None
+    benefits_offered: Optional[bool] = None
+    guaranteed_hours: Optional[bool] = None
     stage_history: List[Dict[str, str]] = Field(default_factory=list)
     required_skills: List[str] = Field(default_factory=list)
     preferred_skills: List[str] = Field(default_factory=list)

@@ -15,21 +15,106 @@ from job_pipeline.domain.story_bank import StoryBankService
 
 
 class PayCalculatorService:
-    """Pure domain service for calculating 60%-80% target pay range."""
+    """Pure domain service for calculating pay bounds for annual and hourly roles."""
 
     @staticmethod
     def calculate_target_pay(
         salary_min: Optional[float],
         salary_max: Optional[float],
-        percentiles: List[float] = [0.60, 0.80]
+        percentiles: List[float] = [0.60, 0.80],
+        pay_basis: Optional[str] = "Annual",
+        expected_hours_per_week: Optional[float] = None,
+        expected_hours_per_week_is_assumed: Optional[bool] = None,
+        contract_length_months: Optional[float] = None,
+        contract_length_weeks: Optional[float] = None
     ) -> TargetPayBounds:
+        norm_basis = (pay_basis or "Annual").strip().capitalize()
+        if norm_basis not in ["Annual", "Hourly"]:
+            norm_basis = "Annual"
+
+        # Handle Hourly roles
+        if norm_basis == "Hourly":
+            hours = expected_hours_per_week if (expected_hours_per_week and expected_hours_per_week > 0) else 40.0
+            is_assumed = True if expected_hours_per_week is None else (
+                expected_hours_per_week_is_assumed if expected_hours_per_week_is_assumed is not None else False
+            )
+
+            if salary_min is None and salary_max is None:
+                return TargetPayBounds(
+                    pay_basis="Hourly",
+                    expected_hours_per_week=hours,
+                    expected_hours_per_week_is_assumed=is_assumed,
+                    display_range="Hourly (Rate undisclosed)"
+                )
+
+            if salary_min is not None and salary_max is not None and salary_max < salary_min:
+                salary_min, salary_max = salary_max, salary_min
+
+            ann_min = round(salary_min * hours * 52) if salary_min is not None else None
+            ann_max = round(salary_max * hours * 52) if salary_max is not None else None
+
+            # Calculate contract duration in weeks
+            c_weeks = None
+            if contract_length_weeks is not None and contract_length_weeks > 0:
+                c_weeks = float(contract_length_weeks)
+            elif contract_length_months is not None and contract_length_months > 0:
+                c_weeks = float(contract_length_months) * (50.0 / 12.0)
+
+            c_val_min = round(salary_min * hours * c_weeks) if (salary_min is not None and c_weeks is not None) else None
+            c_val_max = round(salary_max * hours * c_weeks) if (salary_max is not None and c_weeks is not None) else None
+
+            c_val_disp = None
+            if c_val_min is not None and c_val_max is not None:
+                if c_val_min == c_val_max:
+                    c_val_disp = f"Estimated contract value: ~${c_val_min:,.0f}"
+                else:
+                    c_val_disp = f"Estimated contract value: ~${c_val_min:,.0f} - ${c_val_max:,.0f}"
+            elif c_val_min is not None:
+                c_val_disp = f"Estimated contract value: ~${c_val_min:,.0f}+"
+            elif c_val_max is not None:
+                c_val_disp = f"Estimated contract value: ~Up to ${c_val_max:,.0f}"
+
+            if salary_min is not None and salary_max is not None:
+                disp_str = f"${salary_min:,.0f} - ${salary_max:,.0f}/hr (~${ann_min:,.0f} - ${ann_max:,.0f} annualized)"
+            elif salary_min is not None:
+                disp_str = f"${salary_min:,.0f}+/hr (~${ann_min:,.0f}+ annualized)"
+            else:
+                disp_str = f"Up to ${salary_max:,.0f}/hr (~Up to ${ann_max:,.0f} annualized)"
+
+            return TargetPayBounds(
+                posted_min=ann_min,
+                posted_max=ann_max,
+                target_min=ann_min,
+                target_max=ann_max,
+                currency="USD",
+                display_range=disp_str,
+                pay_basis="Hourly",
+                hourly_min=salary_min,
+                hourly_max=salary_max,
+                annualized_min=ann_min,
+                annualized_max=ann_max,
+                expected_hours_per_week=hours,
+                expected_hours_per_week_is_assumed=is_assumed,
+                contract_value_min=c_val_min,
+                contract_value_max=c_val_max,
+                contract_value_is_estimated=True,
+                contract_value_display=c_val_disp
+            )
+
+        # Standard Annual role
         if salary_min is None and salary_max is None:
-            return TargetPayBounds(display_range="Undisclosed / Set per role")
+            return TargetPayBounds(
+                pay_basis="Annual",
+                display_range="Undisclosed / Set per role"
+            )
 
         if salary_min is not None and salary_max is None:
             return TargetPayBounds(
                 posted_min=salary_min,
                 target_min=salary_min,
+                annualized_min=salary_min,
+                annualized_max=None,
+                pay_basis="Annual",
                 display_range=f"${salary_min:,.0f}+"
             )
 
@@ -37,6 +122,9 @@ class PayCalculatorService:
             return TargetPayBounds(
                 posted_max=salary_max,
                 target_max=salary_max,
+                annualized_min=None,
+                annualized_max=salary_max,
+                pay_basis="Annual",
                 display_range=f"Up to ${salary_max:,.0f}"
             )
 
@@ -54,6 +142,9 @@ class PayCalculatorService:
             posted_max=salary_max,
             target_min=t_min,
             target_max=t_max,
+            annualized_min=salary_min,
+            annualized_max=salary_max,
+            pay_basis="Annual",
             display_range=display_str
         )
 
@@ -284,7 +375,12 @@ class JobQualificationService:
         salary_min: Optional[float] = None,
         salary_max: Optional[float] = None,
         profile: Optional[CandidateProfile] = None,
-        existing_company_titles: Optional[List[Dict[str, Any]]] = None
+        existing_company_titles: Optional[List[Dict[str, Any]]] = None,
+        pay_basis: Optional[str] = "Annual",
+        expected_hours_per_week: Optional[float] = None,
+        expected_hours_per_week_is_assumed: Optional[bool] = None,
+        contract_length_months: Optional[float] = None,
+        contract_length_weeks: Optional[float] = None
     ) -> FitEvaluation:
         if profile is None:
             profile = CandidateProfile()
@@ -347,10 +443,18 @@ class JobQualificationService:
 
         # 4. Target Pay Bounds
         pay_bounds = PayCalculatorService.calculate_target_pay(
-            salary_min, salary_max, profile.target_pay_percentiles
+            salary_min=salary_min,
+            salary_max=salary_max,
+            percentiles=profile.target_pay_percentiles,
+            pay_basis=pay_basis,
+            expected_hours_per_week=expected_hours_per_week,
+            expected_hours_per_week_is_assumed=expected_hours_per_week_is_assumed,
+            contract_length_months=contract_length_months,
+            contract_length_weeks=contract_length_weeks
         )
-        if salary_max is not None and salary_max < profile.minimum_compensation_floor:
-            warnings.append(f"Max salary (${salary_max:,.0f}) is below minimum floor (${profile.minimum_compensation_floor:,.0f}).")
+        comp_check_val = pay_bounds.annualized_max if pay_bounds.pay_basis == "Hourly" else salary_max
+        if comp_check_val is not None and comp_check_val < profile.minimum_compensation_floor:
+            warnings.append(f"Max compensation (${comp_check_val:,.0f} annualized) is below minimum floor (${profile.minimum_compensation_floor:,.0f}).")
 
         # 5. Determine Final Status & Reasoning
         if duplicate_detected and not is_repost:

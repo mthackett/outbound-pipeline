@@ -26,13 +26,52 @@ class JobRequirementsSchema(BaseModel):
         False, description="Whether the role is remote or hybrid."
     )
     salary_min: Optional[float] = Field(
-        None, description="Minimum base salary mentioned in numeric form."
+        None, description="Minimum base salary or hourly rate mentioned in numeric form."
     )
     salary_max: Optional[float] = Field(
-        None, description="Maximum base salary mentioned in numeric form."
+        None, description="Maximum base salary or hourly rate mentioned in numeric form."
     )
     extraction_confidence: float = Field(
         1.0, description="Self-assessed extraction confidence score from 0.0 to 1.0."
+    )
+    employment_arrangement: Optional[Literal["Employee", "Contract"]] = Field(
+        None, description="Employee or Contract if mentioned in posting; null if unspecified."
+    )
+    worker_classification: Optional[Literal["W2", "1099", "C2C"]] = Field(
+        None, description="Worker tax classification (W2, 1099, C2C) only if explicitly mentioned; null if unspecified."
+    )
+    pay_basis: Optional[Literal["Annual", "Hourly"]] = Field(
+        None, description="Annual or Hourly pay basis; null if ambiguous or unspecified."
+    )
+    expected_hours_per_week: Optional[float] = Field(
+        None, description="Expected weekly work hours if explicitly specified (e.g. 40, 20)."
+    )
+    contract_length_months: Optional[float] = Field(
+        None, description="Contract duration normalized in months (e.g. 6.0 for '6 months')."
+    )
+    contract_length_weeks: Optional[float] = Field(
+        None, description="Contract duration normalized in weeks (e.g. 26.0 for '26 weeks')."
+    )
+    contract_length_raw: Optional[str] = Field(
+        None, description="Original contract duration text as stated (e.g. '6-month contract', 'through December 2026')."
+    )
+    extension_possible: Optional[bool] = Field(
+        None, description="True if contract extension is mentioned as possible, False if explicitly no extension, null if not mentioned."
+    )
+    fte_conversion_possible: Optional[bool] = Field(
+        None, description="True if contract-to-hire or full-time FTE conversion is mentioned, False if explicitly no, null if not mentioned."
+    )
+    staffing_agency: Optional[str] = Field(
+        None, description="Staffing firm or recruiting agency name if this role is through an agency (e.g. 'Acme Staffing')."
+    )
+    client_company: Optional[str] = Field(
+        None, description="End client or host company name if distinct from the staffing agency (e.g. 'Contoso')."
+    )
+    benefits_offered: Optional[bool] = Field(
+        None, description="True if benefits are explicitly offered, null if unspecified."
+    )
+    guaranteed_hours: Optional[bool] = Field(
+        None, description="True if guaranteed hours are explicitly mentioned, null if unspecified."
     )
 
 
@@ -67,14 +106,26 @@ class OpenAIEngineAdapter(LLMStrategyPort):
                     required_tech_stack=["Salesforce", "SQL", "Tableau", "dbt"],
                     preferred_tech_stack=["HubSpot", "Clari", "Power BI"],
                     core_pain_points="Unifying funnel analytics and pipeline velocity across CRM tools.",
-                    is_remote=True
+                    is_remote=True,
+                    employment_arrangement="Employee",
+                    pay_basis="Annual"
                 )
             )
 
         client = self._runner.client
         system_instruction = (
             "You are a precise B2B GTM intelligence engine. Analyze the job description "
-            "to extract high-fidelity structured data, required tech stack, preferred tools, pain points, and compensation."
+            "to extract high-fidelity structured data, required tech stack, preferred tools, pain points, compensation, and contract terms.\n\n"
+            "CONTRACT & COMPENSATION EXTRACTION RULES:\n"
+            "1. Pay Basis: Identify 'Hourly' vs 'Annual' pay when clear. For hourly roles (e.g. $60-$70/hr), set pay_basis='Hourly' and record numeric hourly rates in salary_min / salary_max. Do NOT convert hourly to annual here.\n"
+            "2. Employment Arrangement: Identify 'Contract' vs 'Employee' separately from pay basis.\n"
+            "3. Worker Classification: Extract 'W2', '1099', or 'C2C' ONLY when explicitly stated or strongly unambiguous. If the post simply says 'contract position', leave worker_classification as null.\n"
+            "4. Unknown Values: Distinguish unknown (null) from explicitly false. If the post says nothing about extension, store null, not false.\n"
+            "5. Contract Duration: Extract contract duration when specified, providing normalized months/weeks and preserving the raw phrase.\n"
+            "6. Extension & FTE Conversion: Extract extension_possible and fte_conversion_possible independently (e.g. 'contract-to-hire' -> fte_conversion_possible=True).\n"
+            "7. Staffing Agency & Client: Extract staffing_agency and client_company only when identifiable from the text.\n"
+            "8. Expected Hours: Extract expected_hours_per_week only when explicitly stated. Do NOT invent hours.\n"
+            "9. Never fill missing contract values using industry assumptions; preserve them as null."
         )
 
         completion = client.beta.chat.completions.parse(
