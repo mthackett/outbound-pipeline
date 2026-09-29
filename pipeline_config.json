@@ -1,4 +1,5 @@
 {
+  "enable_cli_logging": true,
   "sources": [
     "LinkedIn",
     "Indeed",

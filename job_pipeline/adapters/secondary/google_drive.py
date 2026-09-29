@@ -14,6 +14,7 @@ from job_pipeline.ports.storage_port import DocumentStoragePort
 from job_pipeline.ports.resume_port import ResumeRepositoryPort, ResumeFileRef
 from job_pipeline.adapters.secondary.resume_selector import TitleBasedResumeSelector
 from job_pipeline.adapters.secondary.google_auth import SCOPES
+from job_pipeline.logger import log_drive, log_warn, log_timed_action
 
 
 class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
@@ -39,15 +40,16 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
         self.auth_type = auth_type
 
         if creds is None:
-            print(f"WARNING: No valid Google credentials found (checked OAuth token.json and '{self.credentials_path}'). Google Drive adapter disabled.")
+            log_warn(f"No valid Google credentials found (checked OAuth token.json and '{self.credentials_path}'). Google Drive adapter disabled.")
             return
 
         try:
-            self._drive_svc = build("drive", "v3", credentials=creds)
-            self._docs_svc = build("docs", "v1", credentials=creds)
-            print(f"INFO: Google Drive Adapter initialized successfully (Auth Type: {self.auth_type}).")
+            with log_timed_action("Initializing Google Drive v3 & Docs v1 API services", tag="DRIVE"):
+                self._drive_svc = build("drive", "v3", credentials=creds)
+                self._docs_svc = build("docs", "v1", credentials=creds)
+            log_drive(f"Google Drive Adapter connected (Auth Type: {self.auth_type}).")
         except Exception as e:
-            print(f"WARNING: Could not initialize Google Drive API: {e}")
+            log_warn(f"Could not initialize Google Drive API: {e}")
 
     @property
     def is_connected(self) -> bool:

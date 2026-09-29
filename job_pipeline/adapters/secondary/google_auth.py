@@ -35,6 +35,10 @@ def get_google_credentials(
     effective_token_path = token_path or os.environ.get("GOOGLE_TOKEN_PATH", "token.json")
     effective_sa_path = credentials_path or os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials.json")
 
+    from job_pipeline.logger import log_auth, log_warn
+
+    log_auth(f"Resolving Google API credentials (token: '{effective_token_path}', SA: '{effective_sa_path}')...")
+
     # --- 1. Check OAuth 2.0 User Credentials ---
     oauth_creds: Optional[OAuthCredentials] = None
 
@@ -45,28 +49,31 @@ def get_google_credentials(
             token_info = json.loads(raw_token_json)
             oauth_creds = OAuthCredentials.from_authorized_user_info(token_info, effective_scopes)
         except Exception as e:
-            print(f"WARNING: Could not parse GOOGLE_TOKEN_JSON: {e}")
+            log_warn(f"Could not parse GOOGLE_TOKEN_JSON: {e}")
 
     # Check local token.json file
     if oauth_creds is None and os.path.exists(effective_token_path):
         try:
             oauth_creds = OAuthCredentials.from_authorized_user_file(effective_token_path, effective_scopes)
         except Exception as e:
-            print(f"WARNING: Could not load OAuth token from '{effective_token_path}': {e}")
+            log_warn(f"Could not load OAuth token from '{effective_token_path}': {e}")
 
     # Refresh OAuth token if expired
     if oauth_creds is not None:
         if oauth_creds.expired and oauth_creds.refresh_token:
             try:
+                log_auth("Refreshing expired Google OAuth 2.0 token via Google servers...")
                 oauth_creds.refresh(Request())
                 if os.path.exists(effective_token_path):
                     with open(effective_token_path, "w", encoding="utf-8") as f:
                         f.write(oauth_creds.to_json())
+                log_auth("Google OAuth 2.0 token refreshed and saved.")
             except Exception as ref_err:
-                print(f"WARNING: Failed to refresh OAuth 2.0 token: {ref_err}")
+                log_warn(f"Failed to refresh OAuth 2.0 token: {ref_err}")
                 oauth_creds = None
 
         if oauth_creds is not None and oauth_creds.valid:
+            log_auth("Valid Google OAuth 2.0 user credentials active.")
             return oauth_creds, "oauth_user"
 
     # --- 2. Fallback to Service Account ---
@@ -78,15 +85,17 @@ def get_google_credentials(
             sa_info = json.loads(raw_sa_json)
             sa_creds = ServiceAccountCredentials.from_service_account_info(sa_info, scopes=effective_scopes)
         except Exception as e:
-            print(f"WARNING: Could not parse GOOGLE_CREDENTIALS_JSON: {e}")
+            log_warn(f"Could not parse GOOGLE_CREDENTIALS_JSON: {e}")
 
     if sa_creds is None and os.path.exists(effective_sa_path):
         try:
             sa_creds = ServiceAccountCredentials.from_service_account_file(effective_sa_path, scopes=effective_scopes)
         except Exception as e:
-            print(f"WARNING: Could not load Service Account from '{effective_sa_path}': {e}")
+            log_warn(f"Could not load Service Account from '{effective_sa_path}': {e}")
 
     if sa_creds is not None:
+        log_auth("Google Service Account credentials active.")
         return sa_creds, "service_account"
 
+    log_warn("No valid Google credentials resolved. Google integrations disabled.")
     return None, "none"

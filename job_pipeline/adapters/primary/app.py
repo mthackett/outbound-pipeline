@@ -36,6 +36,11 @@ from job_pipeline.domain.services import (
     JobQualificationService, ApplicationGuardrailService, ScreeningQAService, QuickLinksService,
     ScreeningIntelligenceService, StoryBankService, PipelineConfigService
 )
+from job_pipeline.logger import (
+    log_startup, log_action, log_config, log_sheets, log_drive,
+    log_llm, log_crm, log_info, log_warn, log_success, log_timed_action,
+    is_logging_enabled, set_logging_enabled
+)
 from job_pipeline.adapters.secondary.google_sheets import GoogleSheetsAdapter
 from job_pipeline.adapters.secondary.google_drive import GoogleDriveAdapter
 from job_pipeline.adapters.secondary.openai_adapter import OpenAIEngineAdapter
@@ -139,7 +144,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# Initialize Session State Objects
+# Initialize Session State Objects & Startup Logging
+if "app_session_started" not in st.session_state:
+    st.session_state.app_session_started = True
+    log_startup("🚀 Initializing Job Pipeline & Ingestion Cockpit...")
+    cfg_init = PipelineConfigService.load_config()
+    log_config(f"Configuration loaded (CLI logging: {'ENABLED' if is_logging_enabled() else 'DISABLED'}).")
+
 if "profile" not in st.session_state:
     st.session_state.profile = CandidateProfile()
 
@@ -154,9 +165,11 @@ if "num_screening_qa" not in st.session_state:
 
 if "quicklinks" not in st.session_state:
     st.session_state.quicklinks = QuickLinksService.load_quicklinks()
+    log_startup(f"🔗 Loaded {len(st.session_state.quicklinks)} candidate quicklinks.")
 
 if "story_bank" not in st.session_state:
     st.session_state.story_bank = StoryBankService.load_stories()
+    log_startup(f"📖 Loaded {len(st.session_state.story_bank)} canonical interview stories.")
 
 if "active_opp_card" not in st.session_state:
     st.session_state.active_opp_card = None
@@ -283,8 +296,7 @@ def render_quicklinks_manager(context_key: str = "sb"):
 
 
 # Sidebar Configuration & Connections
-st.sidebar.image("https://img.icons8.com/color/96/briefcase.png", width=56)
-st.sidebar.title("Pipeline Controls")
+st.sidebar.title("💼 Pipeline Controls")
 
 demo_mode = st.sidebar.checkbox(
     "Zero-Cost Demo Mode",
@@ -292,15 +304,30 @@ demo_mode = st.sidebar.checkbox(
     help="Uses mock fixtures and bypasses live API charges."
 )
 
+# CLI Action Logging Toggle (Persisted to pipeline_config.json)
+curr_cli_logging = is_logging_enabled()
+cli_logging_toggle = st.sidebar.checkbox(
+    "CLI Action Logging",
+    value=curr_cli_logging,
+    help="Print background startup processes, network syncs, and actions to the terminal in real-time."
+)
+if cli_logging_toggle != curr_cli_logging:
+    PipelineConfigService.set_cli_logging(cli_logging_toggle)
+    set_logging_enabled(cli_logging_toggle)
+    st.toast(f"CLI Logging {'enabled' if cli_logging_toggle else 'disabled'}")
+
 @st.cache_resource
 def get_adapters(is_demo: bool):
+    log_startup(f"🔌 Initializing secondary adapters (demo_mode={is_demo})...")
     if is_demo:
+        log_startup("Using mock secondary adapters (demo mode)...")
         storage = MockJobStorageAdapter()
         drive = MockDocumentStorageAdapter()
         resume = MockResumeRepositoryAdapter()
         llm = MockLLMStrategyAdapter()
         twilio = TwilioMessagingAdapter()
     else:
+        log_startup("Connecting to live infrastructure adapters (Google Sheets, Drive, OpenAI)...")
         storage = GoogleSheetsAdapter()
         drive = GoogleDriveAdapter()
         resume = drive
@@ -308,6 +335,7 @@ def get_adapters(is_demo: bool):
         twilio = TwilioMessagingAdapter()
 
     gmail = GmailIngestionAdapter()
+    log_startup("Secondary adapters successfully initialized.")
     return storage, drive, resume, llm, twilio, gmail
 
 storage_adapter, drive_adapter, resume_repo, llm_adapter, twilio_adapter, gmail_adapter = get_adapters(demo_mode)
@@ -614,9 +642,10 @@ with tab1:
                 ))
 
     def execute_application_workflow(job_payload: dict):
+        final_company = job_payload["company"]
+        final_title = job_payload["title"]
+        log_action(f"⚡ Ingestion workflow started for '{final_company}' - '{final_title}'")
         with st.spinner("Processing job, generating Google Drive workspace, documents, and logging to Sheets..."):
-            final_company = job_payload["company"]
-            final_title = job_payload["title"]
             final_family = job_payload["family"]
             final_min_pay = job_payload["min_pay"]
             final_max_pay = job_payload["max_pay"]
@@ -643,6 +672,7 @@ with tab1:
             final_client = job_payload.get("client_company")
 
             # 1. Fit Qualification & Target Pay Calculator (60%-80%)
+            log_action(f"🎯 Evaluating fit qualifications & 60%-80% target pay bounds for '{final_title}'...")
             fit_eval = JobQualificationService.evaluate(
                 company_name=final_company,
                 job_title=final_title,
@@ -663,11 +693,13 @@ with tab1:
             # 2. Select Best Fit Resume
             selected_resume = resume_repo.select_best_fit_resume(final_title, final_family)
             resume_name = selected_resume.filename if selected_resume else "Default Resume"
+            log_action(f"📄 Selected best-fit resume: '{resume_name}'")
             resume_link = getattr(selected_resume, "web_link", None) if selected_resume else None
             if not resume_link and selected_resume and selected_resume.doc_id and not selected_resume.doc_id.startswith("doc_"):
                 resume_link = f"https://docs.google.com/document/d/{selected_resume.doc_id}/edit"
 
             # 3. Create Google Drive Application Workspace Folder
+            log_drive(f"📁 Creating Drive application workspace folder for '{final_company}'...")
             workspace = drive_adapter.create_application_workspace(final_company, final_title)
             folder_id = workspace.get("folder_id")
             folder_link = workspace.get("folder_link")
@@ -675,6 +707,7 @@ with tab1:
             # 4. Save Raw Job Description Document into Drive Folder (Reliable Upload)
             drive_jd_link = None
             if folder_id:
+                log_drive("📝 Uploading raw job description document to Google Drive...")
                 res_jd = drive_adapter.upload_raw_job_description(
                     folder_id,
                     jd_text,
@@ -688,6 +721,7 @@ with tab1:
             drive_screening_doc_link = None
             opp_id = str(uuid.uuid4())
             if folder_id and screening_qa_list:
+                log_drive(f"📝 Creating Screening Questions Google Doc ({len(screening_qa_list)} items)...")
                 res_sq = drive_adapter.create_screening_questions_doc(
                     folder_id=folder_id,
                     company_name=final_company,
@@ -704,6 +738,7 @@ with tab1:
             os.makedirs("output_reports", exist_ok=True)
 
             resume_text = resume_repo.fetch_resume_text(selected_resume.doc_id) if selected_resume else ""
+            log_llm(f"🧠 Generating Role Intelligence Report (.docx) for '{final_company}' via OpenAI...")
             report = llm_adapter.generate_role_intelligence_report(
                 job_data={"company": final_company, "title": final_title, "description": jd_text},
                 resume_data={"resume_id": selected_resume.doc_id if selected_resume else "res1", "text": resume_text},
@@ -714,12 +749,14 @@ with tab1:
 
             # Upload Resume PDF and DOCX Report to Folder
             if folder_id:
+                log_drive("📤 Uploading resume PDF and Word report to Google Drive workspace...")
                 if selected_resume and selected_resume.doc_id:
                     drive_adapter.export_resume_pdf(selected_resume.doc_id, folder_id, f"{resume_name}.pdf")
                 if os.path.exists(output_docx_path):
                     drive_adapter.upload_role_intelligence_report(folder_id, output_docx_path)
 
             # 7. Save Opportunity to Google Sheets (Raw Ingestion & Screening QA)
+            log_sheets(f"💾 Saving opportunity '{final_company} - {final_title}' to Google Sheets ('Raw Ingestion')...")
             tot_tokens = getattr(llm_adapter, "last_telemetry_tokens", 0) + getattr(llm_adapter, "last_report_tokens", 0)
             final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
             now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -1226,6 +1263,8 @@ with tab2:
     col_btn_refresh, col_sheet_link = st.columns([1, 2])
     with col_btn_refresh:
         refresh_clicked = st.button("🔄 Refresh Pipeline from Google Sheets")
+    if refresh_clicked:
+        log_action("🔄 User requested live pipeline refresh from Google Sheets")
     with col_sheet_link:
         st.markdown(f"[↗ View Full Spreadsheet in Google Sheets](https://docs.google.com/spreadsheets/d/{sheet_id}/edit)")
 
@@ -1445,10 +1484,47 @@ with tab2:
                 or sq in str(o.get("Client Company", "")).lower()
             ]
 
-        st.markdown(f"Showing **{len(filtered_opps)}** opportunities (newest first):")
+        total_filtered = len(filtered_opps)
+        items_per_page = 6
+        total_pages = max(1, (total_filtered + items_per_page - 1) // items_per_page)
+
+        reversed_list = list(reversed(filtered_opps))
+
+        # If user opened an active opp card, jump to that page
+        active_card_id = st.session_state.get("active_opp_card")
+        if active_card_id:
+            for card_idx, card_item in enumerate(reversed_list):
+                if str(card_item.get("Opportunity ID", "")).strip() == str(active_card_id).strip():
+                    st.session_state.crm_page = (card_idx // items_per_page) + 1
+                    break
+
+        if "crm_page" not in st.session_state:
+            st.session_state.crm_page = 1
+        if st.session_state.crm_page > total_pages:
+            st.session_state.crm_page = total_pages
+        if st.session_state.crm_page < 1:
+            st.session_state.crm_page = 1
+
+        col_hdr_info, col_p_prev, col_p_info, col_p_next = st.columns([3, 1, 1.5, 1])
+        with col_hdr_info:
+            st.markdown(f"Showing **{total_filtered}** opportunities (newest first, {items_per_page} per page):")
+        with col_p_prev:
+            if st.button("⬅️ Previous", key="crm_prev_pg", disabled=(st.session_state.crm_page <= 1), use_container_width=True):
+                st.session_state.crm_page -= 1
+                st.rerun()
+        with col_p_info:
+            st.markdown(f"<div style='text-align:center; padding-top:6px; font-weight:600; color:#94A3B8;'>Page {st.session_state.crm_page} of {total_pages}</div>", unsafe_allow_html=True)
+        with col_p_next:
+            if st.button("Next ➡️", key="crm_next_pg", disabled=(st.session_state.crm_page >= total_pages), use_container_width=True):
+                st.session_state.crm_page += 1
+                st.rerun()
+
+        start_offset = (st.session_state.crm_page - 1) * items_per_page
+        end_offset = start_offset + items_per_page
+        current_page_opps = reversed_list[start_offset:end_offset]
 
         # Render each application card
-        for idx, opp in enumerate(reversed(filtered_opps)):
+        for idx, opp in enumerate(current_page_opps):
             comp = opp.get("Company Name", "Unknown Company")
             title = opp.get("Job Title", "Unknown Role")
             curr_status = opp.get("Status", "Pending")
@@ -1706,7 +1782,7 @@ with tab2:
                         btn_save_details = st.form_submit_button("💾 Save Application Details", use_container_width=True, type="primary")
 
                     if btn_save_details:
-                        print(f"INFO: [CRM Form Submit] Updating opportunity '{comp}' ({opp_id}): Arrangement='{new_arr}', Stage='{new_stage}', Classification='{new_wc}'", flush=True)
+                        log_crm(f"Updating opportunity '{comp}' ({opp_id}): Stage='{new_stage}', Arrangement='{new_arr}', Classification='{new_wc}'")
                         st.session_state.active_opp_card = opp_id
                         st.session_state.active_sub_card = None
 
@@ -1768,7 +1844,7 @@ with tab2:
                                     fte_conversion_possible=new_fte_val
                                 )
                                 if success:
-                                    print(f"INFO: [CRM Form Submit] Successfully saved '{comp}' to Google Sheets!", flush=True)
+                                    log_success(f"Successfully saved '{comp}' updates to Google Sheets!")
                                     opp["Status"] = new_stage
                                     opp["Notes"] = new_notes
                                     opp["Category"] = saved_cat
@@ -2394,110 +2470,121 @@ with tab3:
                     if s.trigger_keywords:
                         st.caption(f"**Trigger Keywords:** {', '.join(s.trigger_keywords)}")
 
-            # Sub-Section 2: Full In-App Story & Breadcrumb Editor
-            with st.expander(f"✏️ Edit Story {s.story_number} Information, Tags & Breadcrumbs", expanded=False):
-                with st.form(key=f"edit_story_form_{s.story_id}_{s_idx}"):
-                    st.markdown(f"#### ✏️ Full Editor: Story {s.story_number}")
-                    if s.is_locked:
-                        st.caption("ℹ️ *This story is locked to prevent automated background updates, but your manual edits here will be saved directly.*")
-
-                    c_e1, c_e2 = st.columns([2, 1])
-                    with c_e1:
-                        ed_title = st.text_input("Story Title", value=s.title, key=f"ed_t_{s.story_id}_{s_idx}")
-                    with c_e2:
-                        ed_arch = st.text_input("Archetype Tags (comma-separated)", value=", ".join(s.archetype_tags), key=f"ed_arch_{s.story_id}_{s_idx}")
-
-                    c_e3, c_e4 = st.columns([1, 1])
-                    with c_e3:
-                        ed_comps = st.text_input("Competencies / Tech Stack (comma-separated)", value=", ".join(s.competencies), key=f"ed_comp_{s.story_id}_{s_idx}")
-                    with c_e4:
-                        ed_inds = st.text_input("Target Industries (comma-separated)", value=", ".join(s.industries), key=f"ed_ind_{s.story_id}_{s_idx}")
-
-                    ed_hook = st.text_area("Elevator Hook (1-2 sentences)", value=s.hook, height=70, key=f"ed_hk_{s.story_id}_{s_idx}")
-                    ed_problem = st.text_area("The Problem & High Stakes", value=s.problem, height=85, key=f"ed_prob_{s.story_id}_{s_idx}")
-
-                    c_e5, c_e6 = st.columns(2)
-                    with c_e5:
-                        ed_tp = st.text_area("⚡ The Turning Point", value=s.turning_point, height=85, key=f"ed_tp_{s.story_id}_{s_idx}")
-                    with c_e6:
-                        ed_result = st.text_area("📊 Measurable Result & Metrics", value=s.result, height=85, key=f"ed_res_{s.story_id}_{s_idx}")
-
-                    ed_learning = st.text_area("💡 Lasting Learning & Philosophy", value=s.learning, height=75, key=f"ed_learn_{s.story_id}_{s_idx}")
-
-                    st.markdown("---")
-                    st.markdown("##### 🍞 Edit Existing Breadcrumb Milestones:")
-                    ed_breadcrumbs = []
-                    kind_options = ["context", "pivot", "milestone", "metric", "learning"]
-                    for b_i, b_item in enumerate(s.breadcrumbs):
-                        b_c1, b_c2, b_c3, b_c4 = st.columns([2, 5, 2, 1])
-                        with b_c1:
-                            b_lbl = st.text_input(f"Step {b_i+1} Label", value=b_item.label, key=f"ed_bl_{s.story_id}_{b_i}_{s_idx}")
-                        with b_c2:
-                            b_cnt = st.text_input(f"Step {b_i+1} Soundbite", value=b_item.content, key=f"ed_bc_{s.story_id}_{b_i}_{s_idx}")
-                        with b_c3:
-                            b_k_idx = kind_options.index(b_item.kind) if b_item.kind in kind_options else 0
-                            b_knd = st.selectbox(f"Kind", kind_options, index=b_k_idx, key=f"ed_bk_{s.story_id}_{b_i}_{s_idx}")
-                        with b_c4:
-                            st.write("")
-                            b_remove = st.checkbox("Delete", key=f"del_b_{s.story_id}_{b_i}_{s_idx}", help="Remove this breadcrumb")
-
-                        if not b_remove:
-                            ed_breadcrumbs.append(StoryBreadcrumb(id=b_item.id, label=b_lbl, content=b_cnt, kind=b_knd))
-
-                    st.markdown("##### ➕ Add An Extra Milestone (Optional):")
-                    extra_c1, extra_c2, extra_c3 = st.columns([2, 5, 2])
-                    with extra_c1:
-                        ex_lbl = st.text_input("New Label", placeholder="e.g. Outcome", key=f"ex_lbl_{s.story_id}_{s_idx}")
-                    with extra_c2:
-                        ex_cnt = st.text_input("New Soundbite", placeholder="e.g. Reconciled $410K gap", key=f"ex_cnt_{s.story_id}_{s_idx}")
-                    with extra_c3:
-                        ex_knd = st.selectbox("Kind", kind_options, index=2, key=f"ex_knd_{s.story_id}_{s_idx}")
-
-                    st.markdown("---")
-                    c_e7, c_e8 = st.columns([1, 1])
-                    with c_e7:
-                        ed_keywords = st.text_input("Trigger Keywords (comma-separated)", value=", ".join(s.trigger_keywords), key=f"ed_kw_{s.story_id}_{s_idx}")
-                    with c_e8:
-                        ed_questions = st.text_area("Target Question Types (one per line)", value="\n".join(s.target_question_types), height=90, key=f"ed_q_{s.story_id}_{s_idx}")
-
-                    c_b1, c_b2 = st.columns([3, 1])
-                    with c_b1:
-                        btn_save_story = st.form_submit_button("💾 Save All Story Changes & Update Knowledge Base", type="primary", use_container_width=True)
-                    with c_b2:
-                        btn_del_story = st.form_submit_button("🗑️ Delete Story", use_container_width=True)
-
-                    if btn_del_story:
-                        StoryBankService.delete_story(s.story_id)
-                        st.session_state.story_bank = StoryBankService.load_stories()
-                        st.success(f"Deleted Story {s.story_number} from stories.json!")
+            # Sub-Section 2: Full In-App Story & Breadcrumb Editor (Rendered on-demand)
+            is_editing_this_story = (st.session_state.get("editing_story_id") == s.story_id)
+            if not is_editing_this_story:
+                if st.button(f"✏️ Edit Story {s.story_number} Information & Breadcrumbs", key=f"btn_open_edit_{s.story_id}_{s_idx}"):
+                    st.session_state.editing_story_id = s.story_id
+                    st.rerun()
+            else:
+                with st.expander(f"✏️ Editing Story {s.story_number}: {s.title}", expanded=True):
+                    if st.button("✖️ Close Story Editor", key=f"cancel_ed_{s.story_id}_{s_idx}"):
+                        st.session_state.editing_story_id = None
                         st.rerun()
+                    with st.form(key=f"edit_story_form_{s.story_id}_{s_idx}"):
+                        st.markdown(f"#### ✏️ Full Editor: Story {s.story_number}")
+                        if s.is_locked:
+                            st.caption("ℹ️ *This story is locked to prevent automated background updates, but your manual edits here will be saved directly.*")
 
-                    if btn_save_story:
-                        if not ed_title.strip():
-                            st.error("Story title cannot be empty.")
-                        else:
-                            final_breadcrumbs = [b for b in ed_breadcrumbs if b.label.strip() and b.content.strip()]
-                            if ex_lbl.strip() and ex_cnt.strip():
-                                final_breadcrumbs.append(StoryBreadcrumb(label=ex_lbl.strip(), content=ex_cnt.strip(), kind=ex_knd))
+                        c_e1, c_e2 = st.columns([2, 1])
+                        with c_e1:
+                            ed_title = st.text_input("Story Title", value=s.title, key=f"ed_t_{s.story_id}_{s_idx}")
+                        with c_e2:
+                            ed_arch = st.text_input("Archetype Tags (comma-separated)", value=", ".join(s.archetype_tags), key=f"ed_arch_{s.story_id}_{s_idx}")
 
-                            updated_dict = {
-                                "title": ed_title.strip(),
-                                "archetype_tags": [t.strip() for t in ed_arch.split(",") if t.strip()],
-                                "competencies": [c.strip() for c in ed_comps.split(",") if c.strip()],
-                                "industries": [i.strip() for i in ed_inds.split(",") if i.strip()],
-                                "hook": ed_hook.strip(),
-                                "problem": ed_problem.strip(),
-                                "turning_point": ed_tp.strip(),
-                                "result": ed_result.strip(),
-                                "learning": ed_learning.strip(),
-                                "breadcrumbs": [b.model_dump() for b in final_breadcrumbs],
-                                "trigger_keywords": [k.strip() for k in ed_keywords.split(",") if k.strip()],
-                                "target_question_types": [q.strip() for q in ed_questions.split("\n") if q.strip()]
-                            }
-                            StoryBankService.update_story(s.story_id, updated_dict, is_user_override=True)
+                        c_e3, c_e4 = st.columns([1, 1])
+                        with c_e3:
+                            ed_comps = st.text_input("Competencies / Tech Stack (comma-separated)", value=", ".join(s.competencies), key=f"ed_comp_{s.story_id}_{s_idx}")
+                        with c_e4:
+                            ed_inds = st.text_input("Target Industries (comma-separated)", value=", ".join(s.industries), key=f"ed_ind_{s.story_id}_{s_idx}")
+
+                        ed_hook = st.text_area("Elevator Hook (1-2 sentences)", value=s.hook, height=70, key=f"ed_hk_{s.story_id}_{s_idx}")
+                        ed_problem = st.text_area("The Problem & High Stakes", value=s.problem, height=85, key=f"ed_prob_{s.story_id}_{s_idx}")
+
+                        c_e5, c_e6 = st.columns(2)
+                        with c_e5:
+                            ed_tp = st.text_area("⚡ The Turning Point", value=s.turning_point, height=85, key=f"ed_tp_{s.story_id}_{s_idx}")
+                        with c_e6:
+                            ed_result = st.text_area("📊 Measurable Result & Metrics", value=s.result, height=85, key=f"ed_res_{s.story_id}_{s_idx}")
+
+                        ed_learning = st.text_area("💡 Lasting Learning & Philosophy", value=s.learning, height=75, key=f"ed_learn_{s.story_id}_{s_idx}")
+
+                        st.markdown("---")
+                        st.markdown("##### 🍞 Edit Existing Breadcrumb Milestones:")
+                        ed_breadcrumbs = []
+                        kind_options = ["context", "pivot", "milestone", "metric", "learning"]
+                        for b_i, b_item in enumerate(s.breadcrumbs):
+                            b_c1, b_c2, b_c3, b_c4 = st.columns([2, 5, 2, 1])
+                            with b_c1:
+                                b_lbl = st.text_input(f"Step {b_i+1} Label", value=b_item.label, key=f"ed_bl_{s.story_id}_{b_i}_{s_idx}")
+                            with b_c2:
+                                b_cnt = st.text_input(f"Step {b_i+1} Soundbite", value=b_item.content, key=f"ed_bc_{s.story_id}_{b_i}_{s_idx}")
+                            with b_c3:
+                                b_k_idx = kind_options.index(b_item.kind) if b_item.kind in kind_options else 0
+                                b_knd = st.selectbox(f"Kind", kind_options, index=b_k_idx, key=f"ed_bk_{s.story_id}_{b_i}_{s_idx}")
+                            with b_c4:
+                                st.write("")
+                                b_remove = st.checkbox("Delete", key=f"del_b_{s.story_id}_{b_i}_{s_idx}", help="Remove this breadcrumb")
+
+                            if not b_remove:
+                                ed_breadcrumbs.append(StoryBreadcrumb(id=b_item.id, label=b_lbl, content=b_cnt, kind=b_knd))
+
+                        st.markdown("##### ➕ Add An Extra Milestone (Optional):")
+                        extra_c1, extra_c2, extra_c3 = st.columns([2, 5, 2])
+                        with extra_c1:
+                            ex_lbl = st.text_input("New Label", placeholder="e.g. Outcome", key=f"ex_lbl_{s.story_id}_{s_idx}")
+                        with extra_c2:
+                            ex_cnt = st.text_input("New Soundbite", placeholder="e.g. Reconciled $410K gap", key=f"ex_cnt_{s.story_id}_{s_idx}")
+                        with extra_c3:
+                            ex_knd = st.selectbox("Kind", kind_options, index=2, key=f"ex_knd_{s.story_id}_{s_idx}")
+
+                        st.markdown("---")
+                        c_e7, c_e8 = st.columns([1, 1])
+                        with c_e7:
+                            ed_keywords = st.text_input("Trigger Keywords (comma-separated)", value=", ".join(s.trigger_keywords), key=f"ed_kw_{s.story_id}_{s_idx}")
+                        with c_e8:
+                            ed_questions = st.text_area("Target Question Types (one per line)", value="\n".join(s.target_question_types), height=90, key=f"ed_q_{s.story_id}_{s_idx}")
+
+                        c_b1, c_b2 = st.columns([3, 1])
+                        with c_b1:
+                            btn_save_story = st.form_submit_button("💾 Save All Story Changes & Update Knowledge Base", type="primary", use_container_width=True)
+                        with c_b2:
+                            btn_del_story = st.form_submit_button("🗑️ Delete Story", use_container_width=True)
+
+                        if btn_del_story:
+                            StoryBankService.delete_story(s.story_id)
                             st.session_state.story_bank = StoryBankService.load_stories()
-                            st.success(f"Saved changes to Story {s.story_number} ('{ed_title.strip()}')!")
+                            st.session_state.editing_story_id = None
+                            st.success(f"Deleted Story {s.story_number} from stories.json!")
                             st.rerun()
+
+                        if btn_save_story:
+                            if not ed_title.strip():
+                                st.error("Story title cannot be empty.")
+                            else:
+                                final_breadcrumbs = [b for b in ed_breadcrumbs if b.label.strip() and b.content.strip()]
+                                if ex_lbl.strip() and ex_cnt.strip():
+                                    final_breadcrumbs.append(StoryBreadcrumb(label=ex_lbl.strip(), content=ex_cnt.strip(), kind=ex_knd))
+
+                                updated_dict = {
+                                    "title": ed_title.strip(),
+                                    "archetype_tags": [t.strip() for t in ed_arch.split(",") if t.strip()],
+                                    "competencies": [c.strip() for c in ed_comps.split(",") if c.strip()],
+                                    "industries": [i.strip() for i in ed_inds.split(",") if i.strip()],
+                                    "hook": ed_hook.strip(),
+                                    "problem": ed_problem.strip(),
+                                    "turning_point": ed_tp.strip(),
+                                    "result": ed_result.strip(),
+                                    "learning": ed_learning.strip(),
+                                    "breadcrumbs": [b.model_dump() for b in final_breadcrumbs],
+                                    "trigger_keywords": [k.strip() for k in ed_keywords.split(",") if k.strip()],
+                                    "target_question_types": [q.strip() for q in ed_questions.split("\n") if q.strip()]
+                                }
+                                StoryBankService.update_story(s.story_id, updated_dict, is_user_override=True)
+                                st.session_state.story_bank = StoryBankService.load_stories()
+                                st.session_state.editing_story_id = None
+                                st.success(f"Saved changes to Story {s.story_number} ('{ed_title.strip()}')!")
+                                st.rerun()
 
 
 # =====================================================================
@@ -2550,4 +2637,9 @@ with tab4:
         st.write(f"**Dealbreaker Tech Stack**: {', '.join(prof.dealbreaker_skills)}")
     with col_p2:
         st.write(f"**Core Strengths**: {', '.join(prof.core_strengths)}")
+
+# Startup completion notice
+if st.session_state.get("app_session_started") and not st.session_state.get("app_render_completed"):
+    st.session_state.app_render_completed = True
+    log_startup("✨ Cockpit UI rendering complete. Dashboard is fully active and ready!")
 

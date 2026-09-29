@@ -586,9 +586,10 @@ class PipelineConfigService:
     DEFAULT_CONFIG_PATH = "pipeline_config.json"
 
     @classmethod
-    def load_config(cls, filepath: Optional[str] = None) -> Dict[str, List[str]]:
+    def load_config(cls, filepath: Optional[str] = None) -> Dict[str, Any]:
         path = Path(filepath or os.environ.get("PIPELINE_CONFIG_PATH", cls.DEFAULT_CONFIG_PATH))
         defaults = {
+            "enable_cli_logging": True,
             "sources": list(DEFAULT_APPLICATION_SOURCES),
             "priorities": list(DEFAULT_PRIORITIES)
         }
@@ -601,7 +602,9 @@ class PipelineConfigService:
             if isinstance(data, dict):
                 sources = data.get("sources")
                 priorities = data.get("priorities")
+                enable_logging = data.get("enable_cli_logging", data.get("cli_logging", True))
                 return {
+                    "enable_cli_logging": bool(enable_logging),
                     "sources": sources if isinstance(sources, list) and sources else list(DEFAULT_APPLICATION_SOURCES),
                     "priorities": priorities if isinstance(priorities, list) and priorities else list(DEFAULT_PRIORITIES)
                 }
@@ -610,7 +613,21 @@ class PipelineConfigService:
             return defaults
 
     @classmethod
-    def save_config(cls, config: Dict[str, List[str]], filepath: Optional[str] = None) -> bool:
+    def is_cli_logging_enabled(cls, filepath: Optional[str] = None) -> bool:
+        env_val = os.environ.get("ENABLE_CLI_LOGGING", os.environ.get("CLI_LOGGING"))
+        if env_val is not None:
+            return env_val.strip().lower() in ("1", "true", "yes", "on", "enabled")
+        cfg = cls.load_config(filepath)
+        return bool(cfg.get("enable_cli_logging", True))
+
+    @classmethod
+    def set_cli_logging(cls, enabled: bool, filepath: Optional[str] = None) -> bool:
+        cfg = cls.load_config(filepath)
+        cfg["enable_cli_logging"] = bool(enabled)
+        return cls.save_config(cfg, filepath)
+
+    @classmethod
+    def save_config(cls, config: Dict[str, Any], filepath: Optional[str] = None) -> bool:
         path = Path(filepath or os.environ.get("PIPELINE_CONFIG_PATH", cls.DEFAULT_CONFIG_PATH))
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

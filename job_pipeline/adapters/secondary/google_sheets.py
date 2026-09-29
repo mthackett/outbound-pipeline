@@ -13,6 +13,7 @@ socket.setdefaulttimeout(25)
 
 import gspread
 
+from job_pipeline.logger import log_sheets, log_warn, log_error, log_timed_action
 from job_pipeline.adapters.secondary.google_auth import get_google_credentials
 from job_pipeline.domain.models import JobPosting, FitEvaluation, TargetPayBounds, ScreeningQA
 from job_pipeline.ports.storage_port import JobStoragePort
@@ -52,23 +53,24 @@ class GoogleSheetsAdapter(JobStoragePort):
 
     def _init_connection(self):
         if not self.spreadsheet_id:
-            print("WARNING: GOOGLE_SPREADSHEET_ID is not configured.")
+            log_warn("GOOGLE_SPREADSHEET_ID is not configured.")
             return
 
         creds, auth_type = get_google_credentials(credentials_path=self.credentials_path)
         self.auth_type = auth_type
 
         if creds is None:
-            print(f"WARNING: No valid Google credentials found (checked OAuth token.json and '{self.credentials_path}'). Google Sheets adapter disabled.")
+            log_warn(f"No valid Google credentials found (checked OAuth token.json and '{self.credentials_path}'). Google Sheets adapter disabled.")
             return
 
         try:
-            self._client = gspread.authorize(creds)
-            self._client.set_timeout(25)
-            self._spreadsheet = self._client.open_by_key(self.spreadsheet_id)
-            print(f"INFO: Google Sheets Adapter initialized successfully (Auth Type: {self.auth_type}).")
+            with log_timed_action(f"Connecting to Google Spreadsheet (ID: {self.spreadsheet_id[:8]}...)", tag="SHEETS"):
+                self._client = gspread.authorize(creds)
+                self._client.set_timeout(25)
+                self._spreadsheet = self._client.open_by_key(self.spreadsheet_id)
+            log_sheets(f"Google Sheets Adapter connected (Title: '{self._spreadsheet.title}', Auth Type: {self.auth_type}).")
         except Exception as e:
-            print(f"WARNING: Could not connect to Google Sheets: {e}")
+            log_warn(f"Could not connect to Google Sheets: {e}")
 
     @property
     def is_connected(self) -> bool:
@@ -319,19 +321,21 @@ class GoogleSheetsAdapter(JobStoragePort):
             records = self._cached_screening_qa
         else:
             try:
-                qa_ws = self._spreadsheet.worksheet("Screening QA")
-                records = qa_ws.get_all_records()
+                with log_timed_action("Fetching 'Screening QA' worksheet from Google Sheets", tag="SHEETS"):
+                    qa_ws = self._spreadsheet.worksheet("Screening QA")
+                    records = qa_ws.get_all_records()
                 self._cached_screening_qa = records
                 self._screening_qa_cache_time = now
+                log_sheets(f"Loaded {len(records)} screening Q&A records from Google Sheets.")
             except Exception as e:
                 if "429" in str(e) or "Quota exceeded" in str(e):
-                    print("WARNING: Google Sheets read quota reached. Serving cached screening QA if available.")
+                    log_warn("Google Sheets read quota reached. Serving cached screening QA if available.")
                     if self._cached_screening_qa is not None:
                         records = self._cached_screening_qa
                     else:
                         return []
                 else:
-                    print(f"INFO: Screening QA worksheet notice: {e}")
+                    log_sheets(f"Screening QA worksheet notice: {e}")
                     return []
         if opportunity_id:
             return [r for r in records if str(r.get("opportunity_id", "")).strip() == opportunity_id]
@@ -548,8 +552,9 @@ class GoogleSheetsAdapter(JobStoragePort):
         if not force_refresh and self._cached_opportunities is not None and (now - self._opportunities_cache_time < self._cache_ttl_seconds):
             return self._cached_opportunities
         try:
-            worksheet = self._spreadsheet.worksheet("Raw Ingestion")
-            records = worksheet.get_all_records()
+            with log_timed_action("Fetching live pipeline opportunities from 'Raw Ingestion'", tag="SHEETS"):
+                worksheet = self._spreadsheet.worksheet("Raw Ingestion")
+                records = worksheet.get_all_records()
             for r in records:
                 sh = r.get("Stage History")
                 parsed_sh = []
@@ -566,11 +571,12 @@ class GoogleSheetsAdapter(JobStoragePort):
                 r["Stage History"] = parsed_sh
             self._cached_opportunities = records
             self._opportunities_cache_time = now
+            log_sheets(f"Loaded {len(records)} opportunities from Google Sheets.")
             return records
         except Exception as e:
             if "429" in str(e) or "Quota exceeded" in str(e):
-                print("WARNING: Google Sheets read quota reached. Serving cached opportunities.")
+                log_warn("Google Sheets read quota reached. Serving cached opportunities.")
                 if self._cached_opportunities is not None:
                     return self._cached_opportunities
-            print(f"ERROR: Failed to fetch opportunities from Google Sheets: {e}")
+            log_error(f"Failed to fetch opportunities from Google Sheets: {e}")
             return self._cached_opportunities or []
