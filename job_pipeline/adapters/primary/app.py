@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import uuid
+import json
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
@@ -25,11 +26,13 @@ st.set_page_config(
 
 from job_pipeline.domain.models import (
     CandidateProfile, JobPosting, FitEvaluation, StakeholderContact, Touchpoint, ScreeningQA, QuickLink,
-    SCREENING_CATEGORIES, SCREENING_ARCHETYPES, StoryBreadcrumb, CanonicalStory, StoryCueCard, ScreeningMatchResult
+    SCREENING_CATEGORIES, SCREENING_ARCHETYPES, StoryBreadcrumb, CanonicalStory, StoryCueCard, ScreeningMatchResult,
+    APPLICATION_CATEGORIES, CATEGORY_ICONS, APPLICATION_STAGES,
+    DEFAULT_APPLICATION_SOURCES, DEFAULT_PRIORITIES, PRIORITY_ICONS, SOURCE_ICONS
 )
 from job_pipeline.domain.services import (
     JobQualificationService, ApplicationGuardrailService, ScreeningQAService, QuickLinksService,
-    ScreeningIntelligenceService, StoryBankService
+    ScreeningIntelligenceService, StoryBankService, PipelineConfigService
 )
 from job_pipeline.adapters.secondary.google_sheets import GoogleSheetsAdapter
 from job_pipeline.adapters.secondary.google_drive import GoogleDriveAdapter
@@ -428,6 +431,36 @@ with tab1:
             manual_min_pay = st.number_input("Override Min Salary ($)", value=0, step=5000)
             manual_max_pay = st.number_input("Override Max Salary ($)", value=0, step=5000)
 
+        st.markdown("---")
+        pipeline_cfg = PipelineConfigService.load_config()
+        sources_list = pipeline_cfg.get("sources", DEFAULT_APPLICATION_SOURCES)
+        priorities_list = pipeline_cfg.get("priorities", DEFAULT_PRIORITIES)
+
+        col_ov_cat1, col_ov_cat2, col_ov_src, col_ov_pri = st.columns([1, 1.5, 1, 1])
+        with col_ov_cat1:
+            manual_category = st.selectbox(
+                "Strategic Category",
+                ["Target", "Stretch", "Opportunistic", "Practice", "Fallback"],
+                index=0,
+                help="Select strategic category for this role."
+            )
+        with col_ov_cat2:
+            st.caption(f"{CATEGORY_ICONS.get(manual_category, '')} **{manual_category}**: *{APPLICATION_CATEGORIES[manual_category]}*")
+        with col_ov_src:
+            manual_applied_via = st.selectbox(
+                "Applied Via",
+                sources_list,
+                index=0,
+                help="Where you applied to this job."
+            )
+        with col_ov_pri:
+            manual_priority = st.selectbox(
+                "Priority",
+                priorities_list,
+                index=0,
+                help="Priority level for this application."
+            )
+
     # 2. Optional Application Screening Questions & Answers
     with st.expander("📝 Application Screening Questions & Custom Answers (Optional)", expanded=False):
         st.caption("Optionally record questions and answers requested on this application. When provided, they are saved into a dedicated 'Screening Questions' Google Doc in your Drive folder and logged into your reusable master Q&A library.")
@@ -630,6 +663,8 @@ with tab1:
 
             # 7. Save Opportunity to Google Sheets (Raw Ingestion & Screening QA)
             tot_tokens = getattr(llm_adapter, "last_telemetry_tokens", 0) + getattr(llm_adapter, "last_report_tokens", 0)
+            final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
+            now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             job_posting = JobPosting(
                 opportunity_id=opp_id,
                 company_name=final_company,
@@ -637,6 +672,10 @@ with tab1:
                 title_family=final_family,
                 raw_description=jd_text,
                 source_url=final_url,
+                category=manual_category,
+                applied_via=manual_applied_via,
+                priority=manual_priority,
+                stage_history=[{"stage": final_status, "entered_at": now_iso}],
                 required_skills=req_skills,
                 preferred_skills=pref_skills,
                 selected_resume_name=resume_name,
@@ -657,6 +696,10 @@ with tab1:
                 "title": final_title,
                 "family": final_family,
                 "fit_eval": fit_eval,
+                "category": manual_category,
+                "applied_via": manual_applied_via,
+                "priority": manual_priority,
+                "stage_history": job_posting.stage_history,
                 "selected_resume": selected_resume,
                 "resume_name": resume_name,
                 "resume_link": resume_link,
@@ -1016,15 +1059,83 @@ with tab2:
                 "Opportunity ID": "demo-1",
                 "Company Name": "Planful",
                 "Job Title": "Sales Operations Analyst",
-                "Status": "Processed",
+                "Status": "Application Rejected",
+                "Category": "Target",
+                "Applied Via": "LinkedIn",
+                "Priority": "High",
+                "Stage History": [
+                    {"stage": "Processed", "entered_at": "2026-09-22T08:14:00"},
+                    {"stage": "Applied", "entered_at": "2026-09-22T08:31:00"},
+                    {"stage": "Application Rejected", "entered_at": "2026-09-24T14:07:00"}
+                ],
+                "stage_history": [
+                    {"stage": "Processed", "entered_at": "2026-09-22T08:14:00"},
+                    {"stage": "Applied", "entered_at": "2026-09-22T08:31:00"},
+                    {"stage": "Application Rejected", "entered_at": "2026-09-24T14:07:00"}
+                ],
                 "Target Pay Range": "$125,000 - $130,000",
-                "Date Created": "2026-09-19",
+                "Date Created": "2026-09-22",
                 "Selected Resume": "Matthew Hackett Revenue Operations Analyst Resume",
                 "Drive Folder Link": "https://drive.google.com",
-                "Notes": "Sarah Jenkins (Recruiter) - Initial phone screen scheduled for Tuesday."
+                "Notes": "Sarah Jenkins (Recruiter) - Position closed internally; stay in touch for Q4 headcount."
+            },
+            {
+                "Opportunity ID": "demo-2",
+                "Company Name": "Braze",
+                "Job Title": "Senior GTM Systems Architect",
+                "Status": "Recruiter Screen",
+                "Category": "Stretch",
+                "Applied Via": "Company Website",
+                "Priority": "Medium",
+                "Stage History": [
+                    {"stage": "Processed", "entered_at": "2026-09-23T10:00:00"},
+                    {"stage": "Applied", "entered_at": "2026-09-23T11:15:00"},
+                    {"stage": "Recruiter Screen", "entered_at": "2026-09-26T09:30:00"}
+                ],
+                "stage_history": [
+                    {"stage": "Processed", "entered_at": "2026-09-23T10:00:00"},
+                    {"stage": "Applied", "entered_at": "2026-09-23T11:15:00"},
+                    {"stage": "Recruiter Screen", "entered_at": "2026-09-26T09:30:00"}
+                ],
+                "Target Pay Range": "$145,000 - $160,000",
+                "Date Created": "2026-09-23",
+                "Selected Resume": "Matthew Hackett GTM Engineer Resume",
+                "Drive Folder Link": "https://drive.google.com",
+                "Notes": "Screening with talent partner Alex. Highlight multi-cloud pipeline architectures."
             }
         ]
         all_screening_qa = []
+
+    # Load dynamic pipeline configuration (Sources & Priorities)
+    pipeline_cfg = PipelineConfigService.load_config()
+    available_sources = pipeline_cfg.get("sources", DEFAULT_APPLICATION_SOURCES)
+    available_priorities = pipeline_cfg.get("priorities", DEFAULT_PRIORITIES)
+
+    # Configuration Manager Expander for Sources & Priorities
+    with st.expander("⚙️ Configure Pipeline Attributes (Sources & Priorities)", expanded=False):
+        st.caption("Customize where you apply from and your priority tiers. Additions persist and appear across all dropdowns.")
+        cfg_c1, cfg_c2 = st.columns(2)
+        with cfg_c1:
+            st.markdown("###### 🌐 Application Sources / Platforms")
+            st.caption(f"Current: {', '.join(available_sources)}")
+            with st.form("cfg_add_source_form", clear_on_submit=True):
+                new_src_name = st.text_input("Add Source", placeholder="e.g. Wellfound, Otta, Referral...")
+                if st.form_submit_button("➕ Save New Source"):
+                    if new_src_name.strip():
+                        PipelineConfigService.add_source(new_src_name.strip())
+                        st.success(f"Added source: '{new_src_name.strip()}'")
+                        st.rerun()
+
+        with cfg_c2:
+            st.markdown("###### 🎯 Priority Tiers")
+            st.caption(f"Current: {', '.join(available_priorities)}")
+            with st.form("cfg_add_priority_form", clear_on_submit=True):
+                new_pri_name = st.text_input("Add Priority Level", placeholder="e.g. Critical, Dream, Tier 1...")
+                if st.form_submit_button("➕ Save New Priority"):
+                    if new_pri_name.strip():
+                        PipelineConfigService.add_priority(new_pri_name.strip())
+                        st.success(f"Added priority: '{new_pri_name.strip()}'")
+                        st.rerun()
 
     # Map screening QA by opportunity_id in-memory (0 extra Sheets API calls)
     opp_qa_map = {}
@@ -1046,18 +1157,78 @@ with tab2:
         stat_col3.metric("Active Interviewing", interviewing_count)
         stat_col4.metric("Flagged / Disqualified", flagged_count)
 
-        # Search / Filter Bar
-        search_query = st.text_input("🔍 Search Applications by Company, Role, or Status", placeholder="e.g. Planful, Analyst, Recruiter Screen...")
+        # Strategic Category Breakdown Bar
+        cat_counts = {
+            "Target": sum(1 for o in opportunities if str(o.get("Category", "")).strip() == "Target"),
+            "Stretch": sum(1 for o in opportunities if str(o.get("Category", "")).strip() == "Stretch"),
+            "Opportunistic": sum(1 for o in opportunities if str(o.get("Category", "")).strip() == "Opportunistic"),
+            "Practice": sum(1 for o in opportunities if str(o.get("Category", "")).strip() == "Practice"),
+            "Fallback": sum(1 for o in opportunities if str(o.get("Category", "")).strip() == "Fallback"),
+            "Unassigned": sum(1 for o in opportunities if str(o.get("Category", "")).strip() not in APPLICATION_CATEGORIES)
+        }
+        st.markdown(
+            f"<div style='margin-bottom: 12px; font-size: 0.86rem; color: #94A3B8; background: #1E293B; padding: 7px 14px; border-radius: 8px; border: 1px solid #334155;'>"
+            f"<span style='color: #F8FAFC; font-weight: 600;'>Strategic Categories:</span> &nbsp; "
+            f"🎯 <b>Target:</b> {cat_counts['Target']} &nbsp;|&nbsp; "
+            f"🚀 <b>Stretch:</b> {cat_counts['Stretch']} &nbsp;|&nbsp; "
+            f"💡 <b>Opportunistic:</b> {cat_counts['Opportunistic']} &nbsp;|&nbsp; "
+            f"🥊 <b>Practice:</b> {cat_counts['Practice']} &nbsp;|&nbsp; "
+            f"🛡️ <b>Fallback:</b> {cat_counts['Fallback']} &nbsp;|&nbsp; "
+            f"⚪ <b>Unassigned:</b> {cat_counts['Unassigned']}"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+        # Multi-attribute Search & Filter Bar
+        col_search, col_cat_filt, col_pri_filt, col_src_filt = st.columns([2, 1, 1, 1])
+        with col_search:
+            search_query = st.text_input("🔍 Search Applications", placeholder="e.g. Planful, Analyst, Recruiter Screen...")
+        with col_cat_filt:
+            cat_filter = st.selectbox(
+                "Filter Category",
+                ["All Categories", "Target", "Stretch", "Opportunistic", "Practice", "Fallback", "Unassigned"]
+            )
+        with col_pri_filt:
+            pri_filter = st.selectbox(
+                "Filter Priority",
+                ["All Priorities"] + list(available_priorities) + ["Unspecified"]
+            )
+        with col_src_filt:
+            src_filter = st.selectbox(
+                "Filter Source",
+                ["All Sources"] + list(available_sources) + ["Unspecified"]
+            )
 
         filtered_opps = opportunities
+        if cat_filter != "All Categories":
+            if cat_filter == "Unassigned":
+                filtered_opps = [o for o in filtered_opps if str(o.get("Category", "")).strip() not in APPLICATION_CATEGORIES]
+            else:
+                filtered_opps = [o for o in filtered_opps if str(o.get("Category", "")).strip() == cat_filter]
+
+        if pri_filter != "All Priorities":
+            if pri_filter == "Unspecified":
+                filtered_opps = [o for o in filtered_opps if not o.get("Priority") or o.get("Priority") == "Not Specified"]
+            else:
+                filtered_opps = [o for o in filtered_opps if str(o.get("Priority", "")).strip() == pri_filter]
+
+        if src_filter != "All Sources":
+            if src_filter == "Unspecified":
+                filtered_opps = [o for o in filtered_opps if not o.get("Applied Via") or o.get("Applied Via") == "Not Specified"]
+            else:
+                filtered_opps = [o for o in filtered_opps if str(o.get("Applied Via", "")).strip() == src_filter]
+
         if search_query:
             sq = search_query.lower()
             filtered_opps = [
-                o for o in opportunities
+                o for o in filtered_opps
                 if sq in str(o.get("Company Name", "")).lower()
                 or sq in str(o.get("Job Title", "")).lower()
                 or sq in str(o.get("Status", "")).lower()
                 or sq in str(o.get("Notes", "")).lower()
+                or sq in str(o.get("Category", "")).lower()
+                or sq in str(o.get("Priority", "")).lower()
+                or sq in str(o.get("Applied Via", "")).lower()
             ]
 
         st.markdown(f"Showing **{len(filtered_opps)}** opportunities (newest first):")
@@ -1067,11 +1238,41 @@ with tab2:
             comp = opp.get("Company Name", "Unknown Company")
             title = opp.get("Job Title", "Unknown Role")
             curr_status = opp.get("Status", "Pending")
+
+            curr_cat = str(opp.get("Category") or "").strip()
+            cat_display = curr_cat if curr_cat in APPLICATION_CATEGORIES else "Unassigned"
+            cat_ico = CATEGORY_ICONS.get(cat_display, "⚪")
+            cat_badge = f"  |  *Category:* `{cat_ico} {cat_display}`" if cat_display != "Unassigned" else ""
+
+            curr_pri = str(opp.get("Priority") or opp.get("priority") or "").strip()
+            pri_ico = PRIORITY_ICONS.get(curr_pri, "⚡")
+            pri_badge = f"  |  *Priority:* `{pri_ico} {curr_pri}`" if curr_pri and curr_pri != "Not Specified" else ""
+
+            curr_src = str(opp.get("Applied Via") or opp.get("applied_via") or "").strip()
+            src_ico = SOURCE_ICONS.get(curr_src, "🌐")
+            src_badge = f"  |  *Via:* `{src_ico} {curr_src}`" if curr_src and curr_src != "Not Specified" else ""
+
             target_pay = opp.get("Target Pay Range", "N/A")
             opp_id = opp.get("Opportunity ID", f"row-{idx}")
             drive_link = opp.get("Drive Folder Link", "")
             notes = opp.get("Notes", "")
             date_added = opp.get("Date Created", "")
+
+            # Parse stage history from opp
+            raw_sh = opp.get("stage_history") or opp.get("Stage History") or []
+            if isinstance(raw_sh, str) and raw_sh.strip():
+                try:
+                    stage_hist = json.loads(raw_sh)
+                except Exception:
+                    stage_hist = []
+            elif isinstance(raw_sh, list):
+                stage_hist = raw_sh
+            else:
+                stage_hist = []
+
+            # If legacy record has empty history, seed initial entry
+            if not stage_hist and curr_status:
+                stage_hist = [{"stage": curr_status, "entered_at": date_added or datetime.now().strftime("%Y-%m-%d")}]
 
             # Status Icon
             if "Offer" in curr_status:
@@ -1086,13 +1287,28 @@ with tab2:
                 s_icon = "📋"
 
             is_card_open = (st.session_state.get("active_opp_card") == opp_id)
-            with st.expander(f"{s_icon} **{comp}** — {title}  |  *Status:* `{curr_status}`  |  *Pay:* `{target_pay}`", expanded=is_card_open):
+            with st.expander(f"{s_icon} **{comp}** — {title}  |  *Status:* `{curr_status}`{cat_badge}{pri_badge}{src_badge}  |  *Pay:* `{target_pay}`", expanded=is_card_open):
                 c_card1, c_card2 = st.columns([1, 1])
 
                 with c_card1:
                     st.write(f"**Date Created**: {date_added or 'Recent'}")
                     st.markdown(f"**Target Pay**: `{target_pay or 'Not calculated'}`")
                     st.write(f"**Selected Resume**: {opp.get('Selected Resume') or 'None'}")
+                    if cat_display != "Unassigned":
+                        st.markdown(f"**Strategic Category**: {cat_ico} **{cat_display}**")
+                    else:
+                        st.markdown("**Strategic Category**: *⚪ Unassigned*")
+
+                    if curr_pri and curr_pri != "Not Specified":
+                        st.markdown(f"**Priority**: {pri_ico} **{curr_pri}**")
+                    else:
+                        st.markdown("**Priority**: *⚪ Not Specified*")
+
+                    if curr_src and curr_src != "Not Specified":
+                        st.markdown(f"**Applied Via**: {src_ico} `{curr_src}`")
+                    else:
+                        st.markdown("**Applied Via**: *⚪ Not Specified*")
+
                     if drive_link:
                         st.markdown(f"[📁 Open Application Drive Folder]({drive_link})")
                     screening_doc = opp.get("Screening Doc Link")
@@ -1101,47 +1317,173 @@ with tab2:
                     if opp.get("Fit Warning"):
                         st.caption(f"🛡️ Guardrail Note: {opp.get('Fit Warning')}")
 
+                    # Stage Progression History Timeline
+                    st.markdown("---")
+                    st.markdown("###### ⏱️ Application Stage History")
+                    if stage_hist:
+                        timeline_html = '<div style="margin-top: 6px; padding-left: 2px;">'
+                        for h_idx, h in enumerate(stage_hist):
+                            s_name = h.get("stage", "")
+                            e_time = h.get("entered_at", "")
+                            disp_time = e_time.replace("T", " ") if e_time else ""
+                            is_latest = (h_idx == len(stage_hist) - 1)
+                            bullet = "🟢" if is_latest else "⚪"
+                            badge_style = "background: #065F46; color: #A7F3D0; font-weight: 600;" if is_latest else "background: #1E293B; color: #94A3B8;"
+                            badge = f'<span style="{badge_style} padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 6px;">{s_name}</span>'
+                            timeline_html += f'<div style="margin-bottom: 6px; display: flex; align-items: center;">{bullet} &nbsp;<span style="font-family: monospace; font-size: 0.78rem; color: #94A3B8; margin-right: 8px;">{disp_time}</span> {badge}</div>'
+                        timeline_html += '</div>'
+                        st.markdown(timeline_html, unsafe_allow_html=True)
+                    else:
+                        st.caption("No prior stage transitions recorded.")
+
                 with c_card2:
-                    st.markdown("##### Update Stage & Recruiter Contact:")
+                    st.markdown("##### Update Application Details & Recruiter Notes:")
                     stage_options = [
-                        "Pending", "Processed", "Applied",
+                        "Pending", "Processed", "Applied", "Application Rejected",
                         "Recruiter Screen", "Hiring Manager",
                         "Technical Screen", "Final Round", "Offer",
                         "Archived / Rejected"
                     ]
                     current_idx = stage_options.index(curr_status) if curr_status in stage_options else 1
 
-                    new_stage = st.selectbox(
-                        "Interview Stage",
-                        stage_options,
-                        index=current_idx,
-                        key=f"stage_sel_{opp_id}_{idx}"
-                    )
-                    new_notes = st.text_area(
-                        "Recruiter Contacts & Interview Notes",
-                        value=notes,
-                        height=70,
-                        placeholder="e.g. Recruiter Sarah (sjenkins@planful.com). Focus on ARR metrics.",
-                        key=f"notes_ta_{opp_id}_{idx}"
-                    )
+                    with st.form(key=f"edit_card_form_{opp_id}_{idx}"):
+                        col_stage_sel, col_cat_sel = st.columns([1, 1])
+                        with col_stage_sel:
+                            new_stage = st.selectbox(
+                                "Interview Stage",
+                                stage_options,
+                                index=current_idx,
+                                key=f"stage_sel_{opp_id}_{idx}"
+                            )
+                        with col_cat_sel:
+                            cat_options = ["Unassigned", "Target", "Stretch", "Opportunistic", "Practice", "Fallback"]
+                            current_cat_idx = cat_options.index(cat_display) if cat_display in cat_options else 0
+                            new_cat = st.selectbox(
+                                "Application Category",
+                                cat_options,
+                                index=current_cat_idx,
+                                key=f"cat_sel_{opp_id}_{idx}",
+                                help="Primary strategic category for this role."
+                            )
 
-                    if st.button("💾 Save Status & Notes", key=f"save_btn_{opp_id}_{idx}"):
+                        col_src_sel, col_pri_sel = st.columns([1, 1])
+                        with col_src_sel:
+                            src_options = ["Not Specified"] + [s for s in available_sources if s != "Not Specified"]
+                            src_cur_idx = src_options.index(curr_src) if curr_src in src_options else 0
+                            sel_src = st.selectbox(
+                                "Applied Via / Platform",
+                                src_options,
+                                index=src_cur_idx,
+                                key=f"src_sel_{opp_id}_{idx}",
+                                help="Platform where you submitted your application."
+                            )
+                            custom_src_input = st.text_input(
+                                "Or Add New Source",
+                                placeholder="e.g. Wellfound, Otta...",
+                                key=f"c_src_{opp_id}_{idx}",
+                                help="Leave blank if selecting from dropdown above."
+                            )
+
+                        with col_pri_sel:
+                            pri_options = ["Not Specified"] + [p for p in available_priorities if p != "Not Specified"]
+                            pri_cur_idx = pri_options.index(curr_pri) if curr_pri in pri_options else 0
+                            sel_pri = st.selectbox(
+                                "Priority Level",
+                                pri_options,
+                                index=pri_cur_idx,
+                                key=f"pri_sel_{opp_id}_{idx}",
+                                help="Priority level for this application."
+                            )
+                            custom_pri_input = st.text_input(
+                                "Or Add New Priority",
+                                placeholder="e.g. Critical, Dream...",
+                                key=f"c_pri_{opp_id}_{idx}",
+                                help="Leave blank if selecting from dropdown above."
+                            )
+
+                        new_notes = st.text_area(
+                            "Recruiter Contacts & Interview Notes",
+                            value=notes,
+                            height=70,
+                            placeholder="e.g. Recruiter Sarah (sjenkins@planful.com). Focus on ARR metrics.",
+                            key=f"notes_ta_{opp_id}_{idx}"
+                        )
+
+                        btn_save_details = st.form_submit_button("💾 Save Application Details", use_container_width=True)
+
+                    if btn_save_details:
                         st.session_state.active_opp_card = opp_id
                         st.session_state.active_sub_card = None
-                        if storage_adapter.is_connected:
-                            success = storage_adapter.update_opportunity_status(opp_id, new_stage, new_notes)
-                            if success:
+
+                        # Resolve Source
+                        if custom_src_input and custom_src_input.strip():
+                            final_src = custom_src_input.strip()
+                            PipelineConfigService.add_source(final_src)
+                        elif sel_src != "Not Specified":
+                            final_src = sel_src
+                        else:
+                            final_src = ""
+
+                        # Resolve Priority
+                        if custom_pri_input and custom_pri_input.strip():
+                            final_pri = custom_pri_input.strip()
+                            PipelineConfigService.add_priority(final_pri)
+                        elif sel_pri != "Not Specified":
+                            final_pri = sel_pri
+                        else:
+                            final_pri = ""
+
+                        # Resolve Category
+                        saved_cat = new_cat if new_cat != "Unassigned" else ""
+
+                        # Check if stage changed to record in stage_history
+                        now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                        updated_stage_hist = [dict(h) for h in stage_hist]
+                        if not updated_stage_hist:
+                            if curr_status:
+                                updated_stage_hist.append({"stage": curr_status, "entered_at": date_added or now_iso})
+                            if new_stage != curr_status:
+                                updated_stage_hist.append({"stage": new_stage, "entered_at": now_iso})
+                        elif new_stage != curr_status:
+                            updated_stage_hist.append({"stage": new_stage, "entered_at": now_iso})
+
+                        with st.spinner(f"Saving updates for {comp} to Google Sheets..."):
+                            if storage_adapter.is_connected:
+                                success = storage_adapter.update_opportunity_status(
+                                    opportunity_id=opp_id,
+                                    status=new_stage,
+                                    notes=new_notes,
+                                    stage_history=updated_stage_hist,
+                                    category=saved_cat,
+                                    applied_via=final_src,
+                                    priority=final_pri
+                                )
+                                if success:
+                                    opp["Status"] = new_stage
+                                    opp["Notes"] = new_notes
+                                    opp["Category"] = saved_cat
+                                    opp["Applied Via"] = final_src
+                                    opp["applied_via"] = final_src
+                                    opp["Priority"] = final_pri
+                                    opp["priority"] = final_pri
+                                    opp["Stage History"] = updated_stage_hist
+                                    opp["stage_history"] = updated_stage_hist
+                                    st.toast(f"✅ Successfully updated {comp} in Google Sheets!", icon="🚀")
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to update status in Google Sheets.")
+                            else:
                                 opp["Status"] = new_stage
                                 opp["Notes"] = new_notes
-                                st.success(f"Updated {comp} to '{new_stage}' in Google Sheets!")
+                                opp["Category"] = saved_cat
+                                opp["Applied Via"] = final_src
+                                opp["applied_via"] = final_src
+                                opp["Priority"] = final_pri
+                                opp["priority"] = final_pri
+                                opp["Stage History"] = updated_stage_hist
+                                opp["stage_history"] = updated_stage_hist
+                                st.toast(f"Simulated update for {comp} (Demo Mode).", icon="ℹ️")
                                 st.rerun()
-                            else:
-                                st.error("Failed to update status in Google Sheets.")
-                        else:
-                            opp["Status"] = new_stage
-                            opp["Notes"] = new_notes
-                            st.info(f"Simulated update: {comp} set to '{new_stage}' (Demo Mode).")
-                            st.rerun()
 
                 # Section: Targeted Behavioral Story Cue Cards for this Role
                 app_cues = StoryBankService.suggest_story_cue_cards(

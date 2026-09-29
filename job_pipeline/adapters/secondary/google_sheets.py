@@ -1,6 +1,7 @@
 import os
 import time
 import uuid
+import json
 import datetime
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
@@ -109,7 +110,8 @@ class GoogleSheetsAdapter(JobStoragePort):
             # Ensure required columns exist
             required_cols = [
                 "Opportunity ID", "Tokens", "Fit Warning", "Selected Resume",
-                "Target Pay Range", "Drive Folder Link", "Screening Doc Link", "Screening QA Count"
+                "Target Pay Range", "Drive Folder Link", "Screening Doc Link", "Screening QA Count",
+                "Stage History", "Category", "Applied Via", "Priority"
             ]
             for col in required_cols:
                 if col not in headers:
@@ -162,6 +164,17 @@ class GoogleSheetsAdapter(JobStoragePort):
 
             final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
             queue("Status", final_status)
+            if job.category:
+                queue("Category", job.category)
+            if job.applied_via:
+                queue("Applied Via", job.applied_via)
+            if job.priority:
+                queue("Priority", job.priority)
+            if job.stage_history:
+                queue("Stage History", json.dumps(job.stage_history))
+            else:
+                initial_stage_hist = [{"stage": final_status, "entered_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}]
+                queue("Stage History", json.dumps(initial_stage_hist))
             queue("Last Modified", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
             ingest_ws.update_cells(cell_updates)
@@ -287,22 +300,69 @@ class GoogleSheetsAdapter(JobStoragePort):
             return [r for r in records if str(r.get("opportunity_id", "")).strip() == opportunity_id]
         return records
 
-    def update_opportunity_status(self, opportunity_id: str, status: str, notes: Optional[str] = None) -> bool:
+    def update_opportunity_status(
+        self,
+        opportunity_id: str,
+        status: str,
+        notes: Optional[str] = None,
+        stage_history: Optional[List[Dict[str, str]]] = None,
+        category: Optional[str] = None,
+        applied_via: Optional[str] = None,
+        priority: Optional[str] = None
+    ) -> bool:
         if not self.is_connected:
             return False
         try:
             ingest_ws = self._spreadsheet.worksheet("Raw Ingestion")
             records = ingest_ws.get_all_records()
             headers = [h.strip() for h in ingest_ws.row_values(1)]
+
+            # Ensure Stage History, Category, Applied Via, Priority columns exist in header
+            for col in ["Stage History", "Category", "Applied Via", "Priority"]:
+                if col not in headers:
+                    ingest_ws.update_cell(1, len(headers) + 1, col)
+                    headers.append(col)
+
             status_col = headers.index("Status") + 1 if "Status" in headers else 7
             notes_col = headers.index("Notes") + 1 if "Notes" in headers else None
+            stage_hist_col = headers.index("Stage History") + 1 if "Stage History" in headers else None
+            cat_col = headers.index("Category") + 1 if "Category" in headers else None
+            applied_via_col = headers.index("Applied Via") + 1 if "Applied Via" in headers else None
+            priority_col = headers.index("Priority") + 1 if "Priority" in headers else None
 
             for idx, rec in enumerate(records, start=2):
                 if str(rec.get("Opportunity ID", "")).strip() == opportunity_id:
-                    ingest_ws.update_cell(idx, status_col, status)
+                    cell_updates = [gspread.Cell(row=idx, col=status_col, value=status)]
                     if notes is not None and notes_col:
-                        ingest_ws.update_cell(idx, notes_col, notes)
-                    self._cached_opportunities = None
+                        cell_updates.append(gspread.Cell(row=idx, col=notes_col, value=notes))
+                    if stage_history is not None and stage_hist_col:
+                        cell_updates.append(gspread.Cell(row=idx, col=stage_hist_col, value=json.dumps(stage_history)))
+                    if category is not None and cat_col:
+                        cell_updates.append(gspread.Cell(row=idx, col=cat_col, value=category))
+                    if applied_via is not None and applied_via_col:
+                        cell_updates.append(gspread.Cell(row=idx, col=applied_via_col, value=applied_via))
+                    if priority is not None and priority_col:
+                        cell_updates.append(gspread.Cell(row=idx, col=priority_col, value=priority))
+                    ingest_ws.update_cells(cell_updates)
+                    if self._cached_opportunities is not None:
+                        for item in self._cached_opportunities:
+                            if str(item.get("Opportunity ID", "")).strip() == opportunity_id:
+                                item["Status"] = status
+                                if notes is not None:
+                                    item["Notes"] = notes
+                                if stage_history is not None:
+                                    item["Stage History"] = stage_history
+                                    item["stage_history"] = stage_history
+                                if category is not None:
+                                    item["Category"] = category
+                                if applied_via is not None:
+                                    item["Applied Via"] = applied_via
+                                    item["applied_via"] = applied_via
+                                if priority is not None:
+                                    item["Priority"] = priority
+                                    item["priority"] = priority
+                                break
+                        self._opportunities_cache_time = time.time()
                     return True
             return False
         except Exception as e:
@@ -371,6 +431,20 @@ class GoogleSheetsAdapter(JobStoragePort):
         try:
             worksheet = self._spreadsheet.worksheet("Raw Ingestion")
             records = worksheet.get_all_records()
+            for r in records:
+                sh = r.get("Stage History")
+                parsed_sh = []
+                if isinstance(sh, list):
+                    parsed_sh = sh
+                elif isinstance(sh, str) and sh.strip():
+                    try:
+                        parsed_sh = json.loads(sh)
+                        if not isinstance(parsed_sh, list):
+                            parsed_sh = []
+                    except Exception:
+                        parsed_sh = []
+                r["stage_history"] = parsed_sh
+                r["Stage History"] = parsed_sh
             self._cached_opportunities = records
             self._opportunities_cache_time = now
             return records

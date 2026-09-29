@@ -15,7 +15,16 @@ class JobStoragePort(ABC):
         pass
 
     @abstractmethod
-    def update_opportunity_status(self, opportunity_id: str, status: str, notes: Optional[str] = None) -> bool:
+    def update_opportunity_status(
+        self,
+        opportunity_id: str,
+        status: str,
+        notes: Optional[str] = None,
+        stage_history: Optional[List[Dict[str, str]]] = None,
+        category: Optional[str] = None,
+        applied_via: Optional[str] = None,
+        priority: Optional[str] = None
+    ) -> bool:
         pass
 
     @abstractmethod

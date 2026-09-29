@@ -24,6 +24,60 @@ SCREENING_CATEGORIES: List[str] = [
 ]
 
 
+APPLICATION_CATEGORIES: Dict[str, str] = {
+    "Target": "Strong fit and genuinely desirable. This is the type of role your search is primarily designed to produce.",
+    "Stretch": "Desirable, but you have a meaningful experience, seniority, domain, or tooling gap.",
+    "Opportunistic": "Not part of the normal search profile, but something about the role makes it a compelling fit. This is particularly useful for the unexpected-title searches you're doing.",
+    "Practice": "Plausible enough to apply to, but primarily useful for gaining application/interview reps or testing positioning.",
+    "Fallback": "Acceptable and worth taking under the right circumstances, but below your preferred role/compensation/trajectory.",
+}
+
+CATEGORY_ICONS: Dict[str, str] = {
+    "Target": "🎯",
+    "Stretch": "🚀",
+    "Opportunistic": "💡",
+    "Practice": "🥊",
+    "Fallback": "🛡️",
+    "Unassigned": "⚪"
+}
+
+APPLICATION_STAGES: List[str] = [
+    "Pending", "Processed", "Applied", "Application Rejected",
+    "Recruiter Screen", "Hiring Manager",
+    "Technical Screen", "Final Round", "Offer",
+    "Archived / Rejected"
+]
+
+DEFAULT_APPLICATION_SOURCES: List[str] = [
+    "LinkedIn",
+    "Indeed",
+    "ZipRecruiter",
+    "Company Website"
+]
+
+DEFAULT_PRIORITIES: List[str] = [
+    "High",
+    "Medium",
+    "Low"
+]
+
+PRIORITY_ICONS: Dict[str, str] = {
+    "High": "🔥",
+    "Medium": "⚡",
+    "Low": "🌱",
+    "Critical": "🚨",
+    "Urgent": "⚡",
+    "Normal": "🔹"
+}
+
+SOURCE_ICONS: Dict[str, str] = {
+    "LinkedIn": "🔗",
+    "Indeed": "🔎",
+    "ZipRecruiter": "💼",
+    "Company Website": "🌐"
+}
+
+
 SCREENING_ARCHETYPES: Dict[str, str] = {
     "COMPENSATION": "Compensation & Salary",
     "WORK_AUTHORIZATION": "Work Authorization & Sponsorship",
@@ -128,6 +182,10 @@ class JobPosting(BaseModel):
     source_url: Optional[str] = None
     date_created: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
     status: str = "Pending"
+    category: Optional[str] = None
+    applied_via: Optional[str] = None
+    priority: Optional[str] = None
+    stage_history: List[Dict[str, str]] = Field(default_factory=list)
     required_skills: List[str] = Field(default_factory=list)
     preferred_skills: List[str] = Field(default_factory=list)
     fit_evaluation: Optional[FitEvaluation] = None

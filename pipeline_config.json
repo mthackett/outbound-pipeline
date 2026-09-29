@@ -1,0 +1,13 @@
+{
+  "sources": [
+    "LinkedIn",
+    "Indeed",
+    "ZipRecruiter",
+    "Company Website"
+  ],
+  "priorities": [
+    "High",
+    "Medium",
+    "Low"
+  ]
+}

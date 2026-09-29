@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 from job_pipeline.domain.models import (
     TargetPayBounds, FitEvaluation, CandidateProfile, ScreeningQA, QuickLink,
-    ScreeningMatchResult
+    ScreeningMatchResult, DEFAULT_APPLICATION_SOURCES, DEFAULT_PRIORITIES
 )
 from job_pipeline.domain.screening_intelligence import ScreeningIntelligenceService
 from job_pipeline.domain.story_bank import StoryBankService
@@ -474,4 +474,80 @@ class QuickLinksService:
         for l in links:
             lines.append(f"{l.title}: {l.url}")
         return "\n".join(lines)
+
+
+class PipelineConfigService:
+    """Domain service for managing configurable application sources and priority levels."""
+
+    DEFAULT_CONFIG_PATH = "pipeline_config.json"
+
+    @classmethod
+    def load_config(cls, filepath: Optional[str] = None) -> Dict[str, List[str]]:
+        path = Path(filepath or os.environ.get("PIPELINE_CONFIG_PATH", cls.DEFAULT_CONFIG_PATH))
+        defaults = {
+            "sources": list(DEFAULT_APPLICATION_SOURCES),
+            "priorities": list(DEFAULT_PRIORITIES)
+        }
+        if not path.exists():
+            cls.save_config(defaults, str(path))
+            return defaults
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                sources = data.get("sources")
+                priorities = data.get("priorities")
+                return {
+                    "sources": sources if isinstance(sources, list) and sources else list(DEFAULT_APPLICATION_SOURCES),
+                    "priorities": priorities if isinstance(priorities, list) and priorities else list(DEFAULT_PRIORITIES)
+                }
+            return defaults
+        except Exception:
+            return defaults
+
+    @classmethod
+    def save_config(cls, config: Dict[str, List[str]], filepath: Optional[str] = None) -> bool:
+        path = Path(filepath or os.environ.get("PIPELINE_CONFIG_PATH", cls.DEFAULT_CONFIG_PATH))
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def add_source(cls, new_source: str, filepath: Optional[str] = None) -> List[str]:
+        cfg = cls.load_config(filepath)
+        s = new_source.strip()
+        if s and s not in cfg["sources"]:
+            cfg["sources"].append(s)
+            cls.save_config(cfg, filepath)
+        return cfg["sources"]
+
+    @classmethod
+    def remove_source(cls, source_to_remove: str, filepath: Optional[str] = None) -> List[str]:
+        cfg = cls.load_config(filepath)
+        if source_to_remove in cfg["sources"]:
+            cfg["sources"].remove(source_to_remove)
+            cls.save_config(cfg, filepath)
+        return cfg["sources"]
+
+    @classmethod
+    def add_priority(cls, new_priority: str, filepath: Optional[str] = None) -> List[str]:
+        cfg = cls.load_config(filepath)
+        p = new_priority.strip()
+        if p and p not in cfg["priorities"]:
+            cfg["priorities"].append(p)
+            cls.save_config(cfg, filepath)
+        return cfg["priorities"]
+
+    @classmethod
+    def remove_priority(cls, priority_to_remove: str, filepath: Optional[str] = None) -> List[str]:
+        cfg = cls.load_config(filepath)
+        if priority_to_remove in cfg["priorities"]:
+            cfg["priorities"].remove(priority_to_remove)
+            cls.save_config(cfg, filepath)
+        return cfg["priorities"]
+
 

@@ -29,7 +29,30 @@ class MockJobStorageAdapter(JobStoragePort):
         print(f"MOCK STORAGE: Saved job '{job.company_name} - {job.job_title}'")
         return True
 
-    def update_opportunity_status(self, opportunity_id: str, status: str, notes: Optional[str] = None) -> bool:
+    def update_opportunity_status(
+        self,
+        opportunity_id: str,
+        status: str,
+        notes: Optional[str] = None,
+        stage_history: Optional[List[Dict[str, str]]] = None,
+        category: Optional[str] = None,
+        applied_via: Optional[str] = None,
+        priority: Optional[str] = None
+    ) -> bool:
+        for item in self.saved_jobs:
+            j = item["job"]
+            if j.opportunity_id == opportunity_id:
+                j.status = status
+                if stage_history is not None:
+                    j.stage_history = stage_history
+                if category is not None:
+                    j.category = category
+                if applied_via is not None:
+                    j.applied_via = applied_via
+                if priority is not None:
+                    j.priority = priority
+                item["notes"] = notes
+                return True
         return True
 
     def fetch_all_opportunities(self) -> List[Dict[str, Any]]:
@@ -37,11 +60,18 @@ class MockJobStorageAdapter(JobStoragePort):
         for item in self.saved_jobs:
             j = item["job"]
             fe = item["fit_eval"]
+            sh = j.stage_history or [{"stage": j.status, "entered_at": "2026-09-22T08:14:00"}]
             results.append({
                 "Company Name": j.company_name,
                 "Job Title": j.job_title,
                 "Date Created": j.date_created,
                 "Status": j.status,
+                "Category": j.category or "Target",
+                "Applied Via": j.applied_via or "LinkedIn",
+                "Priority": j.priority or "High",
+                "Stage History": sh,
+                "stage_history": sh,
+                "Notes": item.get("notes", ""),
                 "Opportunity ID": j.opportunity_id,
                 "Target Pay Range": fe.pay_bounds.display_range,
                 "Fit Warning": fe.reasoning,
