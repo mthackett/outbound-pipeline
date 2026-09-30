@@ -56,10 +56,12 @@ class GoogleSheetsAdapter(JobStoragePort):
             log_warn("GOOGLE_SPREADSHEET_ID is not configured.")
             return
 
-        creds, auth_type = get_google_credentials(credentials_path=self.credentials_path)
-        self.auth_type = auth_type
+        from job_pipeline.adapters.secondary.google_auth import get_google_auth_context
+        self.auth_context = get_google_auth_context(credentials_path=self.credentials_path)
+        self.auth_type = self.auth_context.mode
+        creds = self.auth_context.credentials
 
-        if creds is None:
+        if not self.auth_context.can_access_configured_sheet:
             log_warn(f"No valid Google credentials found (checked OAuth token.json and '{self.credentials_path}'). Google Sheets adapter disabled.")
             return
 
@@ -68,7 +70,7 @@ class GoogleSheetsAdapter(JobStoragePort):
                 self._client = gspread.authorize(creds)
                 self._client.set_timeout(25)
                 self._spreadsheet = self._client.open_by_key(self.spreadsheet_id)
-            log_sheets(f"Google Sheets Adapter connected (Title: '{self._spreadsheet.title}', Auth Type: {self.auth_type}).")
+            log_sheets(f"Google Sheets Adapter connected (Title: '{self._spreadsheet.title}', Auth Mode: {self.auth_type}).")
         except Exception as e:
             log_warn(f"Could not connect to Google Sheets: {e}")
 
@@ -358,7 +360,11 @@ class GoogleSheetsAdapter(JobStoragePort):
         staffing_agency: Optional[str] = None,
         client_company: Optional[str] = None,
         extension_possible: Optional[bool] = None,
-        fte_conversion_possible: Optional[bool] = None
+        fte_conversion_possible: Optional[bool] = None,
+        company_name: Optional[str] = None,
+        job_title: Optional[str] = None,
+        target_pay_range: Optional[str] = None,
+        source_url: Optional[str] = None
     ) -> bool:
         if not self.is_connected:
             return False
@@ -404,6 +410,10 @@ class GoogleSheetsAdapter(JobStoragePort):
             cc_col = headers.index("Client Company") + 1 if "Client Company" in headers else None
             ext_col = headers.index("Extension Possible") + 1 if "Extension Possible" in headers else None
             fte_col = headers.index("FTE Conversion") + 1 if "FTE Conversion" in headers else None
+            comp_col = headers.index("Company Name") + 1 if "Company Name" in headers else None
+            title_col = headers.index("Job Title") + 1 if "Job Title" in headers else None
+            pay_col = headers.index("Target Pay Range") + 1 if "Target Pay Range" in headers else None
+            url_col = headers.index("Source URL") + 1 if "Source URL" in headers else None
 
             # Fast row lookup by Opportunity ID column values instead of downloading entire sheet
             id_column_values = ingest_ws.col_values(opp_id_col)
@@ -417,6 +427,14 @@ class GoogleSheetsAdapter(JobStoragePort):
                 idx = target_row
                 print(f"INFO: Updating opportunity '{opportunity_id}' in Google Sheets (Row {idx})...", flush=True)
                 cell_updates = [gspread.Cell(row=idx, col=status_col, value=status)]
+                if company_name is not None and comp_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=comp_col, value=company_name))
+                if job_title is not None and title_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=title_col, value=job_title))
+                if target_pay_range is not None and pay_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=pay_col, value=target_pay_range))
+                if source_url is not None and url_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=url_col, value=source_url))
                 if notes is not None and notes_col:
                     cell_updates.append(gspread.Cell(row=idx, col=notes_col, value=notes))
                 if stage_history is not None and stage_hist_col:
@@ -451,6 +469,14 @@ class GoogleSheetsAdapter(JobStoragePort):
                     for item in self._cached_opportunities:
                         if str(item.get("Opportunity ID", "")).strip() == opportunity_id:
                             item["Status"] = status
+                            if company_name is not None:
+                                item["Company Name"] = company_name
+                            if job_title is not None:
+                                item["Job Title"] = job_title
+                            if target_pay_range is not None:
+                                item["Target Pay Range"] = target_pay_range
+                            if source_url is not None:
+                                item["Source URL"] = source_url
                             if notes is not None:
                                 item["Notes"] = notes
                             if stage_history is not None:

@@ -9,6 +9,10 @@ from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
 
+"""
+Job Application Intelligence & Workflow System
+ A production-style application I built to manage a high-volume outbound workflow, preserve contextual knowledge across interactions, automate structured data capture, and analyze pipeline performance.  
+"""
 # Ensure project root is in sys.path for Streamlit
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
 if str(ROOT_DIR) not in sys.path:
@@ -492,10 +496,40 @@ if drive_root_id:
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔌 Connection Status")
+
+drive_auth_ctx = getattr(drive_adapter, "auth_context", None)
+if drive_auth_ctx:
+    if drive_auth_ctx.mode == "oauth":
+        st.sidebar.write("**Google Auth**: 🟢 User OAuth (Full Access)")
+    elif drive_auth_ctx.mode == "service_account":
+        st.sidebar.write("**Google Auth**: 🟡 Service Account (Reduced: Sheets only)")
+    else:
+        st.sidebar.write("**Google Auth**: 🔴 Unavailable")
+else:
+    st.sidebar.write(f"**Google Auth**: {'🟢 Connected' if drive_adapter.is_connected else '🔴 Offline/Demo'}")
+
 st.sidebar.write(f"**Sheets API**: {'🟢 Connected' if storage_adapter.is_connected else '🔴 Offline/Demo'}")
 st.sidebar.write(f"**Drive API**:  {'🟢 Connected' if drive_adapter.is_connected else '🔴 Offline/Demo'}")
 st.sidebar.write(f"**OpenAI API**: {'🟢 Ready' if getattr(llm_adapter, 'api_key', None) else '🔴 No API Key'}")
 st.sidebar.write(f"**Twilio**: {'🟡 Simulation (Staged)' if not twilio_adapter.is_connected else '🟢 Live'}")
+
+if drive_auth_ctx and (drive_auth_ctx.oauth_failed or drive_auth_ctx.mode == "service_account"):
+    with st.sidebar.expander("🔑 Google Re-Authentication", expanded=bool(drive_auth_ctx.oauth_failed)):
+        st.caption("OAuth token expired or revoked. Re-authenticate to restore personal Google Drive doc creation:")
+        st.code("python -m job_pipeline.setup_oauth", language="bash")
+        if st.button("🔑 Re-authorize Google OAuth", key="btn_sb_reauth", type="primary", use_container_width=True):
+            with st.spinner("Initiating Google OAuth authorization flow..."):
+                try:
+                    from job_pipeline.setup_oauth import run_oauth_flow
+                    ok, msg, info = run_oauth_flow()
+                    if ok:
+                        st.success("Google OAuth successfully authorized!")
+                        st.cache_resource.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"OAuth failed: {msg}")
+                except Exception as oa_err:
+                    st.error(f"OAuth error: {oa_err}. Please run 'python -m job_pipeline.setup_oauth' in terminal.")
 
 st.sidebar.markdown("---")
 st.sidebar.caption("Job Application Pipeline CRM v1.3")
@@ -504,6 +538,27 @@ st.sidebar.caption("Job Application Pipeline CRM v1.3")
 # Main Dashboard Header
 st.markdown('<div class="main-title">🚀 Job Application Pipeline & Apply Cockpit</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">Automated JD Ingestion · 60%–80% Target Pay · Google Drive Workspace · Best Resume Match · Google Sheets CRM</div>', unsafe_allow_html=True)
+
+# Surface Google Auth Warning if operating under reduced capability with 1-click browser sign-in button
+if drive_auth_ctx and drive_auth_ctx.warning_message:
+    col_warn_msg, col_warn_btn = st.columns([3, 1])
+    with col_warn_msg:
+        st.warning(f"⚠️ **Google Authentication Notice**: {drive_auth_ctx.warning_message}")
+    with col_warn_btn:
+        st.write("")
+        if st.button("🔑 Re-authenticate Google", key="btn_main_reauth", type="primary", use_container_width=True, help="Opens Google Sign-in in your browser to authorize Drive & Sheets"):
+            with st.spinner("Opening Google sign-in in your default browser..."):
+                try:
+                    from job_pipeline.setup_oauth import run_oauth_flow
+                    ok, msg, info = run_oauth_flow()
+                    if ok:
+                        st.success("Google OAuth authorized successfully! Reloading...")
+                        st.cache_resource.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"Sign-in failed: {msg}")
+                except Exception as oa_err:
+                    st.error(f"Authentication error: {oa_err}. You can also run 'python -m job_pipeline.setup_oauth' in terminal.")
 
 
 # Main Tabs: Focused on Ingestion, Live Pipeline CRM, Global Story Bank, and Expansion
@@ -519,6 +574,10 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # TAB 1: FAST INGESTION & APPLY KIT (ZERO FRICTION)
 # =====================================================================
 with tab1:
+    if "intake_counter" not in st.session_state:
+        st.session_state.intake_counter = 0
+    cur_intake = st.session_state.intake_counter
+
     st.markdown("### 1. Paste Job Posting Text")
     st.caption("Paste the full job description from LinkedIn, Indeed, or company careers page. The AI automatically extracts the company, title, salary, skills, and matches your best resume.")
 
@@ -526,24 +585,26 @@ with tab1:
         "Job Description Text",
         height=240,
         placeholder="Paste full job description text here...",
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key=f"jd_text_input_{cur_intake}"
     )
 
     with st.expander("⚙️ Advanced / Manual Overrides (Optional)", expanded=False):
         st.caption("Leave blank to let AI auto-extract automatically.")
         col_ov1, col_ov2, col_ov3 = st.columns(3)
         with col_ov1:
-            manual_company = st.text_input("Override Company Name", placeholder="Auto-detect from text")
-            manual_title = st.text_input("Override Job Title", placeholder="Auto-detect from text")
+            manual_company = st.text_input("Override Company Name", placeholder="Auto-detect from text", key=f"ov_comp_{cur_intake}")
+            manual_title = st.text_input("Override Job Title", placeholder="Auto-detect from text", key=f"ov_title_{cur_intake}")
         with col_ov2:
             manual_family = st.selectbox(
                 "Role Family",
-                ["Auto-Detect", "revenue_operations", "revenue_systems", "business_analytics", "gtm_engineering", "solutions_implementation"]
+                ["Auto-Detect", "revenue_operations", "revenue_systems", "business_analytics", "gtm_engineering", "solutions_implementation"],
+                key=f"ov_family_{cur_intake}"
             )
-            manual_url = st.text_input("Job Source URL", placeholder="https://linkedin.com/jobs/...")
+            manual_url = st.text_input("Job Source URL", placeholder="https://linkedin.com/jobs/...", key=f"ov_url_{cur_intake}")
         with col_ov3:
-            manual_min_pay = st.number_input("Override Min Pay ($ / hr or yr)", value=0, step=5, help="Enter hourly rate (e.g. 65) or annual salary (e.g. 120000)")
-            manual_max_pay = st.number_input("Override Max Pay ($ / hr or yr)", value=0, step=5, help="Enter hourly rate (e.g. 75) or annual salary (e.g. 140000)")
+            manual_min_pay = st.number_input("Override Min Pay ($ / hr or yr)", value=0, step=5, help="Enter hourly rate (e.g. 65) or annual salary (e.g. 120000)", key=f"ov_min_{cur_intake}")
+            manual_max_pay = st.number_input("Override Max Pay ($ / hr or yr)", value=0, step=5, help="Enter hourly rate (e.g. 75) or annual salary (e.g. 140000)", key=f"ov_max_{cur_intake}")
 
         st.markdown("---")
         pipeline_cfg = PipelineConfigService.load_config()
@@ -883,6 +944,12 @@ with tab1:
                 tokens_used=tot_tokens
             )
             storage_adapter.save_opportunity(job_posting, fit_eval)
+
+            # Reset intake input counter so intake field returns to clean blank state after successful processing
+            st.session_state.intake_counter = st.session_state.get("intake_counter", 0) + 1
+            for sk in list(st.session_state.keys()):
+                if sk.startswith("sq_q_") or sk.startswith("sq_a_") or sk.startswith("sq_cat_") or sk.startswith("sq_ai_"):
+                    del st.session_state[sk]
 
             # Clear pending guardrail check
             st.session_state.pending_guardrail_check = None
@@ -1605,7 +1672,11 @@ with tab2:
             ]
 
         total_filtered = len(filtered_opps)
-        items_per_page = 6
+        PAGE_SIZE_OPTIONS = [10, 15, 25, 50]
+        if "crm_page_size" not in st.session_state:
+            st.session_state.crm_page_size = 15
+
+        items_per_page = st.session_state.crm_page_size
         total_pages = max(1, (total_filtered + items_per_page - 1) // items_per_page)
 
         reversed_list = list(reversed(filtered_opps))
@@ -1625,9 +1696,26 @@ with tab2:
         if st.session_state.crm_page < 1:
             st.session_state.crm_page = 1
 
-        col_hdr_info, col_p_prev, col_p_info, col_p_next = st.columns([3, 1, 1.5, 1])
+        col_hdr_info, col_sz, col_p_prev, col_p_info, col_p_next = st.columns([2.5, 1.2, 1, 1.2, 1])
         with col_hdr_info:
-            st.markdown(f"Showing **{total_filtered}** opportunities (newest first, {items_per_page} per page):")
+            st.markdown(f"Showing **{total_filtered}** opportunities ({items_per_page}/page):")
+        with col_sz:
+            sz_idx = PAGE_SIZE_OPTIONS.index(st.session_state.crm_page_size) if st.session_state.crm_page_size in PAGE_SIZE_OPTIONS else 1
+            new_sz = st.selectbox(
+                "Per Page",
+                PAGE_SIZE_OPTIONS,
+                index=sz_idx,
+                key="crm_page_size_selector",
+                label_visibility="collapsed",
+                help="Opportunities per page"
+            )
+            if new_sz != st.session_state.crm_page_size:
+                st.session_state.crm_page_size = new_sz
+                items_per_page = new_sz
+                total_pages = max(1, (total_filtered + items_per_page - 1) // items_per_page)
+                if st.session_state.crm_page > total_pages:
+                    st.session_state.crm_page = total_pages
+                st.rerun()
         with col_p_prev:
             if st.button("⬅️ Previous", key="crm_prev_pg", disabled=(st.session_state.crm_page <= 1), use_container_width=True):
                 st.session_state.crm_page -= 1
@@ -1672,6 +1760,7 @@ with tab2:
             curr_cc = str(opp.get("Client Company") or opp.get("client_company") or "").strip()
             curr_ext = opp.get("Extension Possible") if opp.get("Extension Possible") is not None else opp.get("extension_possible")
             curr_fte = opp.get("FTE Conversion") if opp.get("FTE Conversion") is not None else opp.get("fte_conversion_possible")
+            curr_url = str(opp.get("Source URL") or opp.get("source_url") or "").strip()
 
             if curr_arr == "Contract":
                 c_parts = ["💼 Contract"]
@@ -1763,6 +1852,8 @@ with tab2:
                         c_pills_html = " &nbsp;|&nbsp; ".join(f"<span style='color:#E2E8F0; font-size:0.83rem;'>{p}</span>" for p in contract_pills)
                         st.markdown(f"<div style='margin-bottom:8px; padding:6px 10px; background:#1E1B4B55; border-radius:6px; border:1px solid #4F46E544;'>{c_pills_html}</div>", unsafe_allow_html=True)
 
+                    if curr_url:
+                        st.markdown(f"[🔗 Open Job Posting Link]({curr_url})")
                     if drive_link:
                         st.markdown(f"[📁 Open Application Drive Folder]({drive_link})")
                     screening_doc = opp.get("Screening Doc Link")
@@ -1807,6 +1898,22 @@ with tab2:
                     current_idx = stage_options.index(curr_status) if curr_status in stage_options else 1
 
                     with st.form(key=f"edit_card_form_{opp_id}"):
+                        col_comp_edit, col_title_edit = st.columns([1, 1])
+                        with col_comp_edit:
+                            edit_comp = st.text_input("Company Name", value=comp, key=f"comp_in_{opp_id}", autocomplete="off")
+                        with col_title_edit:
+                            edit_title = st.text_input("Job Title", value=title, key=f"title_in_{opp_id}", autocomplete="off")
+
+                        col_pay_edit, col_pb_edit = st.columns([2, 1])
+                        with col_pay_edit:
+                            edit_pay = st.text_input("Target / Posted Pay Range", value="" if target_pay == "N/A" else target_pay, placeholder="e.g. $130,000 - $160,000", key=f"pay_in_{opp_id}", autocomplete="off")
+                        with col_pb_edit:
+                            pb_options = ["Annual", "Hourly"]
+                            pb_cur_idx = 1 if curr_pb == "Hourly" else 0
+                            edit_pb = st.selectbox("Pay Basis", pb_options, index=pb_cur_idx, key=f"pb_sel_{opp_id}")
+
+                        edit_url = st.text_input("Job / Application URL", value=curr_url, placeholder="https://...", key=f"url_in_{opp_id}", autocomplete="off")
+
                         col_stage_sel, col_cat_sel = st.columns([1, 1])
                         with col_stage_sel:
                             new_stage = st.selectbox(
@@ -1908,7 +2015,13 @@ with tab2:
                         btn_save_details = st.form_submit_button("💾 Save Application Details", use_container_width=True, type="primary")
 
                     if btn_save_details:
-                        log_crm(f"Updating opportunity '{comp}' ({opp_id}): Stage='{new_stage}', Arrangement='{new_arr}', Classification='{new_wc}'")
+                        final_comp = edit_comp.strip() or comp
+                        final_title = edit_title.strip() or title
+                        final_pay = edit_pay.strip()
+                        final_url = edit_url.strip()
+                        final_pb = "Hourly" if new_arr == "Contract" else edit_pb
+
+                        log_crm(f"Updating opportunity '{final_comp}' ({opp_id}): Title='{final_title}', Stage='{new_stage}', Pay='{final_pay}', Arrangement='{new_arr}'")
                         st.session_state.active_opp_card = opp_id
                         st.session_state.active_sub_card = None
 
@@ -1949,7 +2062,7 @@ with tab2:
                         elif new_stage != curr_status:
                             updated_stage_hist.append({"stage": new_stage, "entered_at": now_iso})
 
-                        with st.spinner(f"Saving updates for {comp} to Google Sheets..."):
+                        with st.spinner(f"Saving updates for {final_comp} to Google Sheets..."):
                             if storage_adapter.is_connected:
                                 success = storage_adapter.update_opportunity_status(
                                     opportunity_id=opp_id,
@@ -1961,16 +2074,30 @@ with tab2:
                                     priority=final_pri,
                                     employment_arrangement=new_arr,
                                     worker_classification=new_wc_val,
-                                    pay_basis="Hourly" if new_arr == "Contract" else (curr_pb or "Annual"),
+                                    pay_basis=final_pb,
                                     contract_length_raw=new_cd,
                                     contract_value_display=new_cv,
                                     staffing_agency=new_sa,
                                     client_company=new_cc,
                                     extension_possible=new_ext_val,
-                                    fte_conversion_possible=new_fte_val
+                                    fte_conversion_possible=new_fte_val,
+                                    company_name=final_comp,
+                                    job_title=final_title,
+                                    target_pay_range=final_pay,
+                                    source_url=final_url
                                 )
                                 if success:
-                                    log_success(f"Successfully saved '{comp}' updates to Google Sheets!")
+                                    log_success(f"Successfully saved '{final_comp}' updates to Google Sheets!")
+                                    opp["Company Name"] = final_comp
+                                    opp["company_name"] = final_comp
+                                    opp["Job Title"] = final_title
+                                    opp["job_title"] = final_title
+                                    opp["Target Pay Range"] = final_pay
+                                    opp["target_pay_range"] = final_pay
+                                    opp["Pay Basis"] = final_pb
+                                    opp["pay_basis"] = final_pb
+                                    opp["Source URL"] = final_url
+                                    opp["source_url"] = final_url
                                     opp["Status"] = new_stage
                                     opp["Notes"] = new_notes
                                     opp["Category"] = saved_cat
@@ -1996,13 +2123,23 @@ with tab2:
                                     opp["fte_conversion_possible"] = new_fte_val
                                     opp["Stage History"] = updated_stage_hist
                                     opp["stage_history"] = updated_stage_hist
-                                    st.session_state["crm_flash_message"] = f"Successfully updated **{comp}** to **{new_arr}** ({new_stage})!"
+                                    st.session_state["crm_flash_message"] = f"Successfully updated **{final_comp}** — {final_title} ({new_stage})!"
                                     st.rerun()
                                 else:
-                                    print(f"ERROR: [CRM Form Submit] Failed to update '{comp}' in Google Sheets.", flush=True)
+                                    print(f"ERROR: [CRM Form Submit] Failed to update '{final_comp}' in Google Sheets.", flush=True)
                                     st.error("Failed to update status in Google Sheets.")
                             else:
-                                print(f"INFO: [CRM Form Submit] Simulated save for '{comp}' (Demo Mode).", flush=True)
+                                print(f"INFO: [CRM Form Submit] Simulated save for '{final_comp}' (Demo Mode).", flush=True)
+                                opp["Company Name"] = final_comp
+                                opp["company_name"] = final_comp
+                                opp["Job Title"] = final_title
+                                opp["job_title"] = final_title
+                                opp["Target Pay Range"] = final_pay
+                                opp["target_pay_range"] = final_pay
+                                opp["Pay Basis"] = final_pb
+                                opp["pay_basis"] = final_pb
+                                opp["Source URL"] = final_url
+                                opp["source_url"] = final_url
                                 opp["Status"] = new_stage
                                 opp["Notes"] = new_notes
                                 opp["Category"] = saved_cat
@@ -2028,7 +2165,7 @@ with tab2:
                                 opp["fte_conversion_possible"] = new_fte_val
                                 opp["Stage History"] = updated_stage_hist
                                 opp["stage_history"] = updated_stage_hist
-                                st.session_state["crm_flash_message"] = f"Simulated update for **{comp}** (Demo Mode)."
+                                st.session_state["crm_flash_message"] = f"Simulated update for **{final_comp}** — {final_title} (Demo Mode)."
                                 st.rerun()
 
                 # Section: Targeted Behavioral Story Cue Cards for this Role

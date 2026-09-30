@@ -46,12 +46,24 @@ class MockJobStorageAdapter(JobStoragePort):
         staffing_agency: Optional[str] = None,
         client_company: Optional[str] = None,
         extension_possible: Optional[bool] = None,
-        fte_conversion_possible: Optional[bool] = None
+        fte_conversion_possible: Optional[bool] = None,
+        company_name: Optional[str] = None,
+        job_title: Optional[str] = None,
+        target_pay_range: Optional[str] = None,
+        source_url: Optional[str] = None
     ) -> bool:
         for item in self.saved_jobs:
             j = item["job"]
             if j.opportunity_id == opportunity_id:
                 j.status = status
+                if company_name is not None:
+                    j.company_name = company_name
+                if job_title is not None:
+                    j.job_title = job_title
+                if target_pay_range is not None:
+                    item["fit_eval"].pay_bounds.display_range = target_pay_range
+                if source_url is not None:
+                    j.source_url = source_url
                 if stage_history is not None:
                     j.stage_history = stage_history
                 if category is not None:

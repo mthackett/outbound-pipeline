@@ -311,8 +311,29 @@ class ApplicationGuardrailService:
         }
 
 
+def normalize_screening_answer(val: Any) -> str:
+    """Safely normalizes user-entered screening answers into valid strings.
+    
+    Handles primitive values (int, float, bool) and gracefully normalizes None to empty string
+    to prevent persisting the literal string 'None'.
+    """
+    if val is None:
+        return ""
+    if isinstance(val, bool):
+        return "True" if val else "False"
+    if isinstance(val, (int, float)):
+        return str(val)
+    if isinstance(val, str):
+        return val
+    return str(val)
+
+
 class ScreeningQAService:
     """Service for formatting, serializing, and structuring Application Screening Questions & Answers."""
+
+    @staticmethod
+    def normalize_answer(val: Any) -> str:
+        return normalize_screening_answer(val)
 
     @staticmethod
     def format_screening_gdoc_text(
@@ -616,6 +637,17 @@ class PipelineConfigService:
             "telemetry_warnings": [dict(r) for r in DEFAULT_TELEMETRY_WARNING_RULES]
         }
         if not path.exists():
+            example_path = Path(str(path) + ".example")
+            if not example_path.exists() and str(path) == cls.DEFAULT_CONFIG_PATH:
+                example_path = Path("pipeline_config.json.example")
+            if example_path.exists():
+                try:
+                    with open(example_path, "r", encoding="utf-8") as f:
+                        ex_data = json.load(f)
+                    cls.save_config(ex_data, str(path))
+                    return ex_data
+                except Exception:
+                    pass
             cls.save_config(defaults, str(path))
             return defaults
         try:

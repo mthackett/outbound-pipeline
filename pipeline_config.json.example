@@ -88,31 +88,6 @@
       "concept_description": "Job description expects a single person to handle IT helpdesk, office management, sales, and engineering simultaneously without dedicated team support.",
       "severity": "Warning",
       "enabled": true
-    },
-    {
-      "name": "Clearance",
-      "category": "Other",
-      "keywords": [
-        "Clearance",
-        "must get clearance",
-        "government clearance"
-      ],
-      "concept_description": "Clearance required for role.",
-      "severity": "Flag",
-      "enabled": true,
-      "id": "warn-ad5f99"
-    },
-    {
-      "name": "Government Job",
-      "category": "Scope",
-      "keywords": [
-        "Government",
-        "Government Contractor"
-      ],
-      "concept_description": "Job is posted by a US government or a US government contractor.",
-      "severity": "Flag",
-      "enabled": true,
-      "id": "warn-38abc3"
     }
   ]
 }

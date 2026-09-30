@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 
@@ -195,6 +195,13 @@ class ScreeningQA(BaseModel):
     archetype: Optional[str] = None
     competency_signals: List[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    @field_validator("answer", mode="before")
+    @classmethod
+    def coerce_answer(cls, v: Any) -> str:
+        from job_pipeline.domain.services import normalize_screening_answer
+        return normalize_screening_answer(v)
+
 
 
 class ScreeningMatchResult(BaseModel):

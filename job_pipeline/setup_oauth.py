@@ -2,6 +2,7 @@ import argparse
 import glob
 import os
 import sys
+from typing import Tuple, Dict, Any, Optional
 
 # Prevent ScopeChangedError when Google server normalizes or reorders scopes
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
@@ -29,6 +30,50 @@ def find_client_secrets_file(explicit_path: str = "") -> str:
         return matches[0]
 
     return ""
+
+
+def run_oauth_flow(
+    client_secrets_path: Optional[str] = None,
+    output_token_path: str = "token.json",
+    port: int = 0
+) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+    """Runs the Google OAuth 2.0 flow using InstalledAppFlow and writes token.json.
+    
+    Returns:
+        (success: bool, message: str, user_info: Optional[dict])
+    """
+    secrets_path = find_client_secrets_file(client_secrets_path or "")
+    if not secrets_path:
+        return False, "No OAuth 2.0 client secret JSON file found (e.g. client_secret.json).", None
+
+    try:
+        flow = InstalledAppFlow.from_client_secrets_file(secrets_path, scopes=SCOPES)
+        creds = flow.run_local_server(port=port, prompt="consent")
+
+        with open(output_token_path, "w", encoding="utf-8") as token_file:
+            token_file.write(creds.to_json())
+
+        # Verify info
+        info = {}
+        try:
+            drive_svc = build("drive", "v3", credentials=creds)
+            about = drive_svc.about().get(fields="user, storageQuota").execute()
+            user_info = about.get("user", {})
+            quota = about.get("storageQuota", {})
+            limit_gb = round(int(quota.get("limit", 0)) / (1024 ** 3), 1) if quota.get("limit") else "Unlimited"
+            usage_gb = round(int(quota.get("usage", 0)) / (1024 ** 3), 2) if quota.get("usage") else "0"
+            info = {
+                "display_name": user_info.get("displayName"),
+                "email": user_info.get("emailAddress"),
+                "usage_gb": usage_gb,
+                "limit_gb": limit_gb
+            }
+        except Exception:
+            pass
+
+        return True, f"OAuth token successfully saved to '{output_token_path}'.", info
+    except Exception as e:
+        return False, str(e), None
 
 
 def main():
@@ -72,32 +117,16 @@ def main():
     print("      Your default web browser will open. Please sign in with your Google account")
     print("      and grant permission to access Google Drive and Google Sheets.\n")
 
-    try:
-        flow = InstalledAppFlow.from_client_secrets_file(client_secrets_path, scopes=SCOPES)
-        creds = flow.run_local_server(port=0, prompt="consent")
-
-        # Save authorized credentials to token file
-        with open(args.output_token, "w", encoding="utf-8") as token_file:
-            token_file.write(creds.to_json())
-
-        print(f"\n[3/3] SUCCESS! OAuth token successfully saved to '{args.output_token}'.")
-
-        # Verify by fetching user info from Drive API
-        drive_svc = build("drive", "v3", credentials=creds)
-        about = drive_svc.about().get(fields="user, storageQuota").execute()
-        user_info = about.get("user", {})
-        quota = about.get("storageQuota", {})
-
-        limit_gb = round(int(quota.get("limit", 0)) / (1024 ** 3), 1) if quota.get("limit") else "Unlimited"
-        usage_gb = round(int(quota.get("usage", 0)) / (1024 ** 3), 2) if quota.get("usage") else "0"
-
-        print(f"      Authenticated User: {user_info.get('displayName')} ({user_info.get('emailAddress')})")
-        print(f"      Drive Quota: {usage_gb} GB used of {limit_gb} GB")
-        print("\nAll pipeline Google Drive and Google Sheets operations will now use this personal quota!\n")
-
-    except Exception as e:
-        print(f"\nERROR: OAuth authorization failed: {e}")
+    success, msg, info = run_oauth_flow(client_secrets_path, output_token_path=args.output_token)
+    if not success:
+        print(f"\nERROR: OAuth authorization failed: {msg}")
         sys.exit(1)
+
+    print(f"\n[3/3] SUCCESS! {msg}")
+    if info:
+        print(f"      Authenticated User: {info.get('display_name')} ({info.get('email')})")
+        print(f"      Drive Quota: {info.get('usage_gb')} GB used of {info.get('limit_gb')} GB")
+    print("\nAll pipeline Google Drive and Google Sheets operations will now use this personal quota!\n")
 
 
 if __name__ == "__main__":

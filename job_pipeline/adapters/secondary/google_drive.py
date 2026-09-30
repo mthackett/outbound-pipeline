@@ -35,9 +35,10 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
         self._init_services()
 
     def _init_services(self):
-        from job_pipeline.adapters.secondary.google_auth import get_google_credentials
-        creds, auth_type = get_google_credentials(credentials_path=self.credentials_path)
-        self.auth_type = auth_type
+        from job_pipeline.adapters.secondary.google_auth import get_google_auth_context
+        self.auth_context = get_google_auth_context(credentials_path=self.credentials_path)
+        self.auth_type = self.auth_context.mode
+        creds = self.auth_context.credentials
 
         if creds is None:
             log_warn(f"No valid Google credentials found (checked OAuth token.json and '{self.credentials_path}'). Google Drive adapter disabled.")
@@ -47,7 +48,7 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
             with log_timed_action("Initializing Google Drive v3 & Docs v1 API services", tag="DRIVE"):
                 self._drive_svc = build("drive", "v3", credentials=creds)
                 self._docs_svc = build("docs", "v1", credentials=creds)
-            log_drive(f"Google Drive Adapter connected (Auth Type: {self.auth_type}).")
+            log_drive(f"Google Drive Adapter connected (Auth Mode: {self.auth_type}).")
         except Exception as e:
             log_warn(f"Could not initialize Google Drive API: {e}")
 
@@ -136,6 +137,10 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
         if not self.is_connected or not folder_id or folder_id == "mock_folder_id":
             return {"file_id": "mock_file_id", "file_link": "https://drive.google.com/mock_file"}
 
+        if hasattr(self, "auth_context") and self.auth_context and not self.auth_context.can_create_drive_files:
+            log_warn(f"[AUTH] Operation 'upload_raw_job_description' requires user OAuth credentials. Operating in '{self.auth_context.mode}' mode; skipping Google Doc upload. Local disk backup preserved.")
+            return None
+
         file_metadata = {
             "name": "Raw Job Description",
             "mimeType": "application/vnd.google-apps.document",
@@ -203,6 +208,10 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
 
         if not self.is_connected or not folder_id or folder_id == "mock_folder_id":
             return {"file_id": "mock_screening_id", "file_link": "https://docs.google.com/document/d/mock_screening_questions/edit"}
+
+        if hasattr(self, "auth_context") and self.auth_context and not self.auth_context.can_create_drive_files:
+            log_warn(f"[AUTH] Operation 'create_screening_questions_doc' requires user OAuth credentials. Operating in '{self.auth_context.mode}' mode; skipping Google Doc creation. Local disk backup preserved.")
+            return None
 
         file_metadata = {
             "name": "Screening Questions",
@@ -307,6 +316,10 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
     def upload_role_intelligence_report(self, folder_id: str, local_docx_path: str) -> Optional[str]:
         """Uploads Role Intelligence Report as a Google Doc inside the application folder (0 quota bytes)."""
         if not self.is_connected or not folder_id or folder_id == "mock_folder_id" or not os.path.exists(local_docx_path):
+            return None
+
+        if hasattr(self, "auth_context") and self.auth_context and not self.auth_context.can_create_drive_files:
+            log_warn(f"[AUTH] Operation 'upload_role_intelligence_report' requires user OAuth credentials. Operating in '{self.auth_context.mode}' mode; skipping Drive upload.")
             return None
         file_metadata = {
             "name": os.path.basename(local_docx_path).replace(".docx", ""),

@@ -21,6 +21,7 @@ outbound_db.json
 stories.json
 canonical_stories.json
 quicklinks.json
+pipeline_config.json
 
 # Virtual Environments
 .venv/

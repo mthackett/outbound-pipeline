@@ -32,7 +32,11 @@ class JobStoragePort(ABC):
         staffing_agency: Optional[str] = None,
         client_company: Optional[str] = None,
         extension_possible: Optional[bool] = None,
-        fte_conversion_possible: Optional[bool] = None
+        fte_conversion_possible: Optional[bool] = None,
+        company_name: Optional[str] = None,
+        job_title: Optional[str] = None,
+        target_pay_range: Optional[str] = None,
+        source_url: Optional[str] = None
     ) -> bool:
         pass
 

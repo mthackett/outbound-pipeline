@@ -62,6 +62,48 @@ class TestScreeningQAService(unittest.TestCase):
         summary = ScreeningQAService.format_qa_clipboard_summary(items)
         self.assertEqual(summary, "Q1: Years of SQL?\nA1: 4 years")
 
+    def test_screening_answer_coercion_primitives(self):
+        # Normal string
+        qa_str = ScreeningQA(question="Role?", answer="Product Marketer")
+        self.assertEqual(qa_str.answer, "Product Marketer")
+
+        # Integer
+        qa_int = ScreeningQA(question="Years of B2B marketing?", answer=5)
+        self.assertEqual(qa_int.answer, "5")
+
+        # Float
+        qa_float = ScreeningQA(question="Years of SQL?", answer=5.5)
+        self.assertEqual(qa_float.answer, "5.5")
+
+        # Boolean True
+        qa_bool_t = ScreeningQA(question="Willing to relocate?", answer=True)
+        self.assertEqual(qa_bool_t.answer, "True")
+
+        # Boolean False
+        qa_bool_f = ScreeningQA(question="Require sponsorship?", answer=False)
+        self.assertEqual(qa_bool_f.answer, "False")
+
+        # Empty string
+        qa_empty = ScreeningQA(question="Comments?", answer="")
+        self.assertEqual(qa_empty.answer, "")
+
+        # None -> should normalize to "" (not literal "None")
+        qa_none = ScreeningQA(question="Optional note?", answer=None)
+        self.assertEqual(qa_none.answer, "")
+        self.assertNotEqual(qa_none.answer, "None")
+
+    def test_normalize_screening_answer_service(self):
+        from job_pipeline.domain.services import normalize_screening_answer
+        self.assertEqual(normalize_screening_answer("Test"), "Test")
+        self.assertEqual(normalize_screening_answer(5), "5")
+        self.assertEqual(normalize_screening_answer(5.5), "5.5")
+        self.assertEqual(normalize_screening_answer(True), "True")
+        self.assertEqual(normalize_screening_answer(False), "False")
+        self.assertEqual(normalize_screening_answer(""), "")
+        self.assertEqual(normalize_screening_answer(None), "")
+        self.assertEqual(ScreeningQAService.normalize_answer(5), "5")
+        self.assertEqual(ScreeningQAService.normalize_answer(None), "")
+
 
 if __name__ == "__main__":
     unittest.main()
