@@ -110,7 +110,7 @@ class GoogleSheetsAdapter(JobStoragePort):
             return []
 
     def save_opportunity(self, job: JobPosting, fit_eval: FitEvaluation) -> bool:
-        if not self.is_connected:
+        if not self.is_connected or not job.opportunity_id.strip():
             return False
 
         try:
@@ -119,7 +119,9 @@ class GoogleSheetsAdapter(JobStoragePort):
 
             # Ensure required columns exist
             required_cols = [
-                "Opportunity ID", "Tokens", "Fit Warning", "Selected Resume",
+                "Opportunity ID", "Company Name", "Job Title", "Title Family", "Status",
+                "Date Created", "Job Description", "Raw JD Link", "Last Modified",
+                "Tokens", "Fit Warning", "Selected Resume",
                 "Target Pay Range", "Drive Folder Link", "Screening Doc Link", "Screening QA Count",
                 "Stage History", "Category", "Applied Via", "Priority",
                 "Employment Arrangement", "Worker Classification", "Pay Basis",
@@ -141,18 +143,22 @@ class GoogleSheetsAdapter(JobStoragePort):
             header_indices = {header: idx + 1 for idx, header in enumerate(headers)}
             records = ingest_ws.get_all_records()
 
-            # Find matching row by exact row_index or Opportunity ID or Company+Title
-            target_row_idx = job.row_index
-            if not target_row_idx:
-                for idx, rec in enumerate(records, start=2):
-                    if str(rec.get("Opportunity ID", "")).strip() == job.opportunity_id:
-                        target_row_idx = idx
-                        break
-                    if str(rec.get("Company Name", "")).strip() == job.company_name and str(rec.get("Job Title", "")).strip() == job.job_title:
-                        target_row_idx = idx
-                        break
-
-            if not target_row_idx:
+            # Immutable identity is the only update key. A supplied row_index is
+            # only a hint; never let a stale index overwrite a different application.
+            matches = [(idx, rec) for idx, rec in enumerate(records, start=2)
+                       if str(rec.get("Opportunity ID", "")).strip() == job.opportunity_id]
+            if len(matches) > 1:
+                raise ValueError("Duplicate canonical opportunity IDs require manual reconciliation.")
+            target_row_idx, existing = matches[0] if matches else (None, {})
+            if target_row_idx is None and job.row_index:
+                # Compatibility for explicitly selected legacy batch rows lacking IDs.
+                if 2 <= job.row_index <= len(records) + 1:
+                    candidate = records[job.row_index - 2]
+                    if (not str(candidate.get("Opportunity ID", "")).strip()
+                            and str(candidate.get("Job Description", "")).strip() == job.raw_description.strip()):
+                        target_row_idx, existing = job.row_index, candidate
+            is_new = target_row_idx is None
+            if is_new:
                 target_row_idx = len(records) + 2
 
             cell_updates = []
@@ -165,7 +171,10 @@ class GoogleSheetsAdapter(JobStoragePort):
             queue("Company Name", job.company_name)
             queue("Job Title", job.job_title)
             queue("Title Family", job.title_family)
-            queue("Date Created", job.date_created)
+            queue("Date Created", existing.get("Date Created") or job.date_created)
+            queue("Job Description", job.raw_description)
+            if job.drive_jd_link:
+                queue("Raw JD Link", job.drive_jd_link)
             if job.source_url:
                 queue("Source URL", job.source_url)
             queue("Opportunity ID", job.opportunity_id)
@@ -204,40 +213,52 @@ class GoogleSheetsAdapter(JobStoragePort):
                 queue("FTE Conversion", "Yes" if job.fte_conversion_possible else "No")
 
             final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
-            queue("Status", final_status)
+            # Retrying persistence must not reset a later CRM stage/history.
+            queue("Status", existing.get("Status") if existing.get("Status") not in (None, "", "Pending") else final_status)
             if job.category:
                 queue("Category", job.category)
             if job.applied_via:
                 queue("Applied Via", job.applied_via)
             if job.priority:
                 queue("Priority", job.priority)
-            if job.stage_history:
+            if existing.get("Stage History"):
+                history = existing["Stage History"]
+                queue("Stage History", history if isinstance(history, str) else json.dumps(history))
+            elif job.stage_history:
                 queue("Stage History", json.dumps(job.stage_history))
             else:
                 initial_stage_hist = [{"stage": final_status, "entered_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}]
                 queue("Stage History", json.dumps(initial_stage_hist))
             queue("Last Modified", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-            ingest_ws.update_cells(cell_updates)
+            if is_new:
+                # Append atomically instead of choosing the next row from a stale count.
+                row = [""] * len(headers)
+                for cell in cell_updates:
+                    row[cell.col - 1] = cell.value
+                ingest_ws.append_row(row, value_input_option="RAW")
+            else:
+                ingest_ws.update_cells(cell_updates)
 
             # Invalidate cached opportunities
             self._cached_opportunities = None
 
             # Save Screening QA if present
             if job.screening_qa:
-                self.save_screening_qa(
+                if not self.save_screening_qa(
                     opportunity_id=job.opportunity_id,
                     company_name=job.company_name,
                     job_title=job.job_title,
                     qa_items=job.screening_qa,
                     gdoc_link=job.drive_screening_doc_link
-                )
+                ):
+                    raise RuntimeError("Opportunity saved, but screening answers could not be persisted; retry this ingestion.")
 
             # Update Requirements Extraction worksheet (gid=1967659859)
             req_sheet_name = "Requirements Extraction"
             try:
                 extraction_ws = self._spreadsheet.worksheet(req_sheet_name)
-            except Exception:
+            except gspread.WorksheetNotFound:
                 extraction_ws = self._spreadsheet.add_worksheet(title=req_sheet_name, rows=1000, cols=11)
                 req_headers = [
                     "requirement_id", "opportunity_id", "years_experience_required",
@@ -259,8 +280,17 @@ class GoogleSheetsAdapter(JobStoragePort):
                 1.0,
                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ]
-            req_cell_updates = [gspread.Cell(row=target_row_idx, col=col_idx, value=val) for col_idx, val in enumerate(req_row, start=1)]
-            extraction_ws.update_cells(req_cell_updates)
+            req_records = extraction_ws.get_all_records()
+            req_matches = [(idx, rec) for idx, rec in enumerate(req_records, start=2)
+                           if str(rec.get("opportunity_id", "")).strip() == job.opportunity_id]
+            if len(req_matches) > 1:
+                raise ValueError("Duplicate requirement opportunity IDs require manual reconciliation.")
+            if req_matches:
+                req_idx, old_req = req_matches[0]
+                req_row[0] = old_req.get("requirement_id") or req_row[0]
+                extraction_ws.update_cells([gspread.Cell(row=req_idx, col=c, value=v) for c, v in enumerate(req_row, start=1)])
+            else:
+                extraction_ws.append_row(req_row, value_input_option="RAW")
 
             print(f"SUCCESS: Saved job opportunity '{job.company_name} - {job.job_title}' to Google Sheets.")
             return True
@@ -283,7 +313,7 @@ class GoogleSheetsAdapter(JobStoragePort):
             qa_sheet_name = "Screening QA"
             try:
                 qa_ws = self._spreadsheet.worksheet(qa_sheet_name)
-            except Exception:
+            except gspread.WorksheetNotFound:
                 qa_ws = self._spreadsheet.add_worksheet(title=qa_sheet_name, rows=1000, cols=9)
                 headers = [
                     "qa_id", "opportunity_id", "company_name", "job_title",
@@ -291,24 +321,27 @@ class GoogleSheetsAdapter(JobStoragePort):
                 ]
                 qa_ws.append_row(headers)
 
+            existing = qa_ws.get_all_records()
             rows_to_append = []
             for item in qa_items:
-                rows_to_append.append([
-                    str(uuid.uuid4()),
-                    opportunity_id,
-                    company_name,
-                    job_title,
-                    item.question,
-                    item.answer,
-                    item.category or "",
-                    item.created_at,
-                    gdoc_link or ""
-                ])
-
+                row = [item.qa_id, opportunity_id, company_name, job_title,
+                       item.question, item.answer, item.category or "", item.created_at, gdoc_link or ""]
+                matches = [(idx, rec) for idx, rec in enumerate(existing, start=2)
+                           if str(rec.get("qa_id", "")) == item.qa_id]
+                if len(matches) > 1:
+                    raise ValueError("Duplicate screening IDs require manual reconciliation.")
+                if matches:
+                    row_idx, previous = matches[0]
+                    if str(previous.get("opportunity_id", "")) != opportunity_id:
+                        raise ValueError("Screening answer belongs to a different opportunity.")
+                    row[-1] = gdoc_link or previous.get("gdoc_link", "")
+                    qa_ws.update_cells([gspread.Cell(row=row_idx, col=c, value=v) for c, v in enumerate(row, start=1)])
+                else:
+                    rows_to_append.append(row)
             if rows_to_append:
-                qa_ws.append_rows(rows_to_append)
+                qa_ws.append_rows(rows_to_append, value_input_option="RAW")
             self._cached_screening_qa = None
-            print(f"SUCCESS: Appended {len(rows_to_append)} screening Q&As to Google Sheets.")
+            print(f"SUCCESS: Persisted {len(qa_items)} screening Q&As to Google Sheets.")
             return True
         except Exception as e:
             print(f"ERROR: Failed to save screening QA to Google Sheets: {e}")
@@ -570,12 +603,14 @@ class GoogleSheetsAdapter(JobStoragePort):
             print(f"ERROR: Failed to update screening doc link in Google Sheets: {e}")
             return False
 
-    def fetch_all_opportunities(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+    def fetch_all_opportunities(self, force_refresh: bool = False, require_fresh: bool = False) -> List[Dict[str, Any]]:
         """Retrieves all tracked opportunities from 'Raw Ingestion' worksheet with TTL caching."""
         if not self.is_connected:
+            if require_fresh:
+                raise RuntimeError("Canonical Google Sheets state is unavailable; recovery/discard cannot be verified.")
             return []
         now = time.time()
-        if not force_refresh and self._cached_opportunities is not None and (now - self._opportunities_cache_time < self._cache_ttl_seconds):
+        if not (force_refresh or require_fresh) and self._cached_opportunities is not None and (now - self._opportunities_cache_time < self._cache_ttl_seconds):
             return self._cached_opportunities
         try:
             with log_timed_action("Fetching live pipeline opportunities from 'Raw Ingestion'", tag="SHEETS"):
@@ -600,6 +635,8 @@ class GoogleSheetsAdapter(JobStoragePort):
             log_sheets(f"Loaded {len(records)} opportunities from Google Sheets.")
             return records
         except Exception as e:
+            if require_fresh:
+                raise RuntimeError("Fresh canonical reconciliation failed; no cleanup is permitted. Retry when Sheets is available.") from e
             if "429" in str(e) or "Quota exceeded" in str(e):
                 log_warn("Google Sheets read quota reached. Serving cached opportunities.")
                 if self._cached_opportunities is not None:

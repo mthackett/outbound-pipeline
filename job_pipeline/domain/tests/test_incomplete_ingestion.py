@@ -41,12 +41,12 @@ class TestIncompleteIngestion(unittest.TestCase):
         self.assertEqual(len(self.doc_storage.fetch_incomplete_workspaces()), 1)
 
         # Discard the workspace
-        deleted = self.doc_storage.delete_application_workspace(folder_id)
+        deleted = self.doc_storage.delete_application_workspace(folder_id, canonical_opportunities=[])
         self.assertTrue(deleted)
 
         # Verify it no longer exists
         self.assertEqual(len(self.doc_storage.fetch_incomplete_workspaces()), 0)
-        self.assertNotIn(folder_id, self.doc_storage.workspaces)
+        self.assertEqual(self.doc_storage.workspaces[folder_id]["status"], "trashed")
 
     def test_jd_preview_extraction(self):
         # Test preview with boilerplate at top

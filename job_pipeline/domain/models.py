@@ -309,6 +309,7 @@ SCREENING_ARCHETYPES: Dict[str, str] = {
 
 
 class ScreeningQA(BaseModel):
+    qa_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     question: str
     answer: str
     category: Optional[str] = None  # Salary, Technical, Experience, Culture, General, Questions for Company
@@ -502,4 +503,3 @@ class QuickLink(BaseModel):
     url: str
     category: str = "Profile"  # Profile, Portfolio, Calendar, Other
     icon: str = "🔗"
-

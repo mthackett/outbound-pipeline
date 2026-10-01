@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 load_dotenv()
 from openai import OpenAI
+from jsonschema import Draft202012Validator
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = PROJECT_ROOT.parent
@@ -16,7 +17,7 @@ PROMPTS_DIR = PROJECT_ROOT / "resources" / "prompts"
 FIXTURES_DIR = PROJECT_ROOT / "examples" / "fixtures"
 
 from job_pipeline.domain.role_intelligence import prepare_source_bundle
-from job_pipeline.adapters.secondary.docx_report_generator import generate_recall_sheet, load_json
+from job_pipeline.adapters.secondary.docx_report_generator import generate_recall_sheet, load_json, load_config
 
 
 class RoleIntelligenceRunner:
@@ -67,7 +68,10 @@ class RoleIntelligenceRunner:
         }
         tagged_bundle = prepare_source_bundle(raw_bundle)
 
-        if demo_mode or not self.api_key:
+        if not demo_mode and not self.api_key:
+            raise RuntimeError("OPENAI_API_KEY is required for live report generation; enable demo mode explicitly for sample reports.")
+
+        if demo_mode:
             print("INFO: Running Role Intelligence Runner in Demo Mode (using cached fixtures)...")
             fixture_path = FIXTURES_DIR / "mock_cockpit_content.json"
             content_json = load_json(fixture_path)
@@ -103,10 +107,11 @@ class RoleIntelligenceRunner:
             compose_system_prompt = (
                 "You are a GTM Role Intelligence Report composer. Output ONLY valid JSON containing a top-level \"pages\" array. "
                 "The \"pages\" array must contain exactly 2 page objects (Page 1: Strategic Fit & Pain Points, Page 2: Interview & Compensation Strategy). "
-                "Each page must have a \"title\" string and a \"columns\" array of 2 column lists, containing section objects with \"title\", \"kind\", and \"items\"."
+                "Each page must have a \"title\" string and a \"columns\" array of exactly 3 column lists, containing section objects with \"title\", \"kind\", and \"items\"."
             )
+            content_schema = load_json(PROJECT_ROOT / "resources" / "schemas" / "cockpit_content.schema.json")
             compose_input = (
-                f"{compose_prompt}\n\n# SOURCE_BUNDLE\n{json.dumps(tagged_bundle, indent=2)}"
+                f"# REQUIRED CONTENT SCHEMA\n{json.dumps(content_schema)}\n\n{compose_prompt}\n\n# SOURCE_BUNDLE\n{json.dumps(tagged_bundle, indent=2)}"
                 f"\n\n# VALUE_MATCH_STRATEGY\n{json.dumps(strategy_json, indent=2)}\n"
             )
             comp_completion = self.client.chat.completions.create(
@@ -160,11 +165,15 @@ class RoleIntelligenceRunner:
                                             if isinstance(sec.get("items"), str):
                                                 sec["items"] = [sec["items"]]
 
-            # Fallback if invalid structure
-            if not isinstance(content_json, dict) or ("pages" not in content_json and "title" not in content_json):
-                print("WARNING: LLM composition JSON missing top-level 'pages'. Falling back to mock fixture layout...")
-                fixture_path = FIXTURES_DIR / "mock_cockpit_content.json"
-                content_json = load_json(fixture_path)
+        # Live content must satisfy the same three-column contract as the renderer.
+        # Invalid output is recoverable failure, never permission to invent career facts.
+        content_schema = load_json(PROJECT_ROOT / "resources" / "schemas" / "cockpit_content.schema.json")
+        errors = sorted(Draft202012Validator(content_schema).iter_errors(content_json), key=lambda e: str(list(e.path)))
+        if errors:
+            first = errors[0]
+            raise ValueError(f"Role Intelligence content violates the report schema at {list(first.path)}: {first.message}")
+        if len(load_config()["column_widths_in"]) != 3:
+            raise ValueError("Role Intelligence requires the configured three-column report layout.")
 
         # Prepare runtime variables for template pay substitution
         variables = {}
@@ -179,25 +188,12 @@ class RoleIntelligenceRunner:
                 variables["floor_pay"] = f"${target_pay_bounds['target_min']:,.0f}"
                 variables["strong_win_pay"] = f"${target_pay_bounds['target_max']:,.0f}+"
 
-        # Step 4: Render DOCX with layout validation & fallback
+        # Step 4: rendering errors propagate to ingestion, keeping it recoverable.
         os.makedirs(os.path.dirname(os.path.abspath(output_docx_path)), exist_ok=True)
         try:
-            generate_recall_sheet(
-                content_json,
-                output_docx_path,
-                variables=variables,
-                manifest_path="auto"
-            )
+            generate_recall_sheet(content_json, output_docx_path, variables=variables, manifest_path="auto")
         except Exception as render_err:
-            print(f"WARNING: Role Intelligence DOCX render validation error ({render_err}). Falling back to fixture layout...")
-            fixture_path = FIXTURES_DIR / "mock_cockpit_content.json"
-            fallback_json = load_json(fixture_path)
-            generate_recall_sheet(
-                fallback_json,
-                output_docx_path,
-                variables=variables,
-                manifest_path="auto"
-            )
+            raise RuntimeError("Role Intelligence rendering failed; ingestion remains incomplete. Retry after correcting the report content or renderer error.") from render_err
 
         print(f"SUCCESS: Generated Role Intelligence Report: {output_docx_path}")
         

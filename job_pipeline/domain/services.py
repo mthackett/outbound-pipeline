@@ -866,6 +866,42 @@ class IngestionRecoveryService:
     """Service for managing incomplete workspace detection, job description preview extraction, and recovery."""
 
     @staticmethod
+    def find_workspace_record(records: List[Dict[str, Any]], folder_id: str,
+                              opportunity_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        matches = []
+        for record in records:
+            link = str(record.get("Drive Folder Link") or "")
+            match = re.search(r"(?:folders/|[?&]id=)([\w-]+)", link)
+            linked_id = match.group(1) if match else link
+            identity = str(record.get("Opportunity ID") or "").strip()
+            if linked_id == folder_id or (opportunity_id and identity == opportunity_id):
+                if opportunity_id and identity and identity != opportunity_id:
+                    raise ValueError("Workspace and canonical opportunity IDs conflict; manual review is required.")
+                if opportunity_id and identity == opportunity_id and linked_id and linked_id != folder_id:
+                    raise ValueError("Opportunity is linked to a different workspace; manual review is required.")
+                matches.append(record)
+        if len(matches) > 1:
+            raise ValueError("Multiple canonical records reference this workspace; manual review is required.")
+        return matches[0] if matches else None
+
+    @staticmethod
+    def require_completion(*, workspace_id: str, raw_jd_saved: bool, report_saved: bool,
+                           canonical_saved: bool) -> None:
+        """Required durable outputs; resume copies, shortcuts and Q&A docs are optional.
+
+        Canonical persistence includes submitted screening answers and requirements.
+        The caller may mark Drive complete only after this check succeeds.
+        """
+        missing = [name for name, ok in (
+            ("application workspace", bool(workspace_id)),
+            ("raw job description", raw_jd_saved),
+            ("Role Intelligence report", report_saved),
+            ("canonical opportunity, requirements and screening answers", canonical_saved),
+        ) if not ok]
+        if missing:
+            raise RuntimeError("Ingestion is incomplete; persistence failed for: " + ", ".join(missing) + ". Resume processing to retry.")
+
+    @staticmethod
     def extract_jd_preview(raw_text: str, max_chars: int = 140) -> str:
         """
         Reads from raw job description, normalizes whitespace and newlines,
@@ -960,7 +996,5 @@ class IngestionRecoveryService:
                     return line0, line1
 
         return "Target Company", "Target Role"
-
-
 
 

@@ -9,6 +9,7 @@ from job_pipeline.ports.llm_port import LLMStrategyPort
 
 class MockJobStorageAdapter(JobStoragePort):
     def __init__(self):
+        self.is_connected = True
         self.saved_jobs: List[Dict[str, Any]] = []
         self.screening_qa_store: List[Dict[str, Any]] = []
 
@@ -25,7 +26,13 @@ class MockJobStorageAdapter(JobStoragePort):
         ]
 
     def save_opportunity(self, job: JobPosting, fit_eval: FitEvaluation) -> bool:
-        self.saved_jobs.append({"job": job, "fit_eval": fit_eval})
+        existing = next((item for item in self.saved_jobs if item["job"].opportunity_id == job.opportunity_id), None)
+        if existing:
+            existing.update(job=job, fit_eval=fit_eval)
+        else:
+            self.saved_jobs.append({"job": job, "fit_eval": fit_eval})
+        if job.screening_qa:
+            self.save_screening_qa(job.opportunity_id, job.company_name, job.job_title, job.screening_qa, job.drive_screening_doc_link)
         print(f"MOCK STORAGE: Saved job '{job.company_name} - {job.job_title}'")
         return True
 
@@ -94,7 +101,7 @@ class MockJobStorageAdapter(JobStoragePort):
                 return True
         return True
 
-    def fetch_all_opportunities(self) -> List[Dict[str, Any]]:
+    def fetch_all_opportunities(self, force_refresh: bool = False, require_fresh: bool = False) -> List[Dict[str, Any]]:
         results = []
         for item in self.saved_jobs:
             j = item["job"]
@@ -136,7 +143,9 @@ class MockJobStorageAdapter(JobStoragePort):
         gdoc_link: Optional[str] = None
     ) -> bool:
         for q in qa_items:
+            self.screening_qa_store = [item for item in self.screening_qa_store if item.get("qa_id") != q.qa_id]
             self.screening_qa_store.append({
+                "qa_id": q.qa_id,
                 "opportunity_id": opportunity_id,
                 "company_name": company_name,
                 "job_title": job_title,
@@ -148,7 +157,7 @@ class MockJobStorageAdapter(JobStoragePort):
             })
         return True
 
-    def fetch_screening_qa(self, opportunity_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def fetch_screening_qa(self, opportunity_id: Optional[str] = None, force_refresh: bool = False) -> List[Dict[str, Any]]:
         if opportunity_id:
             return [q for q in self.screening_qa_store if q.get("opportunity_id") == opportunity_id]
         return self.screening_qa_store
@@ -174,14 +183,20 @@ class MockJobStorageAdapter(JobStoragePort):
 
 class MockDocumentStorageAdapter(DocumentStoragePort):
     def __init__(self):
+        self.is_connected = True
         self.workspaces = {}
 
-    def create_application_workspace(self, company_name: str, job_title: str) -> Dict[str, str]:
+    def create_application_workspace(self, company_name: str, job_title: str, opportunity_id: Optional[str] = None) -> Dict[str, str]:
         import uuid
         from datetime import datetime
+        opportunity_id = opportunity_id or str(uuid.uuid4())
+        for ws in self.workspaces.values():
+            if ws.get("opportunity_id") == opportunity_id:
+                return {k: ws[k] for k in ("folder_id", "folder_link", "opportunity_id")}
         folder_id = f"mock_folder_{uuid.uuid4().hex[:8]}"
-        folder_link = f"https://drive.google.com/mock/{folder_id}"
+        folder_link = f"https://drive.google.com/drive/folders/{folder_id}"
         self.workspaces[folder_id] = {
+            "opportunity_id": opportunity_id,
             "folder_id": folder_id,
             "folder_link": folder_link,
             "folder_name": f"{company_name}_{job_title}_{datetime.now().strftime('%Y-%m-%d')}",
@@ -194,7 +209,20 @@ class MockDocumentStorageAdapter(DocumentStoragePort):
                 {"id": f"sc_{folder_id}", "name": "Pipeline Tracker (Master Sheet)", "mimeType": "application/vnd.google-apps.shortcut"}
             ]
         }
-        return {"folder_id": folder_id, "folder_link": folder_link}
+        return {"folder_id": folder_id, "folder_link": folder_link, "opportunity_id": opportunity_id}
+
+    def ensure_workspace_opportunity_id(self, folder_id: str, opportunity_id: Optional[str] = None) -> str:
+        stored = self.workspaces[folder_id]["opportunity_id"]
+        if opportunity_id and opportunity_id != stored:
+            raise ValueError("Conflicting workspace identity")
+        return stored
+
+    def save_ingestion_checkpoint(self, folder_id: str, payload: Dict[str, Any]) -> bool:
+        self.workspaces[folder_id]["checkpoint"] = payload.copy()
+        return True
+
+    def fetch_ingestion_checkpoint(self, folder_id: str) -> Dict[str, Any]:
+        return self.workspaces[folder_id].get("checkpoint", {}).copy()
 
     def upload_raw_job_description(self, folder_id: str, raw_text: str, company_name: str = "", job_title: str = "") -> Optional[Dict[str, str]]:
         if folder_id in self.workspaces:
@@ -246,7 +274,7 @@ class MockDocumentStorageAdapter(DocumentStoragePort):
         completed_set = set(completed_folder_ids or [])
         res = []
         for fid, ws in self.workspaces.items():
-            if ws["status"] == "complete":
+            if ws["status"] in ("complete", "trashed"):
                 continue
             if fid in completed_set and ws["status"] != "incomplete":
                 continue
@@ -283,15 +311,24 @@ class MockDocumentStorageAdapter(DocumentStoragePort):
         return True
 
     def fetch_raw_job_description(self, folder_id: str) -> Optional[str]:
-        if folder_id in self.workspaces:
-            return self.workspaces[folder_id].get("raw_jd_text")
-        return None
+        if folder_id not in self.workspaces:
+            raise RuntimeError("Workspace not found; cannot recover job description.")
+        text = self.workspaces[folder_id].get("raw_jd_text")
+        if not text or len(text.strip()) < 20:
+            raise RuntimeError("This workspace's raw job description is missing or unreadable.")
+        return text
 
-    def delete_application_workspace(self, folder_id: str) -> bool:
-        if folder_id in self.workspaces:
-            del self.workspaces[folder_id]
+    def delete_application_workspace(self, folder_id: str, canonical_opportunities: Optional[List[Dict[str, Any]]] = None) -> bool:
+        from job_pipeline.domain.services import IngestionRecoveryService
+        if canonical_opportunities is None or folder_id not in self.workspaces:
+            return False
+        ws = self.workspaces[folder_id]
+        if IngestionRecoveryService.find_workspace_record(canonical_opportunities, folder_id, ws["opportunity_id"]):
+            return False
+        if ws["status"] == "incomplete":
+            ws["status"] = "trashed"
             return True
-        return True
+        return False
 
     def list_workspace_files(self, folder_id: str) -> List[Dict[str, Any]]:
         if folder_id in self.workspaces:
@@ -385,4 +422,3 @@ class MockLLMStrategyAdapter(LLMStrategyPort):
             job_title=job_data.get("title", "Mock Title"),
             output_docx_path=output_docx_path
         )
-

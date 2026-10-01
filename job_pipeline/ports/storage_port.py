@@ -41,8 +41,8 @@ class JobStoragePort(ABC):
         pass
 
     @abstractmethod
-    def fetch_all_opportunities(self) -> List[Dict[str, Any]]:
-        """Retrieves all tracked opportunities for CRM, pipeline viewing, and guardrail checks."""
+    def fetch_all_opportunities(self, force_refresh: bool = False, require_fresh: bool = False) -> List[Dict[str, Any]]:
+        """Read opportunities; require_fresh must raise if canonical state cannot be verified."""
         pass
 
     @abstractmethod
@@ -77,8 +77,23 @@ class DocumentStoragePort(ABC):
     """Abstract Port for managing application asset folders in Google Drive / Storage."""
 
     @abstractmethod
-    def create_application_workspace(self, company_name: str, job_title: str) -> Dict[str, str]:
+    def create_application_workspace(self, company_name: str, job_title: str, opportunity_id: Optional[str] = None) -> Dict[str, str]:
         """Creates an application folder and returns {'folder_id': ..., 'folder_link': ...}."""
+        pass
+
+    @abstractmethod
+    def ensure_workspace_opportunity_id(self, folder_id: str, opportunity_id: Optional[str] = None) -> str:
+        """Return/persist immutable identity; reject conflicting existing identity."""
+        pass
+
+    @abstractmethod
+    def save_ingestion_checkpoint(self, folder_id: str, payload: Dict[str, Any]) -> bool:
+        """Persist intake metadata and screening IDs for retries in this workspace."""
+        pass
+
+    @abstractmethod
+    def fetch_ingestion_checkpoint(self, folder_id: str) -> Dict[str, Any]:
+        """Read saved intake; return {} only for a legacy workspace without a checkpoint."""
         pass
 
     @abstractmethod
@@ -121,8 +136,11 @@ class DocumentStoragePort(ABC):
         pass
 
     @abstractmethod
-    def delete_application_workspace(self, folder_id: str) -> bool:
-        """Deletes workspace folder and owned artifacts without deleting referenced resources."""
+    def delete_application_workspace(self, folder_id: str, canonical_opportunities: Optional[List[Dict[str, Any]]] = None) -> bool:
+        """Trash a recognized incomplete workspace after a successful fresh canonical read.
+
+        None means unverified and must refuse cleanup. Referenced resources are untouched.
+        """
         pass
 
     @abstractmethod
@@ -134,4 +152,3 @@ class DocumentStoragePort(ABC):
     def rename_application_workspace(self, folder_id: str, new_name: str) -> bool:
         """Renames an existing application workspace folder."""
         pass
-

@@ -645,17 +645,17 @@ with tab1:
         st.session_state.refresh_incomplete_workspaces = True
 
     if st.session_state.get("refresh_incomplete_workspaces", False) or "incomplete_workspaces" not in st.session_state:
-        all_opps_for_rec = storage_adapter.fetch_all_opportunities() if storage_adapter.is_connected else []
-        completed_folder_ids = []
-        for o in all_opps_for_rec:
-            link = o.get("Drive Folder Link", "")
-            m = re.search(r'[-\w]{25,}', link)
-            if m:
-                completed_folder_ids.append(m.group(0))
-        if hasattr(drive_adapter, "fetch_incomplete_workspaces"):
+        try:
+            all_opps_for_rec = storage_adapter.fetch_all_opportunities(require_fresh=True)
+            completed_folder_ids = []
+            for o in all_opps_for_rec:
+                m = re.search(r"(?:folders/|[?&]id=)([\w-]+)", str(o.get("Drive Folder Link") or ""))
+                if m:
+                    completed_folder_ids.append(m.group(1))
             st.session_state.incomplete_workspaces = drive_adapter.fetch_incomplete_workspaces(completed_folder_ids=completed_folder_ids)
-        else:
-            st.session_state.incomplete_workspaces = []
+        except Exception as rec_err:
+            st.warning(f"Incomplete workspace reconciliation unavailable: {rec_err}. Discard requires a fresh successful check.")
+            st.session_state.setdefault("incomplete_workspaces", [])
         st.session_state.refresh_incomplete_workspaces = False
 
     incomplete_workspaces = st.session_state.get("incomplete_workspaces", [])
@@ -664,12 +664,30 @@ with tab1:
         folder_id = inc_ws["folder_id"]
         folder_link = inc_ws["folder_link"]
         folder_name = inc_ws.get("folder_name", "")
-        raw_jd_text = inc_ws.get("raw_jd_text")
-        if not raw_jd_text:
+        st.session_state.latest_eval = None
+        try:
+            # Never trust cached preview text or a cached canonical reconciliation.
+            all_opps = storage_adapter.fetch_all_opportunities(require_fresh=True)
+            existing_record = IngestionRecoveryService.find_workspace_record(all_opps, folder_id)
+            existing_id = str((existing_record or {}).get("Opportunity ID") or "").strip() or None
+            opp_id = drive_adapter.ensure_workspace_opportunity_id(folder_id, existing_id)
+            existing_record = IngestionRecoveryService.find_workspace_record(all_opps, folder_id, opp_id)
+            checkpoint = drive_adapter.fetch_ingestion_checkpoint(folder_id)
+            if checkpoint and checkpoint.get("opportunity_id") != opp_id:
+                raise ValueError("Intake checkpoint identity conflicts with the workspace; manual review is required.")
             raw_jd_text = drive_adapter.fetch_raw_job_description(folder_id)
-
-        if not raw_jd_text or len(raw_jd_text.strip()) < 20:
-            st.error("Cannot resume: Raw job description text could not be loaded from workspace.")
+            if not raw_jd_text or len(raw_jd_text.strip()) < 20:
+                raise RuntimeError("This workspace's raw job description is missing or unreadable; restore it and retry.")
+            if checkpoint.get("jd_text") and checkpoint["jd_text"].strip() != raw_jd_text.strip():
+                raise ValueError("Workspace JD differs from the saved intake. Restore the original source before resuming.")
+            screening_qa_list = [ScreeningQA(**q) for q in checkpoint.get("screening_qa", [])]
+            if not checkpoint and existing_record:
+                historical = storage_adapter.fetch_screening_qa(opp_id, force_refresh=True)
+                if int(existing_record.get("Screening QA Count") or 0) > len(historical):
+                    raise RuntimeError("Existing screening answers could not all be verified; retry when Sheets is available.")
+                screening_qa_list = [ScreeningQA(**dict(q, created_at=q.get("timestamp", ""))) for q in historical]
+        except Exception as source_err:
+            st.error(f"Cannot resume: {source_err}. The workspace remains available for recovery.")
             return
 
         company_name = inc_ws.get("company", "Target Company")
@@ -716,7 +734,7 @@ with tab1:
                 extracted_telemetry_warnings = []
                 extracted_telemetry_benefits = []
 
-                if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
+                if not checkpoint and not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
                     try:
                         telemetry = llm_adapter.extract_job_telemetry(raw_jd_text, warning_rules=warning_rules)
                         extracted_company = telemetry.company_name or extracted_company
@@ -742,7 +760,7 @@ with tab1:
                         extracted_telemetry_warnings = telemetry.requirements.telemetry_warnings or []
                         extracted_telemetry_benefits = getattr(telemetry.requirements, "telemetry_benefits", []) or []
                     except Exception as t_err:
-                        log_warn(f"Telemetry extraction notice during resume: {t_err}")
+                        raise RuntimeError("Recovery telemetry extraction failed; retry when the provider is available.") from t_err
 
                 final_company = (extracted_company or company_name or "Target Company").strip()
                 final_title = (extracted_title or job_title or "Target Role").strip()
@@ -751,7 +769,28 @@ with tab1:
                 final_max_pay = extracted_max
                 final_pay_basis = extracted_pay_basis or ("Hourly" if (final_min_pay and final_min_pay < 500) else "Annual")
 
-                all_opps = storage_adapter.fetch_all_opportunities() if storage_adapter.is_connected else []
+                if checkpoint:
+                    final_company = checkpoint.get("company", final_company)
+                    final_title = checkpoint.get("title", final_title)
+                    final_family = checkpoint.get("family", final_family)
+                    final_min_pay, final_max_pay = checkpoint.get("min_pay"), checkpoint.get("max_pay")
+                    final_pay_basis = checkpoint.get("pay_basis", final_pay_basis)
+                    req_skills, pref_skills = checkpoint.get("req_skills", []), checkpoint.get("pref_skills", [])
+                    pain_points, is_remote = checkpoint.get("pain_points", ""), checkpoint.get("is_remote", False)
+                    extracted_arrangement = checkpoint.get("employment_arrangement", extracted_arrangement)
+                    extracted_worker_class = checkpoint.get("worker_classification")
+                    extracted_duration_raw = checkpoint.get("contract_length_raw")
+                    extracted_months, extracted_weeks = checkpoint.get("contract_length_months"), checkpoint.get("contract_length_weeks")
+                    extracted_hours = checkpoint.get("expected_hours_per_week")
+                    extracted_ext, extracted_fte = checkpoint.get("extension_possible"), checkpoint.get("fte_conversion_possible")
+                    extracted_agency, extracted_client = checkpoint.get("staffing_agency"), checkpoint.get("client_company")
+                    extracted_telemetry_warnings = checkpoint.get("telemetry_warnings", [])
+                    extracted_telemetry_benefits = checkpoint.get("telemetry_benefits", [])
+                recovery_category = checkpoint.get("category") or (existing_record or {}).get("Category") or "Target"
+                recovery_source = checkpoint.get("applied_via") or (existing_record or {}).get("Applied Via") or "LinkedIn"
+                recovery_priority = checkpoint.get("priority") or (existing_record or {}).get("Priority") or "High"
+                # Do not count the same application as its own duplicate during resume.
+                other_opps = [o for o in all_opps if str(o.get("Opportunity ID", "")) != opp_id]
                 fit_eval = JobQualificationService.evaluate(
                     company_name=final_company,
                     job_title=final_title,
@@ -761,7 +800,7 @@ with tab1:
                     salary_min=final_min_pay,
                     salary_max=final_max_pay,
                     profile=st.session_state.profile,
-                    existing_company_titles=all_opps,
+                    existing_company_titles=other_opps,
                     pay_basis=final_pay_basis,
                     expected_hours_per_week=extracted_hours,
                     expected_hours_per_week_is_assumed=(extracted_hours is None),
@@ -781,10 +820,11 @@ with tab1:
                 if not has_resume_file and selected_resume and selected_resume.doc_id:
                     drive_adapter.export_resume_pdf(selected_resume.doc_id, folder_id, f"{resume_name}.pdf")
 
-                docx_filename = f"{final_company.replace(' ', '_')}_Role_Intelligence_Report.docx"
-                output_docx_path = f"output_reports/{docx_filename}"
+                docx_filename = "Role_Intelligence_Report.docx"
+                output_docx_path = str(Path("output_reports") / uuid.uuid5(uuid.NAMESPACE_URL, opp_id).hex / docx_filename)
                 has_report_file = any("role_intelligence_report" in fname or "role intelligence report" in fname for fname in existing_names)
 
+                report_saved = has_report_file
                 if not has_report_file:
                     os.makedirs("output_reports", exist_ok=True)
                     resume_text = resume_repo.fetch_resume_text(selected_resume.doc_id) if selected_resume else ""
@@ -795,8 +835,11 @@ with tab1:
                         target_pay_bounds=fit_eval.pay_bounds.model_dump(),
                         demo_mode=demo_mode
                     )
-                    if os.path.exists(output_docx_path):
-                        drive_adapter.upload_role_intelligence_report(folder_id, output_docx_path)
+                    if not os.path.exists(output_docx_path):
+                        raise RuntimeError("Role Intelligence report was not generated; retry processing.")
+                    report_saved = bool(drive_adapter.upload_role_intelligence_report(folder_id, output_docx_path))
+                    if not report_saved:
+                        raise RuntimeError("Role Intelligence report upload failed; retry processing.")
 
                 has_shortcut = any("pipeline tracker" in fname for fname in existing_names)
                 if not has_shortcut and hasattr(drive_adapter, "_drive_svc") and drive_adapter._drive_svc:
@@ -815,55 +858,59 @@ with tab1:
                         except Exception:
                             pass
 
-                existing_in_sheets = any(
-                    (folder_id in o.get("Drive Folder Link", "")) or
-                    (o.get("Company Name", "").lower() == final_company.lower() and o.get("Job Title", "").lower() == final_title.lower())
-                    for o in all_opps
-                )
+                drive_screening_doc_link = (existing_record or {}).get("Screening Doc Link")
+                if screening_qa_list:
+                    screening_result = drive_adapter.create_screening_questions_doc(
+                        folder_id, final_company, final_title, screening_qa_list, opportunity_id=opp_id)
+                    if screening_result:
+                        drive_screening_doc_link = screening_result.get("file_link")
+                    else:
+                        st.warning("Screening document sync failed; answers will still be saved in Sheets.")
 
-                opp_id = str(uuid.uuid4())
                 tot_tokens = getattr(llm_adapter, "last_telemetry_tokens", 0) + getattr(llm_adapter, "last_report_tokens", 0)
                 final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
                 now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
-                if not existing_in_sheets:
-                    job_posting = JobPosting(
-                        opportunity_id=opp_id,
-                        company_name=final_company,
-                        job_title=final_title,
-                        title_family=final_family,
-                        raw_description=raw_jd_text,
-                        source_url=inc_ws.get("url") or (telemetry.source_url if telemetry else None),
-                        category="Target",
-                        applied_via="LinkedIn",
-                        priority="High",
-                        employment_arrangement=extracted_arrangement,
-                        worker_classification=extracted_worker_class,
-                        pay_basis=final_pay_basis,
-                        expected_hours_per_week=fit_eval.pay_bounds.expected_hours_per_week,
-                        expected_hours_per_week_is_assumed=fit_eval.pay_bounds.expected_hours_per_week_is_assumed,
-                        contract_length_months=extracted_months,
-                        contract_length_weeks=extracted_weeks,
-                        contract_length_raw=extracted_duration_raw,
-                        contract_value_min=fit_eval.pay_bounds.contract_value_min,
-                        contract_value_max=fit_eval.pay_bounds.contract_value_max,
-                        contract_value_display=fit_eval.pay_bounds.contract_value_display,
-                        extension_possible=extracted_ext,
-                        fte_conversion_possible=extracted_fte,
-                        staffing_agency=extracted_agency,
-                        client_company=extracted_client,
-                        stage_history=[{"stage": final_status, "entered_at": now_iso}],
-                        required_skills=req_skills,
-                        preferred_skills=pref_skills,
-                        telemetry_warnings=extracted_telemetry_warnings,
-                        selected_resume_name=resume_name,
-                        drive_folder_link=folder_link,
-                        drive_jd_link=drive_jd_link,
-                        drive_screening_doc_link=None,
-                        screening_qa=[],
-                        tokens_used=tot_tokens
-                    )
-                    storage_adapter.save_opportunity(job_posting, fit_eval)
+                job_posting = JobPosting(
+                    opportunity_id=opp_id,
+                    company_name=final_company,
+                    job_title=final_title,
+                    title_family=final_family,
+                    raw_description=raw_jd_text,
+                    source_url=checkpoint.get("url") or (existing_record or {}).get("Source URL") or inc_ws.get("url") or (telemetry.source_url if telemetry else None),
+                    category=recovery_category,
+                    applied_via=recovery_source,
+                    priority=recovery_priority,
+                    employment_arrangement=extracted_arrangement,
+                    worker_classification=extracted_worker_class,
+                    pay_basis=final_pay_basis,
+                    expected_hours_per_week=fit_eval.pay_bounds.expected_hours_per_week,
+                    expected_hours_per_week_is_assumed=fit_eval.pay_bounds.expected_hours_per_week_is_assumed,
+                    contract_length_months=extracted_months,
+                    contract_length_weeks=extracted_weeks,
+                    contract_length_raw=extracted_duration_raw,
+                    contract_value_min=fit_eval.pay_bounds.contract_value_min,
+                    contract_value_max=fit_eval.pay_bounds.contract_value_max,
+                    contract_value_display=fit_eval.pay_bounds.contract_value_display,
+                    extension_possible=extracted_ext,
+                    fte_conversion_possible=extracted_fte,
+                    staffing_agency=extracted_agency,
+                    client_company=extracted_client,
+                    stage_history=[{"stage": final_status, "entered_at": now_iso}],
+                    required_skills=req_skills,
+                    preferred_skills=pref_skills,
+                    telemetry_warnings=extracted_telemetry_warnings,
+                    selected_resume_name=resume_name,
+                    drive_folder_link=folder_link,
+                    drive_jd_link=drive_jd_link,
+                    drive_screening_doc_link=drive_screening_doc_link,
+                    screening_qa=screening_qa_list,
+                    tokens_used=tot_tokens
+                )
+                canonical_saved = storage_adapter.save_opportunity(job_posting, fit_eval)
+                IngestionRecoveryService.require_completion(
+                    workspace_id=folder_id, raw_jd_saved=bool(drive_jd_link),
+                    report_saved=report_saved, canonical_saved=canonical_saved)
 
                 safe_c = "".join([c for c in final_company if c.isalnum() or c in (" ", "-", "_")]).strip().replace(" ", "_")
                 safe_t = "".join([c for c in final_title if c.isalnum() or c in (" ", "-", "_")]).strip().replace(" ", "_")
@@ -873,16 +920,17 @@ with tab1:
                 if folder_name != new_folder_name:
                     drive_adapter.rename_application_workspace(folder_id, new_folder_name)
 
-                drive_adapter.mark_workspace_complete(folder_id)
+                if not drive_adapter.mark_workspace_complete(folder_id):
+                    raise RuntimeError("Opportunity saved, but workspace completion could not be recorded. Resume to reconcile.")
 
                 st.session_state.latest_eval = {
                     "company": final_company,
                     "title": final_title,
                     "family": final_family,
                     "fit_eval": fit_eval,
-                    "category": "Target",
-                    "applied_via": "LinkedIn",
-                    "priority": "High",
+                    "category": recovery_category,
+                    "applied_via": recovery_source,
+                    "priority": recovery_priority,
                     "employment_arrangement": extracted_arrangement,
                     "worker_classification": extracted_worker_class,
                     "pay_basis": final_pay_basis,
@@ -900,8 +948,8 @@ with tab1:
                     "resume_link": resume_link,
                     "folder_link": folder_link,
                     "drive_jd_link": drive_jd_link,
-                    "drive_screening_doc_link": None,
-                    "screening_qa": [],
+                    "drive_screening_doc_link": drive_screening_doc_link,
+                    "screening_qa": screening_qa_list,
                     "output_docx_path": output_docx_path,
                     "docx_filename": docx_filename,
                     "req_skills": req_skills,
@@ -957,16 +1005,23 @@ with tab1:
                         st.rerun()
 
                 if st.session_state.get(f"confirm_discard_{fid}", False):
-                    st.error(f"⚠️ Are you sure you want to permanently discard the incomplete ingestion for **{comp} — {title}**? This will delete the workspace folder and its artifacts. Shared resources will not be affected.")
+                    st.error(f"⚠️ Are you sure you want to move the incomplete ingestion to Drive trash for **{comp} — {title}**? This will trash the workspace folder and its artifacts; it can be restored in Drive. Shared resources will not be affected.")
                     col_c1, col_c2, _ = st.columns([1.5, 1, 4])
                     with col_c1:
                         if st.button("⚠️ Confirm Discard", key=f"btn_confirm_discard_{fid}", type="primary"):
                             with st.spinner(f"Deleting incomplete workspace for {comp}..."):
-                                drive_adapter.delete_application_workspace(fid)
-                                st.session_state[f"confirm_discard_{fid}"] = False
-                                st.session_state.refresh_incomplete_workspaces = True
-                                st.success(f"Discarded incomplete ingestion for {comp} — {title}.")
-                                st.rerun()
+                                try:
+                                    canonical_snapshot = storage_adapter.fetch_all_opportunities(require_fresh=True)
+                                    discarded = drive_adapter.delete_application_workspace(fid, canonical_opportunities=canonical_snapshot)
+                                    if not discarded:
+                                        raise RuntimeError("Ownership, parent, or incomplete state could not be verified, or Drive cleanup failed. Review the folder manually; it was not reported as discarded.")
+                                except Exception as discard_err:
+                                    st.error(f"Discard refused: {discard_err}")
+                                else:
+                                    st.session_state[f"confirm_discard_{fid}"] = False
+                                    st.session_state.refresh_incomplete_workspaces = True
+                                    st.success(f"Moved {comp} ? {title} to Drive trash.")
+                                    st.rerun()
                     with col_c2:
                         if st.button("Cancel", key=f"btn_cancel_discard_{fid}"):
                             st.session_state[f"confirm_discard_{fid}"] = False
@@ -1186,6 +1241,8 @@ with tab1:
                 ))
 
     def _run_workflow(job_payload: dict):
+        st.session_state.latest_eval = None
+        opp_id = job_payload.setdefault("opportunity_id", str(uuid.uuid4()))
         final_company = job_payload["company"]
         final_title = job_payload["title"]
         log_action(f"⚡ Ingestion workflow started for '{final_company}' - '{final_title}'")
@@ -1248,9 +1305,16 @@ with tab1:
 
             # 3. Create Google Drive Application Workspace Folder
             log_drive(f"📁 Creating Drive application workspace folder for '{final_company}'...")
-            workspace = drive_adapter.create_application_workspace(final_company, final_title)
+            workspace = drive_adapter.create_application_workspace(final_company, final_title, opp_id)
             folder_id = workspace.get("folder_id")
             folder_link = workspace.get("folder_link")
+            if not folder_id:
+                raise RuntimeError("The application workspace could not be created; retry this intake.")
+            checkpoint = {k: v for k, v in job_payload.items() if k not in ("all_opps", "dup", "vel", "screening_qa")}
+            checkpoint.update(category=manual_category, applied_via=manual_applied_via, priority=manual_priority)
+            checkpoint["screening_qa"] = [q.model_dump(mode="json") for q in screening_qa_list]
+            if not drive_adapter.save_ingestion_checkpoint(folder_id, checkpoint):
+                raise RuntimeError("Could not save intake inputs. Retry this intake before resuming the workspace.")
 
             # 4. Save Raw Job Description Document into Drive Folder (Reliable Upload)
             drive_jd_link = None
@@ -1264,10 +1328,11 @@ with tab1:
                 )
                 if isinstance(res_jd, dict):
                     drive_jd_link = res_jd.get("file_link")
+            if not drive_jd_link:
+                raise RuntimeError("The workspace raw job description could not be saved; retry this intake.")
 
             # 5. Create 'Screening Questions' Google Doc if questions were provided
             drive_screening_doc_link = None
-            opp_id = str(uuid.uuid4())
             if folder_id and screening_qa_list:
                 log_drive(f"📝 Creating Screening Questions Google Doc ({len(screening_qa_list)} items)...")
                 res_sq = drive_adapter.create_screening_questions_doc(
@@ -1281,8 +1346,8 @@ with tab1:
                     drive_screening_doc_link = res_sq.get("file_link")
 
             # 6. Generate Role Intelligence Report (.docx)
-            docx_filename = f"{final_company.replace(' ', '_')}_Role_Intelligence_Report.docx"
-            output_docx_path = f"output_reports/{docx_filename}"
+            docx_filename = "Role_Intelligence_Report.docx"
+            output_docx_path = os.path.join("output_reports", uuid.uuid5(uuid.NAMESPACE_URL, opp_id).hex, docx_filename)
             os.makedirs("output_reports", exist_ok=True)
 
             resume_text = resume_repo.fetch_resume_text(selected_resume.doc_id) if selected_resume else ""
@@ -1296,12 +1361,15 @@ with tab1:
             )
 
             # Upload Resume PDF and DOCX Report to Folder
+            report_saved = False
             if folder_id:
                 log_drive("📤 Uploading resume PDF and Word report to Google Drive workspace...")
                 if selected_resume and selected_resume.doc_id:
                     drive_adapter.export_resume_pdf(selected_resume.doc_id, folder_id, f"{resume_name}.pdf")
                 if os.path.exists(output_docx_path):
-                    drive_adapter.upload_role_intelligence_report(folder_id, output_docx_path)
+                    report_saved = bool(drive_adapter.upload_role_intelligence_report(folder_id, output_docx_path))
+            if not report_saved:
+                raise RuntimeError("The Role Intelligence report could not be saved to the workspace.")
 
             # 7. Save Opportunity to Google Sheets (Raw Ingestion & Screening QA)
             log_sheets(f"💾 Saving opportunity '{final_company} - {final_title}' to Google Sheets ('Raw Ingestion')...")
@@ -1344,11 +1412,15 @@ with tab1:
                 screening_qa=screening_qa_list,
                 tokens_used=tot_tokens
             )
-            storage_adapter.save_opportunity(job_posting, fit_eval)
+            canonical_saved = storage_adapter.save_opportunity(job_posting, fit_eval)
+            IngestionRecoveryService.require_completion(
+                workspace_id=folder_id, raw_jd_saved=bool(drive_jd_link),
+                report_saved=report_saved, canonical_saved=canonical_saved,
+            )
 
             # Mark workspace complete in Drive now that canonical opportunity record and artifacts are saved
-            if folder_id:
-                drive_adapter.mark_workspace_complete(folder_id)
+            if not drive_adapter.mark_workspace_complete(folder_id):
+                raise RuntimeError("Records were saved, but the workspace completion marker failed. Resume to retry.")
             st.session_state.refresh_incomplete_workspaces = True
 
             # Reset intake input counter so intake field returns to clean blank state after successful processing
@@ -1563,6 +1635,7 @@ with tab1:
                 )
 
                 job_payload = {
+                    "opportunity_id": st.session_state.setdefault(f"intake_opportunity_{cur_intake}", str(uuid.uuid4())),
                     "company": final_company,
                     "title": final_title,
                     "family": final_family,
