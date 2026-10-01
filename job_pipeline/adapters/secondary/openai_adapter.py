@@ -101,6 +101,15 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         self.last_telemetry_tokens: int = 0
         self.last_report_tokens: int = 0
 
+    @property
+    def client(self):
+        return getattr(self._runner, "client", None)
+
+    @property
+    def is_connected(self) -> bool:
+        return self.client is not None
+
+
     def extract_job_telemetry(
         self,
         raw_jd: str,

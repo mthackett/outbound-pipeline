@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, Tuple
 from job_pipeline.domain.models import (
     TargetPayBounds, FitEvaluation, CandidateProfile, ScreeningQA, QuickLink,
     ScreeningMatchResult, DEFAULT_APPLICATION_SOURCES, DEFAULT_PRIORITIES,
@@ -860,6 +860,107 @@ class PipelineConfigService:
     toggle_warning_rule = toggle_telemetry_rule
     remove_warning_rule = remove_telemetry_rule
     reset_default_warning_rules = reset_default_telemetry_rules
+
+
+class IngestionRecoveryService:
+    """Service for managing incomplete workspace detection, job description preview extraction, and recovery."""
+
+    @staticmethod
+    def extract_jd_preview(raw_text: str, max_chars: int = 140) -> str:
+        """
+        Reads from raw job description, normalizes whitespace and newlines,
+        and extracts roughly the first 100-150 meaningful characters, adding … when truncated.
+        """
+        if not raw_text:
+            return ""
+        text = raw_text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+
+        resp_idx = None
+        for idx, line in enumerate(lines):
+            if re.search(r'^(responsibilities|what you(\'ll| will) do|the role|about the role|role overview)\b', line.lower()):
+                resp_idx = idx + 1
+                break
+
+        if resp_idx is not None and resp_idx < len(lines):
+            chosen_lines = lines[resp_idx:resp_idx + 2]
+        else:
+            chosen_lines = []
+            for line in lines:
+                lower = line.lower()
+                if any(re.search(pat, lower) for pat in [
+                    r'^(apply|job details|full job description|pay|benefits|pulled from|here\'?s how)\b',
+                    r'^\$?\d+[\d,]*(\.\d+)?\s*(-\s*\$?\d+[\d,]*(\.\d+)?)?\s*(a year|an hour|\/hr|\/yr)?$',
+                    r'^\d+(\.\d+)?(\s*★|\s*stars)?$',
+                    r'^(remote|hybrid|on-site|full-time|part-time|contract)$'
+                ]):
+                    continue
+                if len(line) < 30 and not line.endswith(('.', '!', '?', ':')):
+                    continue
+                chosen_lines.append(line)
+                if len(" ".join(chosen_lines)) > max_chars * 2:
+                    break
+
+        chosen_text = " ".join(chosen_lines) if chosen_lines else text
+        cleaned = re.sub(r'\s*\([^)]*\)', '', chosen_text)
+        normalized = re.sub(r'\s+', ' ', cleaned).strip()
+
+        if len(normalized) <= max_chars:
+            return normalized
+
+        truncated = normalized[:max_chars]
+        last_space = truncated.rfind(' ')
+        if last_space > 80:
+            truncated = truncated[:last_space]
+        return truncated.rstrip(".,;:- ") + "…"
+
+    @staticmethod
+    def format_created_date(created_time: Any) -> str:
+        """
+        Formats created time as e.g. 'Sep 30, 2026'.
+        """
+        if not created_time:
+            return datetime.now().strftime("%b %d, %Y")
+        if isinstance(created_time, datetime):
+            dt = created_time
+        else:
+            iso_str = str(created_time).strip()
+            try:
+                dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00")).astimezone()
+            except Exception:
+                try:
+                    dt = datetime.strptime(iso_str[:10], "%Y-%m-%d")
+                except Exception:
+                    return str(created_time)[:12]
+        return dt.strftime("%b %d, %Y")
+
+    @staticmethod
+    def parse_job_identity(raw_text: str, folder_name: str = "") -> Tuple[str, str]:
+        """
+        Infers company name and job title from raw JD text or folder name if not already stored.
+        """
+        if folder_name and "Target_Company_Target_Role" not in folder_name:
+            parts = folder_name.split("_")
+            if len(parts) >= 3 and re.match(r'^\d{4}-\d{2}-\d{2}$', parts[-1]):
+                company = parts[0]
+                title = " ".join(parts[1:-1])
+                return company, title
+
+        if raw_text:
+            text = raw_text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+            lines = [l.strip() for l in text.split("\n") if l.strip()]
+            if len(lines) >= 2:
+                line0, line1 = lines[0], lines[1]
+                title_keywords = [
+                    "analyst", "engineer", "manager", "lead", "specialist", "director", "developer", "architect", "consultant"
+                ]
+                if any(k in line0.lower() for k in title_keywords) and len(line1) < 40 and not any(k in line1.lower() for k in title_keywords):
+                    return line1, line0
+                if any(k in line1.lower() for k in title_keywords) and len(line0) < 40 and not any(k in line0.lower() for k in title_keywords):
+                    return line0, line1
+
+        return "Target Company", "Target Role"
+
 
 
 

@@ -9,7 +9,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload, MediaInMemoryUpload
 
 from job_pipeline.domain.models import ScreeningQA
-from job_pipeline.domain.services import ScreeningQAService
+from job_pipeline.domain.services import ScreeningQAService, IngestionRecoveryService
 from job_pipeline.ports.storage_port import DocumentStoragePort
 from job_pipeline.ports.resume_port import ResumeRepositoryPort, ResumeFileRef
 from job_pipeline.adapters.secondary.resume_selector import TitleBasedResumeSelector
@@ -70,7 +70,12 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
 
         file_metadata = {
             "name": folder_name,
-            "mimeType": "application/vnd.google-apps.folder"
+            "mimeType": "application/vnd.google-apps.folder",
+            "properties": {
+                "ingestion_status": "incomplete",
+                "company": company_name,
+                "title": job_title
+            }
         }
         if self.root_applications_folder_id:
             file_metadata["parents"] = [self.root_applications_folder_id]
@@ -343,6 +348,193 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
             else:
                 print(f"ERROR: Failed to upload Role Intelligence Report Google Doc to Drive: {e}")
             return None
+
+    def mark_workspace_complete(self, folder_id: str) -> bool:
+        """Marks a workspace as successfully completed in Google Drive properties."""
+        if not self.is_connected or not folder_id or folder_id == "mock_folder_id":
+            return True
+        try:
+            self._drive_svc.files().update(
+                fileId=folder_id,
+                body={"properties": {"ingestion_status": "complete"}},
+                fields="id, properties"
+            ).execute()
+            log_drive(f"Marked workspace folder '{folder_id}' as complete.")
+            return True
+        except Exception as e:
+            log_warn(f"Failed to mark workspace folder '{folder_id}' complete: {e}")
+            return False
+
+    def list_workspace_files(self, folder_id: str) -> List[Dict[str, Any]]:
+        """Lists existing non-trashed files in an application workspace folder."""
+        if not self.is_connected or not folder_id or folder_id == "mock_folder_id":
+            return []
+        try:
+            query = f"'{folder_id}' in parents and trashed = false"
+            res = self._drive_svc.files().list(
+                q=query,
+                fields="files(id, name, mimeType, webViewLink, shortcutDetails)",
+                pageSize=50
+            ).execute()
+            return res.get("files", [])
+        except Exception as e:
+            log_warn(f"Failed to list files in workspace folder '{folder_id}': {e}")
+            return []
+
+    def fetch_raw_job_description(self, folder_id: str) -> Optional[str]:
+        """Fetches the persisted raw job description text from workspace folder."""
+        if not self.is_connected or not folder_id or folder_id == "mock_folder_id":
+            return None
+
+        # 1. Search in Drive workspace folder
+        try:
+            files = self.list_workspace_files(folder_id)
+            for f in files:
+                if f.get("name") == "Raw Job Description":
+                    text = self.fetch_resume_text(f.get("id"))
+                    if text and len(text.strip()) > 0:
+                        return text
+        except Exception as e:
+            log_warn(f"Error reading Raw Job Description Google Doc in '{folder_id}': {e}")
+
+        # 2. Local disk fallback in output_reports
+        if os.path.exists("output_reports"):
+            for fname in os.listdir("output_reports"):
+                if fname.endswith("_Raw_Job_Description.txt"):
+                    try:
+                        with open(os.path.join("output_reports", fname), "r", encoding="utf-8") as rf:
+                            content = rf.read()
+                            if content and len(content.strip()) > 0:
+                                return content
+                    except Exception:
+                        pass
+        return None
+
+    def fetch_incomplete_workspaces(self, completed_folder_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        Detects incomplete application workspaces in Google Drive root applications folder.
+        Treats every folder as incomplete until marked complete or logged to canonical storage.
+        """
+        if not self.is_connected or not self.root_applications_folder_id:
+            return []
+
+        completed_set = set()
+        for item in (completed_folder_ids or []):
+            if not item:
+                continue
+            item_str = str(item)
+            completed_set.add(item_str)
+            m = re.search(r'[-\w]{25,}', item_str)
+            if m:
+                completed_set.add(m.group(0))
+
+        query = f"'{self.root_applications_folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        try:
+            res = self._drive_svc.files().list(
+                q=query,
+                fields="files(id, name, webViewLink, createdTime, properties)",
+                pageSize=100
+            ).execute()
+            folders = res.get("files", [])
+        except Exception as e:
+            log_warn(f"Failed to query Drive for incomplete workspaces: {e}")
+            return []
+
+        incomplete_list = []
+        for folder in folders:
+            f_id = folder.get("id")
+            props = folder.get("properties") or {}
+            status = props.get("ingestion_status")
+
+            # Check completion criteria:
+            # 1. Explicitly marked complete
+            if status == "complete":
+                continue
+            # 2. If already logged in Google Sheets canonical records
+            if f_id in completed_set or any(f_id in c for c in completed_set):
+                if status != "complete":
+                    try:
+                        self._drive_svc.files().update(
+                            fileId=f_id,
+                            body={"properties": {"ingestion_status": "complete"}},
+                            fields="id, properties"
+                        ).execute()
+                    except Exception:
+                        pass
+                continue
+
+            folder_name = folder.get("name", "")
+            raw_text = self.fetch_raw_job_description(f_id) or ""
+
+            # Resolve company and title
+            company = props.get("company")
+            title = props.get("title")
+            if not company or not title or company == "Target Company" or title == "Target Role":
+                parsed_c, parsed_t = IngestionRecoveryService.parse_job_identity(raw_text, folder_name)
+                if parsed_c and parsed_c != "Target Company":
+                    company = parsed_c
+                    title = parsed_t
+                    try:
+                        self._drive_svc.files().update(
+                            fileId=f_id,
+                            body={"properties": {"company": company, "title": title, "ingestion_status": "incomplete"}},
+                            fields="id, properties"
+                        ).execute()
+                    except Exception:
+                        pass
+                else:
+                    company = company or parsed_c
+                    title = title or parsed_t
+
+            preview = IngestionRecoveryService.extract_jd_preview(raw_text)
+            date_display = IngestionRecoveryService.format_created_date(folder.get("createdTime"))
+            existing_files = self.list_workspace_files(f_id)
+
+            incomplete_list.append({
+                "folder_id": f_id,
+                "folder_link": folder.get("webViewLink", f"https://drive.google.com/drive/folders/{f_id}"),
+                "folder_name": folder_name,
+                "company": company or "Unknown Company",
+                "title": title or "Unknown Role",
+                "created_time": folder.get("createdTime"),
+                "created_date_display": date_display,
+                "raw_jd_text": raw_text,
+                "raw_jd_preview": preview,
+                "existing_files": existing_files
+            })
+
+        return incomplete_list
+
+    def delete_application_workspace(self, folder_id: str) -> bool:
+        """
+        Deletes the incomplete workspace folder and owned artifacts in Drive.
+        Pre-existing or shared resources (e.g. master sheet, candidate resumes) are untouched.
+        """
+        if not self.is_connected or not folder_id or folder_id == "mock_folder_id":
+            return True
+        try:
+            self._drive_svc.files().delete(fileId=folder_id).execute()
+            log_drive(f"Deleted incomplete Drive workspace folder: {folder_id}")
+            return True
+        except Exception as e:
+            log_warn(f"Failed to delete Drive folder '{folder_id}': {e}")
+            return False
+
+    def rename_application_workspace(self, folder_id: str, new_name: str) -> bool:
+        """Renames an existing Drive application workspace folder."""
+        if not self.is_connected or not folder_id or folder_id == "mock_folder_id":
+            return True
+        try:
+            self._drive_svc.files().update(
+                fileId=folder_id,
+                body={"name": new_name},
+                fields="id, name"
+            ).execute()
+            log_drive(f"Renamed Drive workspace '{folder_id}' to '{new_name}'.")
+            return True
+        except Exception as e:
+            log_warn(f"Failed to rename Drive workspace folder '{folder_id}': {e}")
+            return False
 
     # --- ResumeRepositoryPort Implementation ---
 

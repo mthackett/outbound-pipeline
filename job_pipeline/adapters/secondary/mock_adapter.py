@@ -173,17 +173,57 @@ class MockJobStorageAdapter(JobStoragePort):
 
 
 class MockDocumentStorageAdapter(DocumentStoragePort):
+    def __init__(self):
+        self.workspaces = {}
+
     def create_application_workspace(self, company_name: str, job_title: str) -> Dict[str, str]:
-        return {"folder_id": "mock_drive_folder_id", "folder_link": "https://drive.google.com/mock_folder"}
+        import uuid
+        from datetime import datetime
+        folder_id = f"mock_folder_{uuid.uuid4().hex[:8]}"
+        folder_link = f"https://drive.google.com/mock/{folder_id}"
+        self.workspaces[folder_id] = {
+            "folder_id": folder_id,
+            "folder_link": folder_link,
+            "folder_name": f"{company_name}_{job_title}_{datetime.now().strftime('%Y-%m-%d')}",
+            "company": company_name,
+            "title": job_title,
+            "created_time": datetime.now().isoformat(),
+            "status": "incomplete",
+            "raw_jd_text": "",
+            "files": [
+                {"id": f"sc_{folder_id}", "name": "Pipeline Tracker (Master Sheet)", "mimeType": "application/vnd.google-apps.shortcut"}
+            ]
+        }
+        return {"folder_id": folder_id, "folder_link": folder_link}
 
     def upload_raw_job_description(self, folder_id: str, raw_text: str, company_name: str = "", job_title: str = "") -> Optional[Dict[str, str]]:
-        return {"file_id": "mock_raw_jd_file_id", "file_link": "https://docs.google.com/document/d/mock_raw_jd/edit"}
+        if folder_id in self.workspaces:
+            self.workspaces[folder_id]["raw_jd_text"] = raw_text
+            self.workspaces[folder_id]["files"].append({
+                "id": f"raw_jd_{folder_id}",
+                "name": "Raw Job Description",
+                "mimeType": "application/vnd.google-apps.document",
+                "webViewLink": f"https://docs.google.com/document/d/mock_raw_{folder_id}/edit"
+            })
+        return {"file_id": f"mock_raw_jd_{folder_id}", "file_link": f"https://docs.google.com/document/d/mock_raw_{folder_id}/edit"}
 
     def export_resume_pdf(self, resume_doc_id: str, folder_id: str, output_filename: str) -> Optional[str]:
-        return "mock_pdf_resume_id"
+        if folder_id in self.workspaces:
+            self.workspaces[folder_id]["files"].append({
+                "id": f"res_{folder_id}",
+                "name": output_filename,
+                "mimeType": "application/pdf"
+            })
+        return f"mock_pdf_{folder_id}"
 
     def upload_role_intelligence_report(self, folder_id: str, local_docx_path: str) -> Optional[str]:
-        return "mock_docx_report_id"
+        if folder_id in self.workspaces:
+            self.workspaces[folder_id]["files"].append({
+                "id": f"rep_{folder_id}",
+                "name": os.path.basename(local_docx_path),
+                "mimeType": "application/vnd.google-apps.document"
+            })
+        return f"mock_docx_{folder_id}"
 
     def create_screening_questions_doc(
         self,
@@ -193,7 +233,77 @@ class MockDocumentStorageAdapter(DocumentStoragePort):
         qa_items: List[ScreeningQA],
         opportunity_id: Optional[str] = None
     ) -> Optional[Dict[str, str]]:
-        return {"file_id": "mock_screening_doc_id", "file_link": "https://docs.google.com/document/d/mock_screening_questions/edit"}
+        if folder_id in self.workspaces:
+            self.workspaces[folder_id]["files"].append({
+                "id": f"sq_{folder_id}",
+                "name": "Screening Questions",
+                "mimeType": "application/vnd.google-apps.document"
+            })
+        return {"file_id": f"mock_screening_doc_id", "file_link": "https://docs.google.com/document/d/mock_screening_questions/edit"}
+
+    def fetch_incomplete_workspaces(self, completed_folder_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        from job_pipeline.domain.services import IngestionRecoveryService
+        completed_set = set(completed_folder_ids or [])
+        res = []
+        for fid, ws in self.workspaces.items():
+            if ws["status"] == "complete":
+                continue
+            if fid in completed_set and ws["status"] != "incomplete":
+                continue
+            raw_text = ws.get("raw_jd_text", "")
+            company = ws.get("company", "Target Company")
+            title = ws.get("title", "Target Role")
+            if not company or not title or company == "Target Company" or title == "Target Role":
+                parsed_c, parsed_t = IngestionRecoveryService.parse_job_identity(raw_text, ws.get("folder_name", ""))
+                company = parsed_c or company
+                title = parsed_t or title
+                ws["company"] = company
+                ws["title"] = title
+
+            preview = IngestionRecoveryService.extract_jd_preview(raw_text)
+            date_disp = IngestionRecoveryService.format_created_date(ws.get("created_time"))
+            res.append({
+                "folder_id": fid,
+                "folder_link": ws.get("folder_link"),
+                "folder_name": ws.get("folder_name"),
+                "company": company,
+                "title": title,
+                "created_time": ws.get("created_time"),
+                "created_date_display": date_disp,
+                "raw_jd_text": raw_text,
+                "raw_jd_preview": preview,
+                "existing_files": list(ws.get("files", []))
+            })
+        return res
+
+    def mark_workspace_complete(self, folder_id: str) -> bool:
+        if folder_id in self.workspaces:
+            self.workspaces[folder_id]["status"] = "complete"
+            return True
+        return True
+
+    def fetch_raw_job_description(self, folder_id: str) -> Optional[str]:
+        if folder_id in self.workspaces:
+            return self.workspaces[folder_id].get("raw_jd_text")
+        return None
+
+    def delete_application_workspace(self, folder_id: str) -> bool:
+        if folder_id in self.workspaces:
+            del self.workspaces[folder_id]
+            return True
+        return True
+
+    def list_workspace_files(self, folder_id: str) -> List[Dict[str, Any]]:
+        if folder_id in self.workspaces:
+            return list(self.workspaces[folder_id].get("files", []))
+        return []
+
+    def rename_application_workspace(self, folder_id: str, new_name: str) -> bool:
+        if folder_id in self.workspaces:
+            self.workspaces[folder_id]["folder_name"] = new_name
+            return True
+        return True
+
 
 
 class MockResumeRepositoryAdapter(ResumeRepositoryPort):

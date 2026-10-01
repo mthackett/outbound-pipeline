@@ -42,7 +42,7 @@ from job_pipeline.domain.telemetry_service import TelemetryService
 
 from job_pipeline.domain.services import (
     JobQualificationService, ApplicationGuardrailService, ScreeningQAService, QuickLinksService,
-    ScreeningIntelligenceService, StoryBankService, PipelineConfigService
+    ScreeningIntelligenceService, StoryBankService, PipelineConfigService, IngestionRecoveryService
 )
 from job_pipeline.logger import (
     log_startup, log_action, log_config, log_sheets, log_drive,
@@ -638,6 +638,341 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # TAB 1: FAST INGESTION & APPLY KIT (ZERO FRICTION)
 # =====================================================================
 with tab1:
+    # -------------------------------------------------------------
+    # Incomplete Ingestion Detection & Recovery Alert
+    # -------------------------------------------------------------
+    if "refresh_incomplete_workspaces" not in st.session_state:
+        st.session_state.refresh_incomplete_workspaces = True
+
+    if st.session_state.get("refresh_incomplete_workspaces", False) or "incomplete_workspaces" not in st.session_state:
+        all_opps_for_rec = storage_adapter.fetch_all_opportunities() if storage_adapter.is_connected else []
+        completed_folder_ids = []
+        for o in all_opps_for_rec:
+            link = o.get("Drive Folder Link", "")
+            m = re.search(r'[-\w]{25,}', link)
+            if m:
+                completed_folder_ids.append(m.group(0))
+        if hasattr(drive_adapter, "fetch_incomplete_workspaces"):
+            st.session_state.incomplete_workspaces = drive_adapter.fetch_incomplete_workspaces(completed_folder_ids=completed_folder_ids)
+        else:
+            st.session_state.incomplete_workspaces = []
+        st.session_state.refresh_incomplete_workspaces = False
+
+    incomplete_workspaces = st.session_state.get("incomplete_workspaces", [])
+
+    def resume_application_workflow(inc_ws: dict):
+        folder_id = inc_ws["folder_id"]
+        folder_link = inc_ws["folder_link"]
+        folder_name = inc_ws.get("folder_name", "")
+        raw_jd_text = inc_ws.get("raw_jd_text")
+        if not raw_jd_text:
+            raw_jd_text = drive_adapter.fetch_raw_job_description(folder_id)
+
+        if not raw_jd_text or len(raw_jd_text.strip()) < 20:
+            st.error("Cannot resume: Raw job description text could not be loaded from workspace.")
+            return
+
+        company_name = inc_ws.get("company", "Target Company")
+        job_title = inc_ws.get("title", "Target Role")
+        log_action(f"⚡ Resuming incomplete ingestion workflow for '{company_name}' - '{job_title}'")
+
+        try:
+            with st.spinner(f"Resuming ingestion for '{company_name} — {job_title}'..."):
+                existing_files = drive_adapter.list_workspace_files(folder_id)
+                existing_names = {f.get("name", "").lower(): f for f in existing_files}
+
+                drive_jd_link = None
+                for fname, fmeta in existing_names.items():
+                    if "raw job description" in fname:
+                        drive_jd_link = fmeta.get("webViewLink")
+                        break
+                if not drive_jd_link:
+                    res_jd = drive_adapter.upload_raw_job_description(folder_id, raw_jd_text, company_name=company_name, job_title=job_title)
+                    if isinstance(res_jd, dict):
+                        drive_jd_link = res_jd.get("file_link")
+
+                warning_rules = PipelineConfigService.get_active_telemetry_rules()
+                telemetry = None
+                extracted_company = company_name if company_name != "Target Company" else ""
+                extracted_title = job_title if job_title != "Target Role" else ""
+                extracted_family = "revenue_operations"
+                extracted_min = None
+                extracted_max = None
+                req_skills = []
+                pref_skills = []
+                pain_points = ""
+                is_remote = False
+                extracted_arrangement = "Employee"
+                extracted_worker_class = None
+                extracted_pay_basis = "Annual"
+                extracted_duration_raw = None
+                extracted_months = None
+                extracted_weeks = None
+                extracted_hours = None
+                extracted_ext = None
+                extracted_fte = None
+                extracted_agency = None
+                extracted_client = None
+                extracted_telemetry_warnings = []
+                extracted_telemetry_benefits = []
+
+                if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
+                    try:
+                        telemetry = llm_adapter.extract_job_telemetry(raw_jd_text, warning_rules=warning_rules)
+                        extracted_company = telemetry.company_name or extracted_company
+                        extracted_title = telemetry.job_title or extracted_title
+                        extracted_family = telemetry.title_family
+                        extracted_min = telemetry.requirements.salary_min
+                        extracted_max = telemetry.requirements.salary_max
+                        req_skills = telemetry.requirements.required_tech_stack
+                        pref_skills = telemetry.requirements.preferred_tech_stack
+                        pain_points = telemetry.requirements.core_pain_points or ""
+                        is_remote = telemetry.requirements.is_remote
+                        extracted_arrangement = telemetry.requirements.employment_arrangement or "Employee"
+                        extracted_worker_class = telemetry.requirements.worker_classification
+                        extracted_pay_basis = telemetry.requirements.pay_basis or "Annual"
+                        extracted_duration_raw = telemetry.requirements.contract_length_raw
+                        extracted_months = telemetry.requirements.contract_length_months
+                        extracted_weeks = telemetry.requirements.contract_length_weeks
+                        extracted_hours = telemetry.requirements.expected_hours_per_week
+                        extracted_ext = telemetry.requirements.extension_possible
+                        extracted_fte = telemetry.requirements.fte_conversion_possible
+                        extracted_agency = telemetry.requirements.staffing_agency
+                        extracted_client = telemetry.requirements.client_company
+                        extracted_telemetry_warnings = telemetry.requirements.telemetry_warnings or []
+                        extracted_telemetry_benefits = getattr(telemetry.requirements, "telemetry_benefits", []) or []
+                    except Exception as t_err:
+                        log_warn(f"Telemetry extraction notice during resume: {t_err}")
+
+                final_company = (extracted_company or company_name or "Target Company").strip()
+                final_title = (extracted_title or job_title or "Target Role").strip()
+                final_family = extracted_family or "revenue_operations"
+                final_min_pay = extracted_min
+                final_max_pay = extracted_max
+                final_pay_basis = extracted_pay_basis or ("Hourly" if (final_min_pay and final_min_pay < 500) else "Annual")
+
+                all_opps = storage_adapter.fetch_all_opportunities() if storage_adapter.is_connected else []
+                fit_eval = JobQualificationService.evaluate(
+                    company_name=final_company,
+                    job_title=final_title,
+                    raw_description=raw_jd_text,
+                    required_skills=req_skills,
+                    preferred_skills=pref_skills,
+                    salary_min=final_min_pay,
+                    salary_max=final_max_pay,
+                    profile=st.session_state.profile,
+                    existing_company_titles=all_opps,
+                    pay_basis=final_pay_basis,
+                    expected_hours_per_week=extracted_hours,
+                    expected_hours_per_week_is_assumed=(extracted_hours is None),
+                    contract_length_months=extracted_months,
+                    contract_length_weeks=extracted_weeks,
+                    telemetry_warnings=extracted_telemetry_warnings,
+                    telemetry_benefits=extracted_telemetry_benefits
+                )
+
+                selected_resume = resume_repo.select_best_fit_resume(final_title, final_family)
+                resume_name = selected_resume.filename if selected_resume else "Default Resume"
+                resume_link = getattr(selected_resume, "web_link", None) if selected_resume else None
+                if not resume_link and selected_resume and selected_resume.doc_id and not selected_resume.doc_id.startswith("doc_"):
+                    resume_link = f"https://docs.google.com/document/d/{selected_resume.doc_id}/edit"
+
+                has_resume_file = any(resume_name.lower() in fname for fname in existing_names)
+                if not has_resume_file and selected_resume and selected_resume.doc_id:
+                    drive_adapter.export_resume_pdf(selected_resume.doc_id, folder_id, f"{resume_name}.pdf")
+
+                docx_filename = f"{final_company.replace(' ', '_')}_Role_Intelligence_Report.docx"
+                output_docx_path = f"output_reports/{docx_filename}"
+                has_report_file = any("role_intelligence_report" in fname or "role intelligence report" in fname for fname in existing_names)
+
+                if not has_report_file:
+                    os.makedirs("output_reports", exist_ok=True)
+                    resume_text = resume_repo.fetch_resume_text(selected_resume.doc_id) if selected_resume else ""
+                    report = llm_adapter.generate_role_intelligence_report(
+                        job_data={"company": final_company, "title": final_title, "description": raw_jd_text},
+                        resume_data={"resume_id": selected_resume.doc_id if selected_resume else "res1", "text": resume_text},
+                        output_docx_path=output_docx_path,
+                        target_pay_bounds=fit_eval.pay_bounds.model_dump(),
+                        demo_mode=demo_mode
+                    )
+                    if os.path.exists(output_docx_path):
+                        drive_adapter.upload_role_intelligence_report(folder_id, output_docx_path)
+
+                has_shortcut = any("pipeline tracker" in fname for fname in existing_names)
+                if not has_shortcut and hasattr(drive_adapter, "_drive_svc") and drive_adapter._drive_svc:
+                    sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
+                    if sheet_id:
+                        try:
+                            drive_adapter._drive_svc.files().create(
+                                body={
+                                    "name": "Pipeline Tracker (Master Sheet)",
+                                    "mimeType": "application/vnd.google-apps.shortcut",
+                                    "parents": [folder_id],
+                                    "shortcutDetails": {"targetId": sheet_id}
+                                },
+                                fields="id, webViewLink"
+                            ).execute()
+                        except Exception:
+                            pass
+
+                existing_in_sheets = any(
+                    (folder_id in o.get("Drive Folder Link", "")) or
+                    (o.get("Company Name", "").lower() == final_company.lower() and o.get("Job Title", "").lower() == final_title.lower())
+                    for o in all_opps
+                )
+
+                opp_id = str(uuid.uuid4())
+                tot_tokens = getattr(llm_adapter, "last_telemetry_tokens", 0) + getattr(llm_adapter, "last_report_tokens", 0)
+                final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
+                now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+                if not existing_in_sheets:
+                    job_posting = JobPosting(
+                        opportunity_id=opp_id,
+                        company_name=final_company,
+                        job_title=final_title,
+                        title_family=final_family,
+                        raw_description=raw_jd_text,
+                        source_url=inc_ws.get("url") or (telemetry.source_url if telemetry else None),
+                        category="Target",
+                        applied_via="LinkedIn",
+                        priority="High",
+                        employment_arrangement=extracted_arrangement,
+                        worker_classification=extracted_worker_class,
+                        pay_basis=final_pay_basis,
+                        expected_hours_per_week=fit_eval.pay_bounds.expected_hours_per_week,
+                        expected_hours_per_week_is_assumed=fit_eval.pay_bounds.expected_hours_per_week_is_assumed,
+                        contract_length_months=extracted_months,
+                        contract_length_weeks=extracted_weeks,
+                        contract_length_raw=extracted_duration_raw,
+                        contract_value_min=fit_eval.pay_bounds.contract_value_min,
+                        contract_value_max=fit_eval.pay_bounds.contract_value_max,
+                        contract_value_display=fit_eval.pay_bounds.contract_value_display,
+                        extension_possible=extracted_ext,
+                        fte_conversion_possible=extracted_fte,
+                        staffing_agency=extracted_agency,
+                        client_company=extracted_client,
+                        stage_history=[{"stage": final_status, "entered_at": now_iso}],
+                        required_skills=req_skills,
+                        preferred_skills=pref_skills,
+                        telemetry_warnings=extracted_telemetry_warnings,
+                        selected_resume_name=resume_name,
+                        drive_folder_link=folder_link,
+                        drive_jd_link=drive_jd_link,
+                        drive_screening_doc_link=None,
+                        screening_qa=[],
+                        tokens_used=tot_tokens
+                    )
+                    storage_adapter.save_opportunity(job_posting, fit_eval)
+
+                safe_c = "".join([c for c in final_company if c.isalnum() or c in (" ", "-", "_")]).strip().replace(" ", "_")
+                safe_t = "".join([c for c in final_title if c.isalnum() or c in (" ", "-", "_")]).strip().replace(" ", "_")
+                folder_date_match = re.search(r'\d{4}-\d{2}-\d{2}$', folder_name)
+                app_date = folder_date_match.group(0) if folder_date_match else datetime.now().strftime("%Y-%m-%d")
+                new_folder_name = f"{safe_c}_{safe_t}_{app_date}"
+                if folder_name != new_folder_name:
+                    drive_adapter.rename_application_workspace(folder_id, new_folder_name)
+
+                drive_adapter.mark_workspace_complete(folder_id)
+
+                st.session_state.latest_eval = {
+                    "company": final_company,
+                    "title": final_title,
+                    "family": final_family,
+                    "fit_eval": fit_eval,
+                    "category": "Target",
+                    "applied_via": "LinkedIn",
+                    "priority": "High",
+                    "employment_arrangement": extracted_arrangement,
+                    "worker_classification": extracted_worker_class,
+                    "pay_basis": final_pay_basis,
+                    "contract_length_raw": extracted_duration_raw,
+                    "contract_length_months": extracted_months,
+                    "contract_length_weeks": extracted_weeks,
+                    "contract_value_display": fit_eval.pay_bounds.contract_value_display,
+                    "extension_possible": extracted_ext,
+                    "fte_conversion_possible": extracted_fte,
+                    "staffing_agency": extracted_agency,
+                    "client_company": extracted_client,
+                    "stage_history": [{"stage": final_status, "entered_at": now_iso}],
+                    "selected_resume": selected_resume,
+                    "resume_name": resume_name,
+                    "resume_link": resume_link,
+                    "folder_link": folder_link,
+                    "drive_jd_link": drive_jd_link,
+                    "drive_screening_doc_link": None,
+                    "screening_qa": [],
+                    "output_docx_path": output_docx_path,
+                    "docx_filename": docx_filename,
+                    "req_skills": req_skills,
+                    "pref_skills": pref_skills,
+                    "pain_points": pain_points,
+                    "is_remote": is_remote,
+                    "telemetry_warnings": extracted_telemetry_warnings,
+                    "telemetry_benefits": extracted_telemetry_benefits,
+                    "opp_id": opp_id
+                }
+
+                st.session_state.refresh_incomplete_workspaces = True
+                st.success(f"🎉 Successfully completed ingestion for {final_company} — {final_title}!")
+                st.rerun()
+
+        except Exception as res_err:
+            log_warn(f"Error during ingestion recovery: {res_err}")
+            st.error(f"Processing failed: {res_err}. The workspace remains incomplete and recoverable.")
+
+    if incomplete_workspaces:
+        count = len(incomplete_workspaces)
+        s_sfx = "s" if count > 1 else ""
+        st.markdown(f"#### ⚠️ {count} incomplete ingestion{s_sfx} found")
+        for inc in incomplete_workspaces:
+            fid = inc["folder_id"]
+            comp = inc.get("company", "Unknown Company")
+            title = inc.get("title", "Unknown Role")
+            preview = inc.get("raw_jd_preview", "")
+            date_disp = inc.get("created_date_display", "")
+
+            with st.container():
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #1E1B4B 0%, #0F172A 100%); border: 1.5px solid #F59E0B; border-radius: 10px; padding: 1.2rem; margin-bottom: 0.8rem;">
+                    <div style="font-size: 1.15rem; font-weight: 700; color: #F8FAFC; margin-bottom: 0.3rem;">
+                        {comp} — {title}
+                    </div>
+                    <div style="font-size: 0.95rem; font-style: italic; color: #CBD5E1; margin-bottom: 0.6rem;">
+                        “{preview}”
+                    </div>
+                    <div style="font-size: 0.82rem; color: #94A3B8;">
+                        Created {date_disp}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                col_r1, col_r2, _ = st.columns([1.5, 1, 4])
+                with col_r1:
+                    if st.button("▶️ Resume processing", key=f"btn_res_{fid}", type="primary"):
+                        resume_application_workflow(inc)
+                with col_r2:
+                    if st.button("🗑️ Discard", key=f"btn_disc_{fid}"):
+                        st.session_state[f"confirm_discard_{fid}"] = True
+                        st.rerun()
+
+                if st.session_state.get(f"confirm_discard_{fid}", False):
+                    st.error(f"⚠️ Are you sure you want to permanently discard the incomplete ingestion for **{comp} — {title}**? This will delete the workspace folder and its artifacts. Shared resources will not be affected.")
+                    col_c1, col_c2, _ = st.columns([1.5, 1, 4])
+                    with col_c1:
+                        if st.button("⚠️ Confirm Discard", key=f"btn_confirm_discard_{fid}", type="primary"):
+                            with st.spinner(f"Deleting incomplete workspace for {comp}..."):
+                                drive_adapter.delete_application_workspace(fid)
+                                st.session_state[f"confirm_discard_{fid}"] = False
+                                st.session_state.refresh_incomplete_workspaces = True
+                                st.success(f"Discarded incomplete ingestion for {comp} — {title}.")
+                                st.rerun()
+                    with col_c2:
+                        if st.button("Cancel", key=f"btn_cancel_discard_{fid}"):
+                            st.session_state[f"confirm_discard_{fid}"] = False
+                            st.rerun()
+        st.markdown("---")
+
     if "intake_counter" not in st.session_state:
         st.session_state.intake_counter = 0
     cur_intake = st.session_state.intake_counter
@@ -850,7 +1185,7 @@ with tab1:
                     competency_signals=q_signals
                 ))
 
-    def execute_application_workflow(job_payload: dict):
+    def _run_workflow(job_payload: dict):
         final_company = job_payload["company"]
         final_title = job_payload["title"]
         log_action(f"⚡ Ingestion workflow started for '{final_company}' - '{final_title}'")
@@ -1011,6 +1346,11 @@ with tab1:
             )
             storage_adapter.save_opportunity(job_posting, fit_eval)
 
+            # Mark workspace complete in Drive now that canonical opportunity record and artifacts are saved
+            if folder_id:
+                drive_adapter.mark_workspace_complete(folder_id)
+            st.session_state.refresh_incomplete_workspaces = True
+
             # Reset intake input counter so intake field returns to clean blank state after successful processing
             st.session_state.intake_counter = st.session_state.get("intake_counter", 0) + 1
             for sk in list(st.session_state.keys()):
@@ -1058,6 +1398,14 @@ with tab1:
                 "telemetry_benefits": final_telemetry_benefits,
                 "opp_id": opp_id
             }
+
+    def execute_application_workflow(job_payload: dict):
+        try:
+            _run_workflow(job_payload)
+        except Exception as flow_err:
+            log_warn(f"Application workflow error: {flow_err}")
+            st.session_state.refresh_incomplete_workspaces = True
+            st.error(f"Processing failed: {flow_err}. The Drive workspace has been preserved as incomplete and can be recovered.")
 
     # Display Pending Guardrail Warning if tripped
     if st.session_state.pending_guardrail_check:

@@ -104,3 +104,34 @@ class DocumentStoragePort(ABC):
     ) -> Optional[Dict[str, str]]:
         """Creates a Google Doc titled 'Screening Questions' inside the application folder."""
         pass
+
+    @abstractmethod
+    def fetch_incomplete_workspaces(self, completed_folder_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Finds any workspaces that were created but have not yet been marked complete or logged to canonical storage."""
+        pass
+
+    @abstractmethod
+    def mark_workspace_complete(self, folder_id: str) -> bool:
+        """Marks a workspace as successfully completed."""
+        pass
+
+    @abstractmethod
+    def fetch_raw_job_description(self, folder_id: str) -> Optional[str]:
+        """Fetches persisted raw job description text from workspace folder."""
+        pass
+
+    @abstractmethod
+    def delete_application_workspace(self, folder_id: str) -> bool:
+        """Deletes workspace folder and owned artifacts without deleting referenced resources."""
+        pass
+
+    @abstractmethod
+    def list_workspace_files(self, folder_id: str) -> List[Dict[str, Any]]:
+        """Lists existing files in workspace folder."""
+        pass
+
+    @abstractmethod
+    def rename_application_workspace(self, folder_id: str, new_name: str) -> bool:
+        """Renames an existing application workspace folder."""
+        pass
+
