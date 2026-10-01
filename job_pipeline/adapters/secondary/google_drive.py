@@ -249,7 +249,9 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
                 raise ValueError("Multiple raw JD documents require manual reconciliation.")
             if existing:
                 doc_id = existing[0]["id"]
-                if self.fetch_resume_text(doc_id).strip() != raw_text.strip():
+                existing_text = re.sub(r'\s+', ' ', (self.fetch_resume_text(doc_id) or "").lstrip("\ufeff")).strip()
+                incoming_text = re.sub(r'\s+', ' ', (raw_text or "").lstrip("\ufeff")).strip()
+                if existing_text != incoming_text:
                     raise ValueError("This workspace already holds a different job description. Resume it or start a new intake.")
                 return {"file_id": doc_id, "file_link": existing[0].get("webViewLink") or f"https://docs.google.com/document/d/{doc_id}/edit"}
             doc_file = self._drive_svc.files().create(
@@ -620,7 +622,7 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
             done = False
             while not done:
                 _, done = downloader.next_chunk()
-            return fh.getvalue().decode("utf-8", errors="ignore")
+            return fh.getvalue().decode("utf-8-sig", errors="ignore").replace("\r\n", "\n").replace("\r", "\n")
         except Exception as e:
             print(f"WARNING: Drive export failed for doc '{doc_id}': {e}. Falling back to Docs API...")
 

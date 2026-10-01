@@ -678,8 +678,13 @@ with tab1:
             raw_jd_text = drive_adapter.fetch_raw_job_description(folder_id)
             if not raw_jd_text or len(raw_jd_text.strip()) < 20:
                 raise RuntimeError("This workspace's raw job description is missing or unreadable; restore it and retry.")
-            if checkpoint.get("jd_text") and checkpoint["jd_text"].strip() != raw_jd_text.strip():
+            def _clean_text(t: str) -> str:
+                return re.sub(r'\s+', ' ', (t or "").lstrip("\ufeff")).strip()
+
+            if checkpoint.get("jd_text") and _clean_text(checkpoint["jd_text"]) != _clean_text(raw_jd_text):
                 raise ValueError("Workspace JD differs from the saved intake. Restore the original source before resuming.")
+            if checkpoint.get("jd_text"):
+                raw_jd_text = checkpoint["jd_text"]
             screening_qa_list = [ScreeningQA(**q) for q in checkpoint.get("screening_qa", [])]
             if not checkpoint and existing_record:
                 historical = storage_adapter.fetch_screening_qa(opp_id, force_refresh=True)
@@ -702,12 +707,12 @@ with tab1:
                 drive_jd_link = None
                 for fname, fmeta in existing_names.items():
                     if "raw job description" in fname:
-                        drive_jd_link = fmeta.get("webViewLink")
+                        drive_jd_link = fmeta.get("webViewLink") or (f"https://docs.google.com/document/d/{fmeta.get('id')}/edit" if fmeta.get("id") else None)
                         break
                 if not drive_jd_link:
                     res_jd = drive_adapter.upload_raw_job_description(folder_id, raw_jd_text, company_name=company_name, job_title=job_title)
                     if isinstance(res_jd, dict):
-                        drive_jd_link = res_jd.get("file_link")
+                        drive_jd_link = res_jd.get("file_link") or res_jd.get("webViewLink")
 
                 warning_rules = PipelineConfigService.get_active_telemetry_rules()
                 telemetry = None
@@ -1327,7 +1332,7 @@ with tab1:
                     job_title=final_title
                 )
                 if isinstance(res_jd, dict):
-                    drive_jd_link = res_jd.get("file_link")
+                    drive_jd_link = res_jd.get("file_link") or res_jd.get("webViewLink")
             if not drive_jd_link:
                 raise RuntimeError("The workspace raw job description could not be saved; retry this intake.")
 
@@ -2434,10 +2439,10 @@ with tab2:
                 with c_card2:
                     st.markdown("##### Update Application Details & Recruiter Notes:")
                     stage_options = [
-                        "Pending", "Processed", "Applied", "Application Rejected",
-                        "Recruiter Screen", "Hiring Manager",
-                        "Technical Screen", "Final Round", "Offer",
-                        "Archived / Rejected"
+                        "Pending", "Processed", "Applied", "Declined to Apply",
+                        "Application Rejected", "Recruiter Screen", "Hiring Manager",
+                        "Technical Screen", "Final Round", "Offer", "Withdrawn",
+                        "Archived", "Rejected"
                     ]
                     current_idx = stage_options.index(curr_status) if curr_status in stage_options else 1
 

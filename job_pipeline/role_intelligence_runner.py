@@ -143,18 +143,20 @@ class RoleIntelligenceRunner:
                         if isinstance(page, dict) and "columns" in page and isinstance(page["columns"], list):
                             cols = page["columns"]
                             # If LLM returned 1D list of section objects instead of 2D list of columns:
-                            if cols and isinstance(cols[0], dict):
+                            if cols and all(isinstance(c, dict) for c in cols):
                                 n_cols = 3
                                 chunk_size = max(1, (len(cols) + n_cols - 1) // n_cols)
                                 page["columns"] = [cols[i:i + chunk_size] for i in range(0, len(cols), chunk_size)]
                                 while len(page["columns"]) < n_cols:
                                     page["columns"].append([])
 
-                            # Normalize section kinds and item formats
+                            # Normalize section kinds, item formats, and default titles
                             for col in page["columns"]:
                                 if isinstance(col, list):
                                     for sec in col:
                                         if isinstance(sec, dict):
+                                            if not sec.get("title") or not str(sec["title"]).strip():
+                                                sec["title"] = sec.get("header") or sec.get("name") or sec.get("heading") or "Overview"
                                             skind = str(sec.get("kind", "bullets")).lower()
                                             if skind in ("text", "paragraph", "paragraphs", "prose"):
                                                 sec["kind"] = "lines"
@@ -193,7 +195,7 @@ class RoleIntelligenceRunner:
         try:
             generate_recall_sheet(content_json, output_docx_path, variables=variables, manifest_path="auto")
         except Exception as render_err:
-            raise RuntimeError("Role Intelligence rendering failed; ingestion remains incomplete. Retry after correcting the report content or renderer error.") from render_err
+            raise RuntimeError(f"Role Intelligence rendering failed ({render_err}); ingestion remains incomplete. Retry after correcting the report content or renderer error.") from render_err
 
         print(f"SUCCESS: Generated Role Intelligence Report: {output_docx_path}")
         

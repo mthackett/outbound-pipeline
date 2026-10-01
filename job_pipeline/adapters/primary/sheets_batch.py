@@ -121,7 +121,7 @@ def run_batch_pipeline(demo_mode: bool = False):
                 job_title=job.job_title
             )
             if isinstance(jd_file_res, dict):
-                job.drive_jd_link = jd_file_res.get("file_link")
+                job.drive_jd_link = jd_file_res.get("file_link") or jd_file_res.get("webViewLink")
             if selected_resume and selected_resume.doc_id:
                 drive_adapter.export_resume_pdf(selected_resume.doc_id, workspace["folder_id"], f"{resume_name}.pdf")
             drive_adapter.upload_role_intelligence_report(workspace["folder_id"], output_docx_path)

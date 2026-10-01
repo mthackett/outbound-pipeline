@@ -26,8 +26,12 @@ class MockJobStorageAdapter(JobStoragePort):
         ]
 
     def save_opportunity(self, job: JobPosting, fit_eval: FitEvaluation) -> bool:
+        raw_jd_link = job.drive_jd_link
         existing = next((item for item in self.saved_jobs if item["job"].opportunity_id == job.opportunity_id), None)
         if existing:
+            if not raw_jd_link and existing.get("job") and existing["job"].drive_jd_link:
+                raw_jd_link = existing["job"].drive_jd_link
+                job.drive_jd_link = raw_jd_link
             existing.update(job=job, fit_eval=fit_eval)
         else:
             self.saved_jobs.append({"job": job, "fit_eval": fit_eval})
@@ -112,6 +116,8 @@ class MockJobStorageAdapter(JobStoragePort):
                 "Job Title": j.job_title,
                 "Date Created": j.date_created,
                 "Status": j.status,
+                "Job Description": "",
+                "Raw JD Link": j.drive_jd_link or "",
                 "Category": j.category or "Target",
                 "Applied Via": j.applied_via or "LinkedIn",
                 "Priority": j.priority or "High",

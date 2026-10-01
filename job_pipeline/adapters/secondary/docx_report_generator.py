@@ -288,8 +288,8 @@ def _add_bullet(cell, item, cfg):
     bullet = p.add_run("• ")
     _set_font(bullet, cfg, size=cfg["body_font_pt"], color=cfg["body_color"])
 
-    if isinstance(item, str):
-        r = p.add_run(item)
+    if not isinstance(item, dict):
+        r = p.add_run(str(item))
         _set_font(r, cfg, size=cfg["body_font_pt"], color=cfg["body_color"])
         return p
 
@@ -317,8 +317,8 @@ def _add_line(cell, item, cfg):
         after=cfg["spacing"]["line_after_pt"],
         line=cfg["spacing"]["body_line"],
     )
-    if isinstance(item, str):
-        r = p.add_run(item)
+    if not isinstance(item, dict):
+        r = p.add_run(str(item))
         _set_font(r, cfg, size=cfg["body_font_pt"], color=cfg["body_color"])
         return p
 
@@ -335,6 +335,20 @@ def _add_line(cell, item, cfg):
 def _add_skill_matrix(cell, items, cfg):
     if not items:
         return
+    if isinstance(items, dict):
+        items = [{"label": str(k), "terms": [str(v)] if isinstance(v, (str, int, float)) else list(v)} for k, v in items.items()]
+    elif isinstance(items, list):
+        normalized_items = []
+        for it in items:
+            if isinstance(it, dict):
+                normalized_items.append(it)
+            elif isinstance(it, (str, int, float)):
+                normalized_items.append({"label": "Skill", "terms": [str(it)]})
+            elif isinstance(it, (list, tuple)):
+                normalized_items.append({"label": str(it[0]) if it else "Skill", "terms": list(it[1:]) if len(it) > 1 else [str(it[0])] if it else []})
+            else:
+                normalized_items.append({"label": "Skill", "terms": [str(it)]})
+        items = normalized_items
     table = cell.add_table(rows=len(items), cols=2)
     table.alignment = WD_TABLE_ALIGNMENT.LEFT
     table.autofit = False
@@ -395,7 +409,7 @@ def _add_note(cell, text, cfg):
 
 
 def _render_section(cell, section, cfg):
-    _add_section_banner(cell, section["title"], cfg)
+    _add_section_banner(cell, section.get("title") or "Overview", cfg)
     raw_kind = section.get("kind", "bullets")
     kind = raw_kind.lower() if isinstance(raw_kind, str) else "bullets"
 

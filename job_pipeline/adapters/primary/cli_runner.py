@@ -127,7 +127,7 @@ def evaluate_single_job(
         print("UPLOADING assets to Google Drive folder...")
         jd_file_res = drive_adapter.upload_raw_job_description(folder_id, raw_jd)
         if isinstance(jd_file_res, dict):
-            drive_jd_link = jd_file_res.get("file_link")
+            drive_jd_link = jd_file_res.get("file_link") or jd_file_res.get("webViewLink")
         if selected_resume and selected_resume.doc_id:
             drive_adapter.export_resume_pdf(selected_resume.doc_id, folder_id, f"{resume_name}.pdf")
         if os.path.exists(output_docx_path):

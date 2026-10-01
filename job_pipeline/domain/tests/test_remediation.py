@@ -533,5 +533,216 @@ class TestFindWorkspaceRecord(unittest.TestCase):
             IngestionRecoveryService.find_workspace_record(records, "abc", "opp-1")
 
 
+
+# ===========================================================================
+# Persistence: Raw JD excluded from Sheet; Drive JD link persisted
+# ===========================================================================
+
+class TestRawJDPersistencePolicy(unittest.TestCase, _WorkspaceHelper):
+    """Verifies that full raw job-description text is removed from canonical
+    Google Sheets opportunity persistence, while the Drive JD URI/link is
+    persisted reliably, and existing ingestion/recovery behavior is preserved."""
+
+    def test_mock_storage_raw_jd_excluded_and_link_persisted(self):
+        """Mock storage fetch_all_opportunities must reflect canonical sheet rows:
+        empty Job Description and populated Raw JD Link."""
+        storage = MockJobStorageAdapter()
+        fit = _make_fit_eval()
+        job = _make_job_posting(
+            opp_id="opp-jd-01",
+            company="Snowflake",
+            title="RevOps Lead",
+            raw_description=SAMPLE_JD,
+            drive_jd_link="https://docs.google.com/document/d/mock_raw_jd_01/edit",
+        )
+        storage.save_opportunity(job, fit)
+
+        # In-memory model preserves raw JD for downstream workflows
+        self.assertEqual(job.raw_description, SAMPLE_JD)
+        self.assertEqual(job.drive_jd_link, "https://docs.google.com/document/d/mock_raw_jd_01/edit")
+
+        # Canonical Sheet record representation excludes raw text and includes Drive link
+        opps = storage.fetch_all_opportunities()
+        self.assertEqual(len(opps), 1)
+        rec = opps[0]
+        self.assertEqual(rec["Raw JD Link"], "https://docs.google.com/document/d/mock_raw_jd_01/edit")
+        self.assertEqual(rec["Job Description"], "")
+        self.assertNotIn(SAMPLE_JD, rec.values())
+
+    def test_google_sheets_adapter_save_does_not_persist_raw_text(self):
+        """GoogleSheetsAdapter.save_opportunity must write empty string for Job Description
+        and the document URI for Raw JD Link into the canonical sheet."""
+        from job_pipeline.adapters.secondary.google_sheets import GoogleSheetsAdapter
+
+        headers = [
+            "Opportunity ID", "Company Name", "Job Title", "Title Family", "Status",
+            "Date Created", "Job Description", "Raw JD Link", "Last Modified",
+            "Tokens", "Fit Warning", "Selected Resume",
+            "Target Pay Range", "Drive Folder Link", "Screening Doc Link", "Screening QA Count",
+            "Stage History", "Category", "Applied Via", "Priority",
+            "Employment Arrangement", "Worker Classification", "Pay Basis",
+            "Contract Duration", "Contract Value", "Staffing Agency",
+            "Client Company", "Extension Possible", "FTE Conversion"
+        ]
+        with patch.object(GoogleSheetsAdapter, "_init_connection"):
+            adapter = GoogleSheetsAdapter(spreadsheet_id="mock_sheet_id")
+            mock_sheet = MagicMock()
+            mock_ingest_ws = MagicMock()
+            mock_ingest_ws.row_values.return_value = headers
+            mock_ingest_ws.col_count = len(headers)
+            mock_ingest_ws.get_all_records.return_value = []
+            mock_sheet.worksheet.side_effect = lambda name: mock_ingest_ws if name == "Raw Ingestion" else MagicMock(get_all_records=MagicMock(return_value=[]))
+            adapter._spreadsheet = mock_sheet
+
+        fit = _make_fit_eval()
+        job = _make_job_posting(
+            opp_id="opp-live-01",
+            company="Datadog",
+            title="GTM Systems Architect",
+            raw_description=SAMPLE_JD,
+            drive_jd_link="https://docs.google.com/document/d/drive_jd_live_123/edit",
+        )
+        saved = adapter.save_opportunity(job, fit)
+        self.assertTrue(saved)
+
+        # Raw description remains on in-memory JobPosting
+        self.assertEqual(job.raw_description, SAMPLE_JD)
+
+        # Inspect appended row
+        mock_ingest_ws.append_row.assert_called_once()
+        appended_row = mock_ingest_ws.append_row.call_args[0][0]
+        jd_col_idx = headers.index("Job Description")
+        link_col_idx = headers.index("Raw JD Link")
+
+        # Full raw text is NOT persisted
+        self.assertEqual(appended_row[jd_col_idx], "")
+        self.assertNotIn(SAMPLE_JD, appended_row)
+
+        # Drive JD link IS persisted
+        self.assertEqual(appended_row[link_col_idx], "https://docs.google.com/document/d/drive_jd_live_123/edit")
+
+    def test_retry_preserves_drive_jd_link_without_persisting_raw_text(self):
+        """Retrying or updating an opportunity retains drive_jd_link and leaves raw JD text out."""
+        from job_pipeline.adapters.secondary.google_sheets import GoogleSheetsAdapter
+
+        headers = [
+            "Opportunity ID", "Company Name", "Job Title", "Title Family", "Status",
+            "Date Created", "Job Description", "Raw JD Link", "Last Modified",
+            "Tokens", "Fit Warning", "Selected Resume",
+            "Target Pay Range", "Drive Folder Link", "Screening Doc Link", "Screening QA Count",
+            "Stage History", "Category", "Applied Via", "Priority",
+            "Employment Arrangement", "Worker Classification", "Pay Basis",
+            "Contract Duration", "Contract Value", "Staffing Agency",
+            "Client Company", "Extension Possible", "FTE Conversion"
+        ]
+        with patch.object(GoogleSheetsAdapter, "_init_connection"):
+            adapter = GoogleSheetsAdapter(spreadsheet_id="mock_sheet_id")
+            mock_sheet = MagicMock()
+            mock_ingest_ws = MagicMock()
+            mock_ingest_ws.row_values.return_value = headers
+            mock_ingest_ws.col_count = len(headers)
+            # Existing record in sheet already has Raw JD Link and Date Created, but had old raw text
+            existing_record = {
+                "Opportunity ID": "opp-retry-01",
+                "Company Name": "Stripe",
+                "Job Title": "RevOps Analyst",
+                "Status": "Pending",
+                "Date Created": "2026-09-30 10:00:00",
+                "Job Description": "Old pasted text",
+                "Raw JD Link": "https://docs.google.com/document/d/stripe_jd_existing/edit",
+            }
+            mock_ingest_ws.get_all_records.return_value = [existing_record]
+            mock_sheet.worksheet.side_effect = lambda name: mock_ingest_ws if name == "Raw Ingestion" else MagicMock(get_all_records=MagicMock(return_value=[]))
+            adapter._spreadsheet = mock_sheet
+
+        fit = _make_fit_eval()
+        # Job on retry may have raw_description in memory but None drive_jd_link
+        job_retry = _make_job_posting(
+            opp_id="opp-retry-01",
+            company="Stripe",
+            title="RevOps Analyst",
+            raw_description=SAMPLE_JD,
+            drive_jd_link=None,
+        )
+        saved = adapter.save_opportunity(job_retry, fit)
+        self.assertTrue(saved)
+
+        # Updated cells should update Job Description to empty and preserve Raw JD Link
+        mock_ingest_ws.update_cells.assert_called_once()
+        cell_updates = mock_ingest_ws.update_cells.call_args[0][0]
+        jd_col_1based = headers.index("Job Description") + 1
+        link_col_1based = headers.index("Raw JD Link") + 1
+
+        jd_cells = [c for c in cell_updates if c.col == jd_col_1based]
+        link_cells = [c for c in cell_updates if c.col == link_col_1based]
+
+        self.assertTrue(len(jd_cells) == 1)
+        self.assertEqual(jd_cells[0].value, "")
+        self.assertTrue(len(link_cells) == 1)
+        self.assertEqual(link_cells[0].value, "https://docs.google.com/document/d/stripe_jd_existing/edit")
+        self.assertEqual(job_retry.drive_jd_link, "https://docs.google.com/document/d/stripe_jd_existing/edit")
+
+    def test_ingestion_and_recovery_flow_preserves_jd_in_drive_and_recovers_link(self):
+        """Ingestion and recovery behavior: raw JD is durably kept in Drive, recovered
+        as a URI link, completion-gated with raw_jd_saved, and persisted without raw text."""
+        doc_storage = MockDocumentStorageAdapter()
+        storage = MockJobStorageAdapter()
+
+        # Step 1: Incomplete workspace intake
+        ws = doc_storage.create_application_workspace("Figma", "Data Analyst", "opp-rec-01")
+        folder_id = ws["folder_id"]
+        jd_upload = doc_storage.upload_raw_job_description(folder_id, SAMPLE_JD, "Figma", "Data Analyst")
+        self.assertIsNotNone(jd_upload)
+        self.assertIn("file_link", jd_upload)
+
+        # Incomplete detection works from Drive workspace raw text
+        incomplete = doc_storage.fetch_incomplete_workspaces()
+        self.assertEqual(len(incomplete), 1)
+        self.assertEqual(incomplete[0]["company"], "Figma")
+        self.assertIn("Analyze revenue data", incomplete[0]["raw_jd_preview"])
+
+        # Step 2: Recovery finds existing file link and raw text from workspace
+        files = doc_storage.list_workspace_files(folder_id)
+        raw_jd_doc = next((f for f in files if "raw job description" in f.get("name", "").lower()), None)
+        self.assertIsNotNone(raw_jd_doc)
+        recovered_link = raw_jd_doc.get("webViewLink") or f"https://docs.google.com/document/d/{raw_jd_doc.get('id')}/edit"
+        recovered_text = doc_storage.fetch_raw_job_description(folder_id)
+        self.assertEqual(recovered_text, SAMPLE_JD)
+
+        # Step 3: Complete recovery and persist opportunity
+        fit = _make_fit_eval()
+        job = _make_job_posting(
+            opp_id="opp-rec-01",
+            company="Figma",
+            title="Data Analyst",
+            raw_description=recovered_text,
+            drive_folder_link=ws["folder_link"],
+            drive_jd_link=recovered_link,
+        )
+        canonical_saved = storage.save_opportunity(job, fit)
+        self.assertTrue(canonical_saved)
+
+        # Completion gating passes because raw_jd_saved=bool(drive_jd_link) is True
+        IngestionRecoveryService.require_completion(
+            workspace_id=folder_id,
+            raw_jd_saved=bool(job.drive_jd_link),
+            report_saved=True,
+            canonical_saved=canonical_saved,
+        )
+        marked = doc_storage.mark_workspace_complete(folder_id)
+        self.assertTrue(marked)
+
+        # Workspace is now complete
+        self.assertEqual(len(doc_storage.fetch_incomplete_workspaces()), 0)
+
+        # Sheet persistence contains Drive link, not raw text
+        opps = storage.fetch_all_opportunities()
+        self.assertEqual(len(opps), 1)
+        self.assertEqual(opps[0]["Raw JD Link"], recovered_link)
+        self.assertEqual(opps[0]["Job Description"], "")
+        self.assertNotIn(SAMPLE_JD, opps[0].values())
+
+
 if __name__ == "__main__":
     unittest.main()
+

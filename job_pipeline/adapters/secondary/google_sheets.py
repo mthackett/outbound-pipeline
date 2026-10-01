@@ -155,7 +155,8 @@ class GoogleSheetsAdapter(JobStoragePort):
                 if 2 <= job.row_index <= len(records) + 1:
                     candidate = records[job.row_index - 2]
                     if (not str(candidate.get("Opportunity ID", "")).strip()
-                            and str(candidate.get("Job Description", "")).strip() == job.raw_description.strip()):
+                            and (str(candidate.get("Job Description", "")).strip() == job.raw_description.strip()
+                                 or (job.drive_jd_link and str(candidate.get("Raw JD Link", "")).strip() == job.drive_jd_link.strip()))):
                         target_row_idx, existing = job.row_index, candidate
             is_new = target_row_idx is None
             if is_new:
@@ -172,9 +173,12 @@ class GoogleSheetsAdapter(JobStoragePort):
             queue("Job Title", job.job_title)
             queue("Title Family", job.title_family)
             queue("Date Created", existing.get("Date Created") or job.date_created)
-            queue("Job Description", job.raw_description)
-            if job.drive_jd_link:
-                queue("Raw JD Link", job.drive_jd_link)
+            queue("Job Description", "")
+            raw_jd_link = job.drive_jd_link or existing.get("Raw JD Link")
+            if raw_jd_link:
+                queue("Raw JD Link", raw_jd_link)
+                if not job.drive_jd_link:
+                    job.drive_jd_link = raw_jd_link
             if job.source_url:
                 queue("Source URL", job.source_url)
             queue("Opportunity ID", job.opportunity_id)
