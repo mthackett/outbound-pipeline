@@ -77,6 +77,9 @@ class JobRequirementsSchema(BaseModel):
     telemetry_warnings: List[str] = Field(
         default_factory=list, description="List of warning labels or infractions detected based on the configured warning criteria or job post conditions."
     )
+    telemetry_benefits: List[str] = Field(
+        default_factory=list, description="List of positive or desirable signal labels detected based on configured benefit criteria or job post conditions."
+    )
 
 
 class JobExtractionPayload(BaseModel):
@@ -104,27 +107,36 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         warning_rules: Optional[List[Dict[str, Any]]] = None
     ) -> JobExtractionPayload:
         """Parses raw job description text into structured JobExtractionPayload using gpt-4o-mini and user warning rules."""
+        from job_pipeline.domain.telemetry_service import TelemetryService
         if warning_rules is None:
             try:
                 from job_pipeline.domain.services import PipelineConfigService
-                warning_rules = PipelineConfigService.get_active_warning_rules()
+                warning_rules = PipelineConfigService.get_active_telemetry_rules()
             except Exception:
                 warning_rules = []
 
+        normalized_rules = [TelemetryService.normalize_rule(r) for r in (warning_rules or []) if (r.get("enabled", True) if isinstance(r, dict) else r.enabled)]
+
+        # 1. Deterministic evaluation (instant, 0 tokens, boundary-aware)
+        deterministic_findings = TelemetryService.evaluate_deterministic_rules(normalized_rules, raw_jd)
+        det_flags, det_warns, det_benefits = TelemetryService.split_findings(deterministic_findings)
+
+        # 2. Check cache to avoid repeated LLM work on unchanged JD & rules
+        cache_key = TelemetryService.compute_cache_key(
+            raw_jd,
+            [r.model_dump() if hasattr(r, "model_dump") else r.dict() for r in normalized_rules]
+        )
+        cached_payload = TelemetryService.get_cached_extraction(cache_key)
+        if cached_payload:
+            return cached_payload
+
+        # 3. Offline fallback if no API key
         if not self.api_key:
             self.last_telemetry_tokens = 0
-            offline_warnings: List[str] = []
-            if warning_rules:
-                for rule in warning_rules:
-                    r_name = rule.get("name", "Warning")
-                    for kw in rule.get("keywords", []):
-                        if kw and kw.strip():
-                            pattern = r'(?:\b|_)' + re.escape(kw.strip()) + r'(?:\b|_)'
-                            if re.search(pattern, raw_jd, re.IGNORECASE):
-                                offline_warnings.append(f"[{r_name}]: Keyword match detected ('{kw.strip()}').")
-                                break
+            offline_warnings = [f.to_display_string() for f in (det_flags + det_warns)]
+            offline_benefits = [f.to_display_string() for f in det_benefits]
 
-            return JobExtractionPayload(
+            payload = JobExtractionPayload(
                 company_name="Target Company",
                 job_title="Revenue Operations Analyst",
                 title_family="revenue_operations",
@@ -135,32 +147,17 @@ class OpenAIEngineAdapter(LLMStrategyPort):
                     is_remote=True,
                     employment_arrangement="Employee",
                     pay_basis="Annual",
-                    telemetry_warnings=offline_warnings
+                    telemetry_warnings=offline_warnings,
+                    telemetry_benefits=offline_benefits
                 )
             )
+            TelemetryService.set_cached_extraction(cache_key, payload)
+            return payload
 
+        # 4. Online LLM extraction with semantic rules only
         client = self._runner.client
-        warning_section = ""
-        if warning_rules:
-            rule_lines = []
-            for idx, r in enumerate(warning_rules, start=1):
-                name = r.get("name", f"Rule {idx}")
-                category = r.get("category", "General")
-                severity = r.get("severity", "Warning")
-                keywords = ", ".join(r.get("keywords", []))
-                concept = r.get("concept_description", "")
-                rule_lines.append(
-                    f"{idx}. {name} (Category: {category}, Severity: {severity})\n"
-                    f"   - Trigger Keywords: {keywords or 'None specified'}\n"
-                    f"   - Target Concept/Condition: {concept}"
-                )
-            warning_section = (
-                "\n\nCONFIGURABLE TELEMETRY WARNING RULES:\n"
-                "Evaluate the job post against each rule below. If any keyword, concept, or condition is present or implied,\n"
-                "add a distinct infraction to the 'telemetry_warnings' list in the format '[<Rule Name>]: <Brief reason/quote>'.\n"
-                "Do NOT combine multiple violations into one string; record every matching rule infraction as a separate item:\n"
-                + "\n".join(rule_lines)
-            )
+        semantic_rules = [r for r in normalized_rules if r.match_mode == "concept"]
+        warning_section = TelemetryService.build_semantic_prompt_section(semantic_rules)
 
         system_instruction = (
             "You are a precise B2B GTM intelligence engine. Analyze the job description "
@@ -189,25 +186,21 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         self.last_telemetry_tokens = getattr(completion.usage, "total_tokens", 0) if hasattr(completion, "usage") else 0
         parsed = completion.choices[0].message.parsed
 
-        # Hybrid scanning: Ensure deterministic keyword matches are guaranteed to be flagged
-        detected_warnings = list(parsed.requirements.telemetry_warnings or [])
-        if warning_rules:
-            for rule in warning_rules:
-                r_name = rule.get("name", "Warning")
-                keywords = rule.get("keywords", [])
-                matched_kws = []
-                for kw in keywords:
-                    if not kw or not kw.strip():
-                        continue
-                    pattern = r'(?:\b|_)' + re.escape(kw.strip()) + r'(?:\b|_)'
-                    if re.search(pattern, raw_jd, re.IGNORECASE):
-                        matched_kws.append(kw.strip())
-                if matched_kws:
-                    already_flagged = any(r_name.lower() in w.lower() for w in detected_warnings)
-                    if not already_flagged:
-                        kws_str = ", ".join(f"'{k}'" for k in set(matched_kws))
-                        detected_warnings.append(f"[{r_name}]: Keyword match detected ({kws_str}).")
-        parsed.requirements.telemetry_warnings = detected_warnings
+        # 5. Parse returned semantic infractions & combine with deterministic findings
+        llm_warn_raw = list(parsed.requirements.telemetry_warnings or [])
+        llm_ben_raw = list(parsed.requirements.telemetry_benefits or [])
+        semantic_findings = TelemetryService.parse_semantic_infractions(llm_warn_raw + llm_ben_raw, semantic_rules)
+
+        all_findings = list(deterministic_findings)
+        for sf in semantic_findings:
+            if not any(af.rule_id == sf.rule_id for af in all_findings):
+                all_findings.append(sf)
+
+        flags, warns, benefits = TelemetryService.split_findings(all_findings)
+        parsed.requirements.telemetry_warnings = [f.to_display_string() for f in (flags + warns)]
+        parsed.requirements.telemetry_benefits = [f.to_display_string() for f in benefits]
+
+        TelemetryService.set_cached_extraction(cache_key, parsed)
         return parsed
 
     def generate_role_intelligence_report(

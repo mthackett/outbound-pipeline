@@ -147,3 +147,8 @@ def log_error(message: str) -> None:
 
 def log_success(message: str) -> None:
     log_cli("SUCCESS", message)
+
+
+def log_telemetry(message: str) -> None:
+    log_cli("TELEMETRY", message)
+

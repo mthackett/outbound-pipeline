@@ -11,83 +11,160 @@
     "Medium",
     "Low"
   ],
+  "telemetry_rules": [
+    {
+      "id": "warn-travel-requirement",
+      "name": "High Travel Requirement",
+      "category": "warning",
+      "match_mode": "phrase",
+      "patterns": [
+        "50% travel",
+        "75% travel",
+        "frequent travel",
+        "extensive travel"
+      ],
+      "keywords": [
+        "50% travel",
+        "75% travel",
+        "frequent travel",
+        "extensive travel"
+      ],
+      "concept_description": "Role includes a substantial recurring travel requirement.",
+      "explanation": "Job description indicates substantial travel may be required.",
+      "domain_category": "Work Arrangement",
+      "severity": "Warning",
+      "enabled": true,
+      "case_sensitive": false
+    },
+    {
+      "id": "warn-onsite-requirement",
+      "name": "Full-Time On-Site Requirement",
+      "category": "warning",
+      "match_mode": "phrase",
+      "patterns": [
+        "fully onsite",
+        "fully on-site",
+        "five days onsite",
+        "5 days onsite",
+        "in office five days"
+      ],
+      "keywords": [
+        "fully onsite",
+        "fully on-site",
+        "five days onsite",
+        "5 days onsite",
+        "in office five days"
+      ],
+      "concept_description": "Role requires regular full-time on-site attendance.",
+      "explanation": "Job description indicates a full-time on-site work requirement.",
+      "domain_category": "Work Arrangement",
+      "severity": "Warning",
+      "enabled": true,
+      "case_sensitive": false
+    },
+    {
+      "id": "warn-short-term-contract",
+      "name": "Short-Term Contract",
+      "category": "warning",
+      "match_mode": "phrase",
+      "patterns": [
+        "3 month contract",
+        "three month contract",
+        "6 month contract",
+        "six month contract",
+        "short-term contract"
+      ],
+      "keywords": [
+        "3 month contract",
+        "three month contract",
+        "6 month contract",
+        "six month contract",
+        "short-term contract"
+      ],
+      "concept_description": "Role is structured as a short-term contract below the user's preferred duration.",
+      "explanation": "Job description indicates a short-term contract engagement.",
+      "domain_category": "Employment Type",
+      "severity": "Warning",
+      "enabled": true,
+      "case_sensitive": false
+    }
+  ],
   "telemetry_warnings": [
     {
-      "id": "warn-on-call",
-      "name": "On-Call / Weekend Support Required",
-      "category": "Scope",
-      "keywords": [
-        "on-call",
-        "24/7",
-        "pagerduty",
-        "weekend coverage",
-        "after-hours",
-        "night shift"
-      ],
-      "concept_description": "Role requires regular on-call rotation, 24/7 availability, off-hours incident response, or mandatory weekend work.",
-      "severity": "Warning",
-      "enabled": true
-    },
-    {
-      "id": "warn-excessive-travel",
-      "name": "Excessive Travel (>25%)",
-      "category": "Scope",
-      "keywords": [
-        "travel 50%",
-        "travel 75%",
+      "id": "warn-travel-requirement",
+      "name": "High Travel Requirement",
+      "category": "warning",
+      "match_mode": "phrase",
+      "patterns": [
+        "50% travel",
+        "75% travel",
         "frequent travel",
-        "extensive travel",
-        "road warrior"
+        "extensive travel"
       ],
-      "concept_description": "Role requires heavy or frequent travel (more than 25% travel commitment).",
-      "severity": "Warning",
-      "enabled": true
+      "keywords": [
+        "50% travel",
+        "75% travel",
+        "frequent travel",
+        "extensive travel"
+      ],
+      "concept_description": "Role includes a substantial recurring travel requirement.",
+      "explanation": "Job description indicates substantial travel may be required.",
+      "domain_category": "Work Arrangement",
+      "severity": "Flag",
+      "enabled": true,
+      "case_sensitive": false
     },
     {
-      "id": "warn-no-benefits",
-      "name": "No Benefits / Commission Only",
-      "category": "Benefits",
-      "keywords": [
-        "commission only",
-        "no benefits",
-        "unpaid",
-        "equity only",
-        "stipend only"
+      "id": "warn-onsite-requirement",
+      "name": "Full-Time On-Site Requirement",
+      "category": "warning",
+      "match_mode": "phrase",
+      "patterns": [
+        "fully onsite",
+        "fully on-site",
+        "five days onsite",
+        "5 days onsite",
+        "in office five days"
       ],
-      "concept_description": "Role does not offer standard benefits, is commission-only, equity-only, or unpaid.",
+      "keywords": [
+        "fully onsite",
+        "fully on-site",
+        "five days onsite",
+        "5 days onsite",
+        "in office five days"
+      ],
+      "concept_description": "Role requires regular full-time on-site attendance.",
+      "explanation": "Job description indicates a full-time on-site work requirement.",
+      "domain_category": "Work Arrangement",
       "severity": "Warning",
-      "enabled": true
+      "enabled": true,
+      "case_sensitive": false
     },
     {
-      "id": "warn-legacy-stack",
-      "name": "Outdated / Legacy Tech Stack",
-      "category": "Skills",
-      "keywords": [
-        "COBOL",
-        "Visual Basic",
-        "VB6",
-        "Fortran",
-        "Lotus Notes",
-        "Access database",
-        "legacy monolithic"
+      "id": "warn-short-term-contract",
+      "name": "Short-Term Contract",
+      "category": "warning",
+      "match_mode": "phrase",
+      "patterns": [
+        "3 month contract",
+        "three month contract",
+        "6 month contract",
+        "six month contract",
+        "short-term contract"
       ],
-      "concept_description": "Role heavily relies on legacy, deprecated, or obsolete programming languages and architectures.",
-      "severity": "Warning",
-      "enabled": true
-    },
-    {
-      "id": "warn-overbroad-scope",
-      "name": "Overbroad Scope / Multi-Department Trap",
-      "category": "Scope",
       "keywords": [
-        "wear many hats",
-        "handle IT and sales and marketing",
-        "one-person department",
-        "do-it-all"
+        "3 month contract",
+        "three month contract",
+        "6 month contract",
+        "six month contract",
+        "short-term contract"
       ],
-      "concept_description": "Job description expects a single person to handle IT helpdesk, office management, sales, and engineering simultaneously without dedicated team support.",
+      "concept_description": "Role is structured as a short-term contract below the user's preferred duration.",
+      "explanation": "Job description indicates a short-term contract engagement.",
+      "domain_category": "Employment Type",
       "severity": "Warning",
-      "enabled": true
+      "enabled": true,
+      "case_sensitive": false
     }
   ]
 }

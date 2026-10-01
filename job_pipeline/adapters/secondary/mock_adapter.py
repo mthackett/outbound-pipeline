@@ -228,24 +228,17 @@ class MockLLMStrategyAdapter(LLMStrategyPort):
         if warning_rules is None:
             try:
                 from job_pipeline.domain.services import PipelineConfigService
-                warning_rules = PipelineConfigService.get_active_warning_rules()
+                warning_rules = PipelineConfigService.get_active_telemetry_rules()
             except Exception:
                 warning_rules = []
 
-        detected_warnings: List[str] = []
-        if warning_rules:
-            for rule in warning_rules:
-                r_name = rule.get("name", "Warning")
-                keywords = rule.get("keywords", [])
-                matched_kws = []
-                for kw in keywords:
-                    if kw and kw.strip():
-                        pattern = r'(?:\b|_)' + re.escape(kw.strip()) + r'(?:\b|_)'
-                        if re.search(pattern, raw_jd, re.IGNORECASE):
-                            matched_kws.append(kw.strip())
-                if matched_kws:
-                    kws_str = ", ".join(f"'{k}'" for k in set(matched_kws))
-                    detected_warnings.append(f"[{r_name}]: Keyword match detected ({kws_str}).")
+        from job_pipeline.domain.telemetry_service import TelemetryService
+        normalized_rules = [TelemetryService.normalize_rule(r) for r in (warning_rules or []) if (r.get("enabled", True) if isinstance(r, dict) else r.enabled)]
+        deterministic_findings = TelemetryService.evaluate_deterministic_rules(normalized_rules, raw_jd)
+        det_flags, det_warns, det_benefits = TelemetryService.split_findings(deterministic_findings)
+
+        detected_warnings = [f.to_display_string() for f in (det_flags + det_warns)]
+        detected_benefits = [f.to_display_string() for f in det_benefits]
 
         return JobExtractionPayload(
             company_name="Mock Target Company",
@@ -258,7 +251,8 @@ class MockLLMStrategyAdapter(LLMStrategyPort):
                 is_remote=True,
                 employment_arrangement="Employee",
                 pay_basis="Annual",
-                telemetry_warnings=detected_warnings
+                telemetry_warnings=detected_warnings,
+                telemetry_benefits=detected_benefits
             )
         )
 

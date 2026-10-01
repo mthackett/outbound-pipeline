@@ -21,7 +21,20 @@ WORKER_CLASSIFICATIONS: List[str] = [
     "C2C"
 ]
 
-TELEMETRY_WARNING_CATEGORIES: List[str] = [
+TELEMETRY_RULE_CATEGORIES: List[str] = [
+    "warning",
+    "flag",
+    "benefit"
+]
+
+TELEMETRY_MATCH_MODES: List[str] = [
+    "token",
+    "phrase",
+    "regex",
+    "concept"
+]
+
+TELEMETRY_DOMAIN_CATEGORIES: List[str] = [
     "Scope",
     "Skills",
     "Experience",
@@ -31,63 +44,170 @@ TELEMETRY_WARNING_CATEGORIES: List[str] = [
     "Other"
 ]
 
-DEFAULT_TELEMETRY_WARNING_RULES: List[Dict[str, Any]] = [
+TELEMETRY_WARNING_CATEGORIES: List[str] = TELEMETRY_DOMAIN_CATEGORIES
+
+DEFAULT_TELEMETRY_RULES: List[Dict[str, Any]] = [
     {
         "id": "warn-on-call",
         "name": "On-Call / Weekend Support Required",
-        "category": "Scope",
+        "category": "warning",
+        "match_mode": "token",
+        "patterns": ["on-call", "24/7", "pagerduty", "weekend coverage", "after-hours", "night shift"],
         "keywords": ["on-call", "24/7", "pagerduty", "weekend coverage", "after-hours", "night shift"],
         "concept_description": "Role requires regular on-call rotation, 24/7 availability, off-hours incident response, or mandatory weekend work.",
+        "explanation": "Role requires regular on-call rotation, off-hours response, or mandatory weekend work.",
+        "domain_category": "Scope",
         "severity": "Warning",
-        "enabled": True
+        "enabled": True,
+        "case_sensitive": False
     },
     {
         "id": "warn-excessive-travel",
         "name": "Excessive Travel (>25%)",
-        "category": "Scope",
+        "category": "warning",
+        "match_mode": "phrase",
+        "patterns": ["travel 50%", "travel 75%", "frequent travel", "extensive travel", "road warrior"],
         "keywords": ["travel 50%", "travel 75%", "frequent travel", "extensive travel", "road warrior"],
         "concept_description": "Role requires heavy or frequent travel (more than 25% travel commitment).",
+        "explanation": "Role requires heavy or frequent travel exceeding 25%.",
+        "domain_category": "Scope",
         "severity": "Warning",
-        "enabled": True
+        "enabled": True,
+        "case_sensitive": False
     },
     {
         "id": "warn-no-benefits",
         "name": "No Benefits / Commission Only",
-        "category": "Benefits",
+        "category": "warning",
+        "match_mode": "phrase",
+        "patterns": ["commission only", "no benefits", "unpaid", "equity only", "stipend only"],
         "keywords": ["commission only", "no benefits", "unpaid", "equity only", "stipend only"],
         "concept_description": "Role does not offer standard benefits, is commission-only, equity-only, or unpaid.",
+        "explanation": "Role does not offer standard benefits, is commission-only, equity-only, or unpaid.",
+        "domain_category": "Benefits",
         "severity": "Warning",
-        "enabled": True
+        "enabled": True,
+        "case_sensitive": False
     },
     {
         "id": "warn-legacy-stack",
         "name": "Outdated / Legacy Tech Stack",
-        "category": "Skills",
+        "category": "warning",
+        "match_mode": "token",
+        "patterns": ["COBOL", "Visual Basic", "VB6", "Fortran", "Lotus Notes", "Access database", "legacy monolithic"],
         "keywords": ["COBOL", "Visual Basic", "VB6", "Fortran", "Lotus Notes", "Access database", "legacy monolithic"],
         "concept_description": "Role heavily relies on legacy, deprecated, or obsolete programming languages and architectures.",
+        "explanation": "Role heavily relies on legacy or deprecated programming languages and architectures.",
+        "domain_category": "Skills",
         "severity": "Warning",
-        "enabled": True
+        "enabled": True,
+        "case_sensitive": False
     },
     {
         "id": "warn-overbroad-scope",
         "name": "Overbroad Scope / Multi-Department Trap",
-        "category": "Scope",
+        "category": "warning",
+        "match_mode": "phrase",
+        "patterns": ["wear many hats", "handle IT and sales and marketing", "one-person department", "do-it-all"],
         "keywords": ["wear many hats", "handle IT and sales and marketing", "one-person department", "do-it-all"],
         "concept_description": "Job description expects a single person to handle IT helpdesk, office management, sales, and engineering simultaneously without dedicated team support.",
+        "explanation": "Job description expects a single person to handle IT, office management, sales, and engineering simultaneously.",
+        "domain_category": "Scope",
         "severity": "Warning",
-        "enabled": True
+        "enabled": True,
+        "case_sensitive": False
     }
 ]
 
+DEFAULT_TELEMETRY_WARNING_RULES: List[Dict[str, Any]] = DEFAULT_TELEMETRY_RULES
 
-class TelemetryWarningRule(BaseModel):
-    id: str = Field(default_factory=lambda: f"warn-{uuid.uuid4().hex[:6]}")
-    name: str = Field(..., description="Short descriptive title for this warning criterion.")
-    category: str = Field(default="Scope", description="Category: Scope, Skills, Experience, Benefits, Culture, Compensation, Other.")
-    keywords: List[str] = Field(default_factory=list, description="Specific keywords or phrases that trigger this warning.")
-    concept_description: str = Field(default="", description="Semantic concept or condition for the LLM to watch for.")
-    severity: str = Field(default="Warning", description="'Warning' or 'Flag'.")
-    enabled: bool = Field(default=True, description="Whether this warning rule is active.")
+
+class TelemetryFinding(BaseModel):
+    rule_id: str
+    rule_name: str
+    category: str = "warning"  # "warning", "flag", "benefit"
+    match_mode: str = "token"  # "token", "phrase", "regex", "concept"
+    matched_text: Optional[str] = None
+    reason: str = ""
+    domain_category: Optional[str] = None
+
+    def to_display_string(self) -> str:
+        """Formatted explainable string representation."""
+        cat_lower = (self.category or "warning").lower()
+        if cat_lower == "flag":
+            prefix = f"FLAG: [{self.rule_name}]"
+        elif cat_lower == "benefit":
+            prefix = f"BENEFIT: [{self.rule_name}]"
+        else:
+            prefix = f"[{self.rule_name}]"
+
+        details = []
+        if self.matched_text:
+            details.append(f"Matched: '{self.matched_text}'")
+        if self.reason:
+            details.append(self.reason)
+
+        detail_str = " - ".join(details) if details else "Condition detected."
+        return f"{prefix}: {detail_str}"
+
+
+class TelemetryRule(BaseModel):
+    id: str = Field(default_factory=lambda: f"rule-{uuid.uuid4().hex[:6]}")
+    name: str = Field(..., description="Short descriptive title for this rule.")
+    category: str = Field(default="warning", description="Classification: 'warning', 'flag', or 'benefit'.")
+    match_mode: str = Field(default="token", description="Evaluation mode: 'token', 'phrase', 'regex', or 'concept'.")
+    patterns: List[str] = Field(default_factory=list, description="Keywords, phrases, or regex patterns to match.")
+    concept_description: str = Field(default="", description="Semantic condition or concept for LLM evaluation.")
+    explanation: str = Field(default="", description="Optional explanation or reason displayed when this rule triggers.")
+    domain_category: str = Field(default="Scope", description="Domain classification: Scope, Skills, Experience, Benefits, Culture, Compensation, Other.")
+    enabled: bool = Field(default=True, description="Whether this rule is active.")
+    case_sensitive: bool = Field(default=False, description="Whether token/phrase/regex matching is case-sensitive.")
+
+    def __init__(self, **data: Any):
+        # Backward compatibility transformations
+        if "keywords" in data and "patterns" not in data:
+            data["patterns"] = data["keywords"]
+        if "patterns" in data and "keywords" not in data:
+            data["keywords"] = data["patterns"]
+
+        raw_cat = str(data.get("category", "")).strip().lower()
+        raw_sev = str(data.get("severity", "")).strip().lower()
+        if raw_cat not in ("warning", "flag", "benefit"):
+            if "category" in data and data["category"]:
+                data["domain_category"] = data["category"]
+            if raw_sev in ("warning", "flag", "benefit"):
+                data["category"] = raw_sev
+            else:
+                data["category"] = "warning"
+        super().__init__(**data)
+
+    @property
+    def keywords(self) -> List[str]:
+        return self.patterns
+
+    @keywords.setter
+    def keywords(self, val: List[str]) -> None:
+        self.patterns = val
+
+    @property
+    def severity(self) -> str:
+        cat = (self.category or "warning").lower()
+        if cat == "flag":
+            return "Flag"
+        elif cat == "benefit":
+            return "Benefit"
+        return "Warning"
+
+    @severity.setter
+    def severity(self, val: str) -> None:
+        v = str(val).strip().lower()
+        if v in ("warning", "flag", "benefit"):
+            self.category = v
+
+
+# Backwards compatibility alias
+TelemetryWarningRule = TelemetryRule
+
 
 
 class TargetPayBounds(BaseModel):
@@ -268,6 +388,9 @@ class FitEvaluation(BaseModel):
     pay_bounds: TargetPayBounds = Field(default_factory=TargetPayBounds)
     warnings: List[str] = Field(default_factory=list)
     reasoning: str = ""
+    telemetry_findings: List[TelemetryFinding] = Field(default_factory=list)
+    telemetry_status: str = "green"  # "green", "yellow", "red"
+    telemetry_benefits: List[TelemetryFinding] = Field(default_factory=list)
     duplicate_detected: bool = False
     is_repost: bool = False
     prior_application_date: Optional[str] = None
@@ -315,6 +438,8 @@ class JobPosting(BaseModel):
     drive_screening_doc_link: Optional[str] = None
     screening_qa: List[ScreeningQA] = Field(default_factory=list)
     telemetry_warnings: List[str] = Field(default_factory=list)
+    telemetry_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    telemetry_benefits: List[Dict[str, Any]] = Field(default_factory=list)
     row_index: Optional[int] = None
     tokens_used: int = 0
 
