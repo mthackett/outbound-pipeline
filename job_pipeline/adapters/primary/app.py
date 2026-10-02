@@ -625,19 +625,26 @@ if drive_auth_ctx and drive_auth_ctx.warning_message:
                     st.error(f"Authentication error: {oa_err}. You can also run 'python -m job_pipeline.setup_oauth' in terminal.")
 
 
-# Main Tabs: Focused on Ingestion, Live Pipeline CRM, Global Story Bank, and Expansion
-tab1, tab2, tab3, tab4 = st.tabs([
-    "⚡ Fast Ingestion & Apply Kit",
-    "📊 Pipeline Tracker & CRM",
-    "📖 Global Story Bank & Interview Map",
-    "🔮 Integrations & Future Modules"
-])
+# Main Navigation: render only the active section to avoid eager rendering of every view
+SECTION_INGEST = "⚡ Fast Ingestion & Apply Kit"
+SECTION_CRM = "📊 Pipeline Tracker & CRM"
+SECTION_STORIES = "📖 Global Story Bank & Interview Map"
+SECTION_FUTURE = "🔮 Integrations & Future Modules"
+
+active_section = st.radio(
+    "Main Navigation",
+    [SECTION_INGEST, SECTION_CRM, SECTION_STORIES, SECTION_FUTURE],
+    index=0,
+    horizontal=True,
+    key="active_main_section",
+    label_visibility="collapsed",
+)
 
 
 # =====================================================================
-# TAB 1: FAST INGESTION & APPLY KIT (ZERO FRICTION)
+# SECTION 1: FAST INGESTION & APPLY KIT (ZERO FRICTION)
 # =====================================================================
-with tab1:
+if active_section == SECTION_INGEST:
     # -------------------------------------------------------------
     # Incomplete Ingestion Detection & Recovery Alert
     # -------------------------------------------------------------
@@ -1981,9 +1988,9 @@ with tab1:
 
 
 # =====================================================================
-# TAB 2: PIPELINE TRACKER & LIGHTWEIGHT CRM
+# SECTION 2: PIPELINE TRACKER & LIGHTWEIGHT CRM
 # =====================================================================
-with tab2:
+if active_section == SECTION_CRM:
     st.subheader("📊 Live Application Pipeline & CRM")
     st.caption("Active applications synced in real-time from your Google Sheet (`Raw Ingestion`). Update stages, add recruiter contact info, and track interview progress.")
 
@@ -2937,7 +2944,7 @@ with tab2:
         # Cross-Job Screening Questions & Answers Library
         st.markdown("---")
         with st.expander("📚 Cross-Job Screening Questions & Answers Library", expanded=False):
-            # Reuse in-memory list loaded at top of Tab 2 (0 extra API calls)
+            # Reuse in-memory list loaded at top of the CRM section (0 extra API calls)
             if all_screening_qa:
                 col_f1, col_f2 = st.columns([2, 1])
                 with col_f1:
@@ -2983,15 +2990,15 @@ with tab2:
                         st.caption(f"Submitted for: {q_comp} on {q_time}")
                         st.code(q_ans, language="text")
             else:
-                st.info("No screening questions recorded yet. Add them when ingesting a job in Tab 1!")
+                st.info("No screening questions recorded yet. Add them from the Fast Ingestion section!")
     else:
-        st.info("No applications found in Google Sheets yet. Paste a job description in Tab 1 to track your first role!")
+        st.info("No applications found in Google Sheets yet. Paste a job description in the Fast Ingestion section to track your first role!")
 
 
 # =====================================================================
-# TAB 3: GLOBAL PROFESSIONAL STORY BANK & INTERVIEW NARRATIVE MAP
+# SECTION 3: GLOBAL PROFESSIONAL STORY BANK & INTERVIEW NARRATIVE MAP
 # =====================================================================
-with tab3:
+if active_section == SECTION_STORIES:
     st.subheader("📖 Global Professional Story Bank & Interview Narrative Map")
     st.caption("12 canonical behavioral stories grounded in RevOps, GTM Systems, Data Architecture, and Cross-Functional Leadership. Modularized into breadcrumb trails with lock protections.")
 
@@ -3400,9 +3407,9 @@ with tab3:
 
 
 # =====================================================================
-# TAB 4: INTEGRATIONS & EXPANSION (PLACEHOLDERS & ROADMAP)
+# SECTION 4: INTEGRATIONS & EXPANSION (PLACEHOLDERS & ROADMAP)
 # =====================================================================
-with tab4:
+if active_section == SECTION_FUTURE:
     st.subheader("🔮 Planned Integrations & Future Modules")
     st.caption("These secondary integrations have clean architectural adapters built and are ready to be plugged in when you're ready.")
 
