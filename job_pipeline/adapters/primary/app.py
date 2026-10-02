@@ -2221,9 +2221,9 @@ with tab2:
             ]
 
         total_filtered = len(filtered_opps)
-        PAGE_SIZE_OPTIONS = [10, 15, 25, 50]
+        PAGE_SIZE_OPTIONS = [5, 10, 15, 25, 50]
         if "crm_page_size" not in st.session_state:
-            st.session_state.crm_page_size = 15
+            st.session_state.crm_page_size = 5
 
         items_per_page = st.session_state.crm_page_size
         total_pages = max(1, (total_filtered + items_per_page - 1) // items_per_page)

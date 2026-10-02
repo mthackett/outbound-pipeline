@@ -3,6 +3,7 @@ headless = true
 enableCORS = false
 enableXsrfProtection = false
 port = 8501
+disconnectedSessionTTL = 3600
 
 [theme]
 base = "dark"
