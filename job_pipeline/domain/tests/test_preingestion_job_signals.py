@@ -491,6 +491,65 @@ if gate:
         self.assertTrue(app.session_state.cancelled)
         self.assertIsNone(app.session_state.pending_job_signals_gate)
 
+    # 14. Observability: deterministic log emitted exactly once, cache-hit logging explicit
+    def test_deterministic_log_not_duplicated_and_cache_hit_logging(self):
+        from job_pipeline.domain.telemetry_service import _TELEMETRY_EXTRACTION_CACHE
+        _TELEMETRY_EXTRACTION_CACHE.clear()
+        adapter = OpenAIEngineAdapter(api_key="test-api-key")
+        mock_client = MagicMock()
+        mock_eval = JobSignalEvaluation(matches=[
+            JobSignalMatch(
+                rule_id="warn-ad5f99",
+                reason="Active Top Secret clearance required.",
+                evidence="An active Top Secret government security clearance is strictly required."
+            )
+        ])
+        mock_client.beta.chat.completions.parse.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=mock_eval))]
+        )
+        adapter._runner._openai_client = mock_client
+
+        logs = []
+        with patch("job_pipeline.domain.telemetry_service.log_job_signals", side_effect=logs.append), \
+             patch("job_pipeline.logger.log_job_signals", side_effect=logs.append):
+            # 1. First evaluation: Fresh / cache miss
+            res1 = adapter.evaluate_job_signals(CONTROLLED_JD, rules=self.rules_dict)
+
+            # Check single deterministic log
+            det_logs = [line for line in logs if "Evaluating 1 deterministic rules." in line]
+            self.assertEqual(len(det_logs), 1, "High-level deterministic evaluation log must be emitted exactly once")
+
+            # Check fresh evaluation log
+            self.assertTrue(any("Evaluating 8 semantic rules via dedicated LLM pass." in line for line in logs))
+            self.assertFalse(any("Dedicated semantic evaluation cache hit" in line for line in logs))
+            self.assertEqual(mock_client.beta.chat.completions.parse.call_count, 1)
+
+            # 2. Second evaluation: Cache hit
+            logs.clear()
+            res2 = adapter.evaluate_job_signals(CONTROLLED_JD, rules=self.rules_dict)
+
+            # Must use cache, not LLM
+            self.assertEqual(mock_client.beta.chat.completions.parse.call_count, 1)
+            self.assertEqual([f.rule_id for f in res1[0]], [f.rule_id for f in res2[0]])
+
+            # Must log explicit cache hit
+            cache_hit_logs = [line for line in logs if "Dedicated semantic evaluation cache hit" in line]
+            self.assertEqual(len(cache_hit_logs), 1)
+            self.assertIn("reusing 2 findings", cache_hit_logs[0])
+
+            # 3. Third evaluation: Changing JD bypasses cache
+            logs.clear()
+            adapter.evaluate_job_signals(CONTROLLED_JD + "\nExtra text", rules=self.rules_dict)
+            self.assertEqual(mock_client.beta.chat.completions.parse.call_count, 2)
+            self.assertTrue(any("Evaluating 8 semantic rules via dedicated LLM pass." in line for line in logs))
+
+            # 4. Fourth evaluation: Changing rule configuration bypasses cache
+            logs.clear()
+            modified_rules = [{**r, "concept_description": r["concept_description"] + " Updated"} for r in self.rules_dict]
+            adapter.evaluate_job_signals(CONTROLLED_JD, rules=modified_rules)
+            self.assertEqual(mock_client.beta.chat.completions.parse.call_count, 3)
+            self.assertTrue(any("Evaluating 8 semantic rules via dedicated LLM pass." in line for line in logs))
+
 
 if __name__ == '__main__':
     unittest.main()

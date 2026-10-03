@@ -394,14 +394,28 @@ class MockLLMStrategyAdapter(LLMStrategyPort):
         deterministic_rules = [r for r in normalized_rules if (r.match_mode or "").lower() != "concept"]
         semantic_rules = [r for r in normalized_rules if (r.match_mode or "").lower() == "concept" and TelemetryService.validate_rule(r)[0]]
 
-        log_job_signals(f"Evaluating {len(deterministic_rules)} deterministic rules.")
         det_findings = TelemetryService.evaluate_deterministic_rules(normalized_rules, raw_jd, tag="JOB SIGNALS")
+
+        cache_key = TelemetryService.compute_cache_key(
+            raw_jd,
+            [r if isinstance(r, dict) else r.model_dump() for r in (rules or [])]
+        )
+        cache_key = "mock:dedicated-signals-v1:" + cache_key
+        cached_res = TelemetryService.get_cached_extraction(cache_key)
+        if cached_res is not None:
+            total_findings = sum(len(g) for g in cached_res)
+            log_job_signals(f"Dedicated semantic evaluation cache hit; reusing {total_findings} findings.")
+            log_job_signals(f"Flags={len(cached_res[0])} Warnings={len(cached_res[1])} Benefits={len(cached_res[2])}.")
+            return cached_res
+
         log_job_signals(f"Evaluating {len(semantic_rules)} semantic rules via dedicated LLM pass.")
         log_job_signals("Semantic matches returned=0, accepted=0, rejected=0.")
 
         flags, warns, benefits = TelemetryService.split_findings(det_findings)
         log_job_signals(f"Flags={len(flags)} Warnings={len(warns)} Benefits={len(benefits)}.")
-        return flags, warns, benefits
+        res = (flags, warns, benefits)
+        TelemetryService.set_cached_extraction(cache_key, res)
+        return res
 
     def extract_job_telemetry(
         self,

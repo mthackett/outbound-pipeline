@@ -139,7 +139,6 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         deterministic_rules = [r for r in normalized_rules if (r.match_mode or "").lower() != "concept"]
         semantic_rules = [r for r in normalized_rules if (r.match_mode or "").lower() == "concept" and TelemetryService.validate_rule(r)[0]]
 
-        log_job_signals(f"Evaluating {len(deterministic_rules)} deterministic rules.")
         det_findings = TelemetryService.evaluate_deterministic_rules(normalized_rules, raw_jd, tag="JOB SIGNALS")
 
         # 2. Check dedicated cache
@@ -150,6 +149,8 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         cache_key = ("online:dedicated-signals-v1:" if self.api_key else "offline:dedicated-signals-v1:") + cache_key
         cached_res = TelemetryService.get_cached_extraction(cache_key)
         if cached_res is not None:
+            total_findings = sum(len(g) for g in cached_res)
+            log_job_signals(f"Dedicated semantic evaluation cache hit; reusing {total_findings} findings.")
             log_job_signals(f"Flags={len(cached_res[0])} Warnings={len(cached_res[1])} Benefits={len(cached_res[2])}.")
             return cached_res
 
