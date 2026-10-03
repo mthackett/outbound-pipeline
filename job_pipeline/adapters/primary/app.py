@@ -33,12 +33,10 @@ from job_pipeline.domain.models import (
     SCREENING_CATEGORIES, SCREENING_ARCHETYPES, StoryBreadcrumb, CanonicalStory, StoryCueCard, ScreeningMatchResult,
     APPLICATION_CATEGORIES, CATEGORY_ICONS, APPLICATION_STAGES,
     DEFAULT_APPLICATION_SOURCES, DEFAULT_PRIORITIES, PRIORITY_ICONS, SOURCE_ICONS,
-    EMPLOYMENT_ARRANGEMENTS, PAY_BASES, WORKER_CLASSIFICATIONS,
-    TELEMETRY_WARNING_CATEGORIES, TELEMETRY_RULE_CATEGORIES, TELEMETRY_MATCH_MODES,
-    TELEMETRY_DOMAIN_CATEGORIES, DEFAULT_TELEMETRY_WARNING_RULES, DEFAULT_TELEMETRY_RULES,
-    TelemetryWarningRule, TelemetryRule, TelemetryFinding
+    EMPLOYMENT_ARRANGEMENTS, PAY_BASES, WORKER_CLASSIFICATIONS
 )
 from job_pipeline.domain.telemetry_service import TelemetryService
+from job_pipeline.adapters.primary.telemetry_ui import render_telemetry_warnings_manager, render_job_signals
 
 from job_pipeline.domain.services import (
     JobQualificationService, ApplicationGuardrailService, ScreeningQAService, QuickLinksService,
@@ -302,146 +300,6 @@ def render_quicklinks_manager(context_key: str = "sb"):
         st.rerun()
 
 
-def render_telemetry_warnings_manager(key_prefix: str = "sb"):
-    """Renders manager for user-defined telemetry rules (Warnings, Flags, Benefits) evaluated deterministically or via LLM."""
-    telemetry_rules = PipelineConfigService.get_telemetry_rules()
-    active_count = sum(1 for r in telemetry_rules if r.get("enabled", True))
-    st.caption(f"Configured telemetry rules detect flags, warnings, and desirable benefits during intake. ({active_count}/{len(telemetry_rules)} active)")
-
-    with st.expander("➕ Add New Telemetry Rule", expanded=False):
-        with st.form(f"{key_prefix}_add_telemetry_rule_form", clear_on_submit=True):
-            rule_name = st.text_input("Rule Display Name *", placeholder="e.g. Government Contract Scope or Remote-First", autocomplete="off")
-            r_col1, r_col2, r_col3 = st.columns(3)
-            with r_col1:
-                cat_ui = st.selectbox(
-                    "Rule Classification *",
-                    ["Warning", "Flag", "Benefit"],
-                    index=0,
-                    key=f"{key_prefix}_rule_cat_sel",
-                    help="'Flag': Critical dealbreaker/risk (marks FLAGGED_TELEMETRY);\n'Warning': Informational caution (yellow status);\n'Benefit': Positive signal (surfaced in green signals)."
-                )
-            with r_col2:
-                mode_ui = st.selectbox(
-                    "Match Mode *",
-                    ["Exact Token / Keyword", "Phrase", "Regex", "Concept / Semantic"],
-                    index=0,
-                    key=f"{key_prefix}_rule_mode_sel",
-                    help="'Exact Token': Boundary-aware exact word match (\\bword\\b);\n'Phrase': Whole multi-word phrase;\n'Regex': Advanced regex pattern;\n'Concept': Evaluated semantically via LLM."
-                )
-            with r_col3:
-                domain_cat = st.selectbox("Domain Category", TELEMETRY_DOMAIN_CATEGORIES, index=0, key=f"{key_prefix}_dom_sel")
-
-            mode_map = {
-                "Exact Token / Keyword": "token",
-                "Phrase": "phrase",
-                "Regex": "regex",
-                "Concept / Semantic": "concept"
-            }
-            chosen_mode = mode_map[mode_ui]
-
-            patterns_raw = st.text_input(
-                "Trigger Patterns / Keywords (comma-separated)",
-                placeholder="e.g. FAR, DFARS, government contractor" if chosen_mode != "regex" else r"e.g. \b(TS/SCI|polygraph)\b",
-                autocomplete="off",
-                help="Patterns to evaluate deterministically with boundary awareness."
-            )
-            concept = st.text_area(
-                "Concept / Condition Description (Required for Concept mode)",
-                placeholder="Describe semantic criteria for LLM evaluation, or rationale explaining why this rule triggers...",
-                height=70,
-                key=f"{key_prefix}_concept_ta"
-            )
-            r_c_opt1, r_c_opt2 = st.columns(2)
-            with r_c_opt1:
-                case_sensitive = st.checkbox("Case-Sensitive Matching", value=False, key=f"{key_prefix}_cs_chk", help="Leave unchecked for case-insensitive matching.")
-            with r_c_opt2:
-                enabled = st.checkbox("Enable immediately", value=True, key=f"{key_prefix}_en_chk")
-
-            if st.form_submit_button("💾 Save Telemetry Rule"):
-                if not rule_name.strip():
-                    st.warning("Please provide a Rule Display Name.")
-                else:
-                    kws = [k.strip() for k in patterns_raw.split(",") if k.strip()]
-                    new_rule_candidate = TelemetryRule(
-                        name=rule_name.strip(),
-                        category=cat_ui.lower(),
-                        match_mode=chosen_mode,
-                        patterns=kws,
-                        concept_description=concept.strip(),
-                        explanation=concept.strip() or f"Triggered {rule_name.strip()}",
-                        domain_category=domain_cat,
-                        case_sensitive=case_sensitive,
-                        enabled=enabled
-                    )
-                    is_valid, err_msg = TelemetryService.validate_rule(new_rule_candidate)
-                    if not is_valid:
-                        st.warning(f"Validation error: {err_msg}")
-                    else:
-                        PipelineConfigService.add_telemetry_rule(new_rule_candidate.dict())
-                        st.success(f"Added {cat_ui} rule '{rule_name.strip()}'!")
-                        st.rerun()
-
-    st.markdown("###### 📋 Configured Telemetry Rules:")
-    for idx, rule in enumerate(telemetry_rules):
-        rid = rule.get("id", f"rule-{idx}")
-        rname = rule.get("name", "Unnamed Rule")
-        rcat = str(rule.get("category", "warning")).lower()
-        rmode = str(rule.get("match_mode", "token")).lower()
-        rdom = rule.get("domain_category") or rule.get("category") or "Scope"
-        renabled = rule.get("enabled", True)
-        rpats = rule.get("patterns") or rule.get("keywords") or []
-        rdesc = rule.get("concept_description") or rule.get("explanation") or ""
-
-        if rcat == "flag":
-            cat_color = "#EF4444"
-            cat_label = "FLAG"
-        elif rcat == "benefit":
-            cat_color = "#10B981"
-            cat_label = "BENEFIT"
-        else:
-            cat_color = "#F59E0B"
-            cat_label = "WARNING"
-
-        mode_badge = f"<span style='font-size:0.72rem; background:#1E293B; color:#93C5FD; padding:2px 6px; border-radius:4px; margin-left:4px; font-family:monospace;'>{rmode}</span>"
-
-        with st.container():
-            c_top1, c_top2 = st.columns([3.8, 1.4])
-            with c_top1:
-                status_icon = "🟢" if renabled else "⚪"
-                st.markdown(
-                    f"<div style='font-size:0.88rem; font-weight:600; color:{'#FFFFFF' if renabled else '#94A3B8'};'>"
-                    f"{status_icon} {rname} "
-                    f"<span style='font-size:0.72rem; background:#334155; color:#94A3B8; padding:2px 6px; border-radius:4px; margin-left:4px;'>{rdom}</span> "
-                    f"<span style='font-size:0.72rem; background:{cat_color}22; color:{cat_color}; border:1px solid {cat_color}55; padding:2px 6px; border-radius:4px;'>{cat_label}</span>"
-                    f"{mode_badge}"
-                    f" <span style='font-size:0.72rem; color:#64748B; font-family:monospace;'>({rid})</span>"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
-                if rpats:
-                    pats_str = ", ".join(f"'{p}'" for p in rpats[:6])
-                    if len(rpats) > 6:
-                        pats_str += f" (+{len(rpats) - 6} more)"
-                    st.caption(f"Patterns: {pats_str}")
-                if rdesc:
-                    st.caption(f"Details: {rdesc}")
-            with c_top2:
-                btn_toggle_label = "Disable" if renabled else "Enable"
-                if st.button(btn_toggle_label, key=f"{key_prefix}_tgl_{rid}", help="Toggle rule on/off", use_container_width=True):
-                    PipelineConfigService.toggle_telemetry_rule(rid)
-                    st.rerun()
-                if st.button("🗑️ Del", key=f"{key_prefix}_del_{rid}", help="Delete rule", use_container_width=True):
-                    PipelineConfigService.remove_telemetry_rule(rid)
-                    st.rerun()
-            st.markdown("<hr style='margin:4px 0 6px 0; border:none; border-top:1px solid #1E293B;'/>", unsafe_allow_html=True)
-
-    if st.button("🔄 Reset to Default Rules", key=f"{key_prefix}_reset_warn_rules", help="Restores standard telemetry rules."):
-        PipelineConfigService.reset_default_telemetry_rules()
-        st.toast("Restored default telemetry rules.")
-        st.rerun()
-
-
-
 # Sidebar Configuration & Connections
 st.sidebar.title("💼 Pipeline Controls")
 
@@ -516,7 +374,9 @@ with st.sidebar.expander("🛡️ Guardrail Rules & Limits", expanded=False):
 
 # Telemetry Warning Rules (LLM Criteria) Expander in Sidebar
 active_rules_count = len(PipelineConfigService.get_active_warning_rules())
-with st.sidebar.expander(f"⚠️ Telemetry Warnings ({active_rules_count} Active)", expanded=False):
+with st.sidebar.expander(f"⚠️ Job Signals ({active_rules_count} Active)", expanded=False):
+    if demo_mode:
+        st.caption("Demo mode evaluates Direct Match and Regex rules. Concept rules require a connected LLM.")
     render_telemetry_warnings_manager(key_prefix="sb")
 
 # Direct External Links
@@ -744,9 +604,10 @@ if active_section == SECTION_INGEST:
                 extracted_agency = None
                 extracted_client = None
                 extracted_telemetry_warnings = []
+                extracted_telemetry_flags = []
                 extracted_telemetry_benefits = []
 
-                if not checkpoint and not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
+                if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
                     try:
                         telemetry = llm_adapter.extract_job_telemetry(raw_jd_text, warning_rules=warning_rules)
                         extracted_company = telemetry.company_name or extracted_company
@@ -770,9 +631,10 @@ if active_section == SECTION_INGEST:
                         extracted_agency = telemetry.requirements.staffing_agency
                         extracted_client = telemetry.requirements.client_company
                         extracted_telemetry_warnings = telemetry.requirements.telemetry_warnings or []
+                        extracted_telemetry_flags = telemetry.requirements.telemetry_flags or []
                         extracted_telemetry_benefits = getattr(telemetry.requirements, "telemetry_benefits", []) or []
                     except Exception as t_err:
-                        raise RuntimeError("Recovery telemetry extraction failed; retry when the provider is available.") from t_err
+                        raise RuntimeError("Recovery Job Signals extraction failed; retry when the provider is available.") from t_err
 
                 final_company = (extracted_company or company_name or "Target Company").strip()
                 final_title = (extracted_title or job_title or "Target Role").strip()
@@ -796,8 +658,11 @@ if active_section == SECTION_INGEST:
                     extracted_hours = checkpoint.get("expected_hours_per_week")
                     extracted_ext, extracted_fte = checkpoint.get("extension_possible"), checkpoint.get("fte_conversion_possible")
                     extracted_agency, extracted_client = checkpoint.get("staffing_agency"), checkpoint.get("client_company")
-                    extracted_telemetry_warnings = checkpoint.get("telemetry_warnings", [])
-                    extracted_telemetry_benefits = checkpoint.get("telemetry_benefits", [])
+                if demo_mode:
+                    refreshed = llm_adapter.extract_job_telemetry(raw_jd_text, warning_rules=warning_rules)
+                    extracted_telemetry_flags = refreshed.requirements.telemetry_flags
+                    extracted_telemetry_warnings = refreshed.requirements.telemetry_warnings
+                    extracted_telemetry_benefits = refreshed.requirements.telemetry_benefits
                 recovery_category = checkpoint.get("category") or (existing_record or {}).get("Category") or "Target"
                 recovery_source = checkpoint.get("applied_via") or (existing_record or {}).get("Applied Via") or "LinkedIn"
                 recovery_priority = checkpoint.get("priority") or (existing_record or {}).get("Priority") or "High"
@@ -819,6 +684,7 @@ if active_section == SECTION_INGEST:
                     contract_length_months=extracted_months,
                     contract_length_weeks=extracted_weeks,
                     telemetry_warnings=extracted_telemetry_warnings,
+                    telemetry_flags=extracted_telemetry_flags,
                     telemetry_benefits=extracted_telemetry_benefits
                 )
 
@@ -912,6 +778,8 @@ if active_section == SECTION_INGEST:
                     required_skills=req_skills,
                     preferred_skills=pref_skills,
                     telemetry_warnings=extracted_telemetry_warnings,
+                    telemetry_flags=extracted_telemetry_flags,
+                    telemetry_benefits=extracted_telemetry_benefits,
                     selected_resume_name=resume_name,
                     drive_folder_link=folder_link,
                     drive_jd_link=drive_jd_link,
@@ -969,6 +837,7 @@ if active_section == SECTION_INGEST:
                     "pain_points": pain_points,
                     "is_remote": is_remote,
                     "telemetry_warnings": extracted_telemetry_warnings,
+                    "telemetry_flags": extracted_telemetry_flags,
                     "telemetry_benefits": extracted_telemetry_benefits,
                     "opp_id": opp_id
                 }
@@ -1284,6 +1153,7 @@ if active_section == SECTION_INGEST:
             final_agency = job_payload.get("staffing_agency")
             final_client = job_payload.get("client_company")
             final_telemetry_warnings = job_payload.get("telemetry_warnings", [])
+            final_telemetry_flags = job_payload.get("telemetry_flags", [])
             final_telemetry_benefits = job_payload.get("telemetry_benefits", [])
 
             # 1. Fit Qualification & Target Pay Calculator (60%-80%)
@@ -1304,6 +1174,7 @@ if active_section == SECTION_INGEST:
                 contract_length_months=final_months,
                 contract_length_weeks=final_weeks,
                 telemetry_warnings=final_telemetry_warnings,
+                telemetry_flags=final_telemetry_flags,
                 telemetry_benefits=final_telemetry_benefits
             )
 
@@ -1417,6 +1288,8 @@ if active_section == SECTION_INGEST:
                 required_skills=req_skills,
                 preferred_skills=pref_skills,
                 telemetry_warnings=final_telemetry_warnings,
+                telemetry_flags=final_telemetry_flags,
+                telemetry_benefits=final_telemetry_benefits,
                 selected_resume_name=resume_name,
                 drive_folder_link=folder_link,
                 drive_jd_link=drive_jd_link,
@@ -1479,6 +1352,7 @@ if active_section == SECTION_INGEST:
                 "pain_points": pain_points,
                 "is_remote": is_remote,
                 "telemetry_warnings": final_telemetry_warnings,
+                "telemetry_flags": final_telemetry_flags,
                 "telemetry_benefits": final_telemetry_benefits,
                 "opp_id": opp_id
             }
@@ -1564,6 +1438,7 @@ if active_section == SECTION_INGEST:
 
                 warning_rules = PipelineConfigService.get_active_telemetry_rules()
                 extracted_telemetry_warnings = []
+                extracted_telemetry_flags = []
                 extracted_telemetry_benefits = []
                 if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
                     try:
@@ -1589,18 +1464,21 @@ if active_section == SECTION_INGEST:
                         extracted_agency = telemetry.requirements.staffing_agency
                         extracted_client = telemetry.requirements.client_company
                         extracted_telemetry_warnings = telemetry.requirements.telemetry_warnings or []
+                        extracted_telemetry_flags = telemetry.requirements.telemetry_flags or []
                         extracted_telemetry_benefits = getattr(telemetry.requirements, "telemetry_benefits", []) or []
                     except Exception as e:
-                        st.warning(f"Telemetry auto-extraction notice: {e}")
+                        st.warning(f"Job Signals extraction notice: {e}")
                         req_skills, pref_skills = ["Salesforce", "SQL", "Tableau", "Clari"], ["dbt"]
                 else:
                     if hasattr(llm_adapter, "extract_job_telemetry"):
                         try:
                             mock_telemetry = llm_adapter.extract_job_telemetry(jd_text_input, warning_rules=warning_rules)
                             extracted_telemetry_warnings = mock_telemetry.requirements.telemetry_warnings or []
+                            extracted_telemetry_flags = mock_telemetry.requirements.telemetry_flags or []
                             extracted_telemetry_benefits = getattr(mock_telemetry.requirements, "telemetry_benefits", []) or []
                         except Exception:
                             extracted_telemetry_warnings = []
+                            extracted_telemetry_flags = []
                             extracted_telemetry_benefits = []
                     extracted_company = "Planful"
                     extracted_title = "Sales Operations Analyst"
@@ -1675,6 +1553,7 @@ if active_section == SECTION_INGEST:
                     "dup": dup_res,
                     "vel": vel_res,
                     "telemetry_warnings": extracted_telemetry_warnings,
+                    "telemetry_flags": extracted_telemetry_flags,
                     "telemetry_benefits": extracted_telemetry_benefits
                 }
 
@@ -1710,67 +1589,22 @@ if active_section == SECTION_INGEST:
                 status_symbol = "🟡"
             else:
                 status_symbol = "🟢"
-            st.metric("Fit Status", f"{status_symbol} {ev['fit_eval'].status}")
+            st.metric("Fit Status", f"{status_symbol} {ev['fit_eval'].status.replace('FLAGGED_TELEMETRY', 'Job Signals: Flags')}")
         with m2:
             st.metric("Skill Match Score", f"{int(ev['fit_eval'].fit_score * 100)}%")
         with m3:
             st.metric("Company & Role", f"{ev['company']} — {ev['title']}")
 
-        # Telemetry Status Box (Red for flags, Yellow for warnings, Green for clean)
-        if t_status == "red":
-            box_border = "#EF4444"
-            box_bg = "#450A0A55"
-            hdr_color = "#F87171"
-            title_text = f"🚨 Critical Flags / Dealbreakers Detected ({len(all_warnings)})"
-            warn_items_html = "".join(f"<li style='margin-bottom: 4px; color: #FCA5A5;'><b>🚨</b> {w}</li>" for w in all_warnings)
-        elif t_status == "yellow":
-            box_border = "#F59E0B"
-            box_bg = "#451A0355"
-            hdr_color = "#FBBF24"
-            title_text = f"⚠️ Job Telemetry Warnings Detected ({len(all_warnings)})"
-            warn_items_html = "".join(f"<li style='margin-bottom: 4px; color: #FDE68A;'><b>⚠️</b> {w}</li>" for w in all_warnings)
-        else:
-            box_border = "#10B981"
-            box_bg = "#064E3B44"
-            hdr_color = "#34D399"
-            title_text = "✅ Clean Telemetry Status"
-            warn_items_html = "<li style='margin-bottom: 4px; color: #A7F3D0;'><b>✓</b> No negative warnings, flags, or dealbreaker conditions detected.</li>"
-
-        st.markdown(f"""
-        <div style="margin: 12px 0; padding: 12px 16px; background: {box_bg}; border: 1px solid {box_border}; border-radius: 8px;">
-            <h4 style="margin: 0 0 8px 0; color: {hdr_color}; font-size: 1.05rem;">
-                {title_text}
-            </h4>
-            <ul style="margin: 0; padding-left: 20px;">
-                {warn_items_html}
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Positive Signals (Benefits) Alert Box (Rendered independently)
-        raw_benefits = getattr(ev["fit_eval"], "telemetry_benefits", None) or ev.get("telemetry_benefits", [])
-        if raw_benefits:
-            benefit_items = []
-            for b in raw_benefits:
-                if hasattr(b, "to_display_string"):
-                    b_str = b.to_display_string().replace("BENEFIT: ", "").replace("[", "").replace("]", "")
-                elif hasattr(b, "rule_name"):
-                    b_str = f"<b>{b.rule_name}</b>: {b.reason}" if b.reason else b.rule_name
-                else:
-                    b_str = str(b).replace("BENEFIT: ", "").replace("[", "").replace("]", "")
-                benefit_items.append(b_str)
-
-            benefit_items_html = "".join(f"<li style='margin-bottom: 4px; color: #6EE7B7;'><b>✓</b> {b}</li>" for b in benefit_items)
-            st.markdown(f"""
-            <div style="margin: 12px 0; padding: 12px 16px; background: #064E3B33; border: 1px solid #059669; border-radius: 8px;">
-                <h4 style="margin: 0 0 8px 0; color: #34D399; font-size: 1.05rem;">
-                    ✨ Positive Signals & Desirable Attributes ({len(benefit_items)})
-                </h4>
-                <ul style="margin: 0; padding-left: 20px; list-style-type: none;">
-                    {benefit_items_html}
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
+        signal_groups = TelemetryService.split_display_findings(
+            getattr(ev["fit_eval"], "telemetry_flags", []) or ev.get("telemetry_flags", []),
+            getattr(ev["fit_eval"], "telemetry_warnings", []) or ev.get("telemetry_warnings", []),
+            getattr(ev["fit_eval"], "telemetry_benefits", []) or ev.get("telemetry_benefits", [])
+        )
+        render_job_signals(*signal_groups)
+        signal_strings = set().union(*signal_groups)
+        fit_notes = [w for w in all_warnings if w not in signal_strings]
+        if fit_notes:
+            st.warning("**Fit Notes**\n\n" + "\n\n".join(fit_notes))
 
         # Primary Action Bar (Buttons to open Resume, Drive Folder, Docs, Sheet)
         st.markdown("#### ⚡ Immediate Application Actions:")
@@ -2091,9 +1925,9 @@ if active_section == SECTION_CRM:
     available_priorities = pipeline_cfg.get("priorities", DEFAULT_PRIORITIES)
 
     # Configuration Manager Expander for Sources, Priorities & Telemetry Warnings
-    with st.expander("⚙️ Configure Pipeline Attributes & Telemetry Rules", expanded=False):
-        st.caption("Customize where you apply from, your priority tiers, and telemetry warnings sent to the LLM.")
-        cfg_t1, cfg_t2 = st.tabs(["🌐 Sources & Priorities", "⚠️ Telemetry Warnings (LLM)"])
+    with st.expander("⚙️ Configure Pipeline Attributes & Job Signal Rules", expanded=False):
+        st.caption("Customize where you apply from, your priority tiers, and Job Signal rules.")
+        cfg_t1, cfg_t2 = st.tabs(["🌐 Sources & Priorities", "⚠️ Job Signals"])
         with cfg_t1:
             cfg_c1, cfg_c2 = st.columns(2)
             with cfg_c1:
@@ -2415,14 +2249,17 @@ if active_section == SECTION_CRM:
                     screening_doc = opp.get("Screening Doc Link")
                     if screening_doc:
                         st.markdown(f"[📝 Open Screening Questions Doc]({screening_doc})")
-                    if opp.get("Fit Warning"):
-                        warn_val = str(opp.get("Fit Warning"))
-                        st.markdown(
-                            f"<div style='margin: 4px 0 8px 0; padding: 6px 10px; background: #451A0344; border: 1px solid #F59E0B66; border-radius: 6px; font-size: 0.85rem; color: #FDE68A;'>"
-                            f"<b>⚠️ Fit & Telemetry Note:</b> {warn_val}"
-                            f"</div>",
-                            unsafe_allow_html=True
-                        )
+                    saved_signals = TelemetryService.load_display_findings(
+                        opp.get("Job Signals"), opp.get("Fit Warning", "")
+                    )
+                    render_job_signals(*saved_signals)
+                    fit_note = str(opp.get("Fit Warning") or "")
+                    if any(saved_signals):
+                        fit_note = re.split(r" \| (?:Telemetry Warnings|Job Signals):", fit_note)[0]
+                        if fit_note.startswith(("Flagged Telemetry:", "Passed with telemetry warning", "Job Signals")):
+                            fit_note = ""
+                    if fit_note:
+                        st.caption(fit_note.replace("Telemetry", "Job Signals").replace("telemetry", "Job Signals"))
 
                     # Stage Progression History Timeline
                     st.markdown("---")

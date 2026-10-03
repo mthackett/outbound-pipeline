@@ -36,13 +36,13 @@ def evaluate_single_job(
         resume_repo = MockResumeRepositoryAdapter()
         llm_adapter = MockLLMStrategyAdapter()
     else:
-        print(f"RUNNING: Evaluating Job Posting '{company_name} - {job_title}' via LLM Telemetry Extractor...")
+        print(f"RUNNING: Evaluating Job Posting '{company_name} - {job_title}' via Job Signals Extractor...")
         storage_adapter = GoogleSheetsAdapter()
         drive_adapter = GoogleDriveAdapter()
         resume_repo = drive_adapter
         llm_adapter = OpenAIEngineAdapter()
         
-    # 0. Extract Telemetry with Configurable Telemetry Warnings
+    # 0. Extract Telemetry with Configurable Job Signal Warnings
     warning_rules = PipelineConfigService.get_active_warning_rules()
     try:
         telemetry = llm_adapter.extract_job_telemetry(raw_jd, warning_rules=warning_rules)
@@ -57,12 +57,14 @@ def evaluate_single_job(
         if salary_max is None or salary_max == 0:
             salary_max = telemetry.requirements.salary_max
     except Exception as e:
-        print(f"WARNING: Telemetry extraction fallback: {e}")
+        print(f"WARNING: Job Signals extraction fallback: {e}")
         telemetry = None
 
     req_skills = telemetry.requirements.required_tech_stack if telemetry else []
     pref_skills = telemetry.requirements.preferred_tech_stack if telemetry else []
     telemetry_warnings = telemetry.requirements.telemetry_warnings if (telemetry and telemetry.requirements) else []
+    telemetry_flags = telemetry.requirements.telemetry_flags if (telemetry and telemetry.requirements) else []
+    telemetry_benefits = telemetry.requirements.telemetry_benefits if (telemetry and telemetry.requirements) else []
 
     # 1. Run Qualification & Pay Calculator
     fit_eval = JobQualificationService.evaluate(
@@ -74,16 +76,19 @@ def evaluate_single_job(
         salary_min=salary_min,
         salary_max=salary_max,
         profile=profile,
-        telemetry_warnings=telemetry_warnings
+        telemetry_warnings=telemetry_warnings,
+        telemetry_flags=telemetry_flags,
+        telemetry_benefits=telemetry_benefits
     )
     print("\n--- FIT QUALIFICATION RESULT ---")
     print(f"Status:      {fit_eval.status}")
     print(f"Reasoning:   {fit_eval.reasoning}")
     print(f"Target Pay:  {fit_eval.pay_bounds.display_range}")
-    if telemetry_warnings:
-        print(f"Telemetry Warnings ({len(telemetry_warnings)}):")
-        for tw in telemetry_warnings:
-            print(f"  [WARN] {tw}")
+    for label, findings in (("Flags", telemetry_flags), ("Warnings", telemetry_warnings), ("Positive Signals", telemetry_benefits)):
+        if findings:
+            print(f"Job Signals — {label} ({len(findings)}):")
+            for finding in findings:
+                print(f"  {finding}")
     if req_skills:
         print(f"Required Tech: {', '.join(req_skills)}")
     if pref_skills:
@@ -145,6 +150,8 @@ def evaluate_single_job(
         required_skills=req_skills,
         preferred_skills=pref_skills,
         telemetry_warnings=telemetry_warnings,
+        telemetry_flags=telemetry_flags,
+        telemetry_benefits=telemetry_benefits,
         selected_resume_name=resume_name,
         drive_folder_link=folder_link,
         drive_jd_link=drive_jd_link,

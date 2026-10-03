@@ -43,9 +43,11 @@ def run_batch_pipeline(demo_mode: bool = False):
         sal_min, sal_max = None, None
         warning_rules = PipelineConfigService.get_active_warning_rules()
         telemetry_warnings = []
+        telemetry_flags = []
+        telemetry_benefits = []
         if len(job.raw_description) >= 20:
             try:
-                print(f"\nEXTRACTING LLM Telemetry from raw JD text...")
+                print(f"\nEXTRACTING Job Signals from raw JD text...")
                 telemetry = llm_adapter.extract_job_telemetry(job.raw_description, warning_rules=warning_rules)
                 if telemetry.company_name and (not job.company_name or len(job.company_name.strip()) < 2):
                     job.company_name = telemetry.company_name
@@ -59,10 +61,14 @@ def run_batch_pipeline(demo_mode: bool = False):
                 sal_min = telemetry.requirements.salary_min
                 sal_max = telemetry.requirements.salary_max
                 telemetry_warnings = telemetry.requirements.telemetry_warnings or []
+                telemetry_flags = telemetry.requirements.telemetry_flags or []
+                telemetry_benefits = telemetry.requirements.telemetry_benefits or []
             except Exception as e:
-                print(f"WARNING: Telemetry extraction notice: {e}")
+                print(f"WARNING: Job Signals extraction notice: {e}")
 
         job.telemetry_warnings = telemetry_warnings
+        job.telemetry_flags = telemetry_flags
+        job.telemetry_benefits = telemetry_benefits
         print(f"\nPROCESSING JOB: {job.company_name} - {job.job_title} ({job.title_family})")
 
         # Fetch existing opportunities for duplicate & velocity guardrails
@@ -79,12 +85,17 @@ def run_batch_pipeline(demo_mode: bool = False):
             salary_max=sal_max,
             profile=profile,
             existing_company_titles=all_opps,
-            telemetry_warnings=telemetry_warnings
+            telemetry_warnings=telemetry_warnings,
+            telemetry_flags=telemetry_flags,
+            telemetry_benefits=telemetry_benefits,
         )
         print(f"  FIT GUARDRAIL RESULT: {fit_eval.status} - {fit_eval.reasoning}")
         print(f"  TARGET PAY RANGE:     {fit_eval.pay_bounds.display_range}")
-        if telemetry_warnings:
-            print(f"  TELEMETRY WARNINGS:   {len(telemetry_warnings)} flagged: {', '.join(telemetry_warnings)}")
+        for label, findings in (("Flags", telemetry_flags), ("Warnings", telemetry_warnings), ("Positive Signals", telemetry_benefits)):
+            if findings:
+                print(f"  Job Signals — {label}:")
+                for finding in findings:
+                    print(f"    {finding}")
 
         # 2. Select Best-Fit Resume by Title
         selected_resume = resume_repo.select_best_fit_resume(job.job_title, job.title_family)

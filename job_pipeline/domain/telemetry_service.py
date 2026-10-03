@@ -2,6 +2,7 @@ import re
 import json
 import uuid
 import hashlib
+from copy import deepcopy
 from typing import List, Dict, Any, Optional, Tuple, Union
 
 from job_pipeline.domain.models import (
@@ -73,7 +74,10 @@ class TelemetryService:
 
         # 1. Stable ID
         if not data.get("id"):
-            data["id"] = f"warn-{uuid.uuid4().hex[:6]}"
+            # Legacy dictionaries may never have been saved with an ID. Keep reads
+            # stable; canonical creation assigns a random ID before normalization.
+            identity = json.dumps(raw, sort_keys=True, ensure_ascii=False)
+            data["id"] = f"warn-{uuid.uuid5(uuid.NAMESPACE_URL, identity).hex[:12]}"
 
         # 2. Display Name
         data["name"] = data.get("name", "Unnamed Telemetry Rule")
@@ -89,27 +93,19 @@ class TelemetryService:
         data["keywords"] = keywords
 
         # 4. Resolve Category vs Domain Category vs Severity
-        raw_cat = str(data.get("category", "")).strip().lower()
+        original_category = data.get("category")
+        raw_cat = str(original_category or "").strip().lower()
         raw_sev = str(data.get("severity", "")).strip().lower()
 
         if raw_cat in TELEMETRY_RULE_CATEGORIES:
             data["category"] = raw_cat
-        elif raw_sev in TELEMETRY_RULE_CATEGORIES:
-            data["category"] = raw_sev
-            data["domain_category"] = data.get("category") or "Scope"
-        elif raw_sev == "flag":
-            data["category"] = "flag"
-            data["domain_category"] = data.get("category") or "Scope"
-        elif raw_sev == "warning":
-            data["category"] = "warning"
-            data["domain_category"] = data.get("category") or "Scope"
         else:
-            data["category"] = "warning"
-            if data.get("category") and data.get("category") not in TELEMETRY_RULE_CATEGORIES:
-                data["domain_category"] = data["category"]
+            data["category"] = raw_sev if raw_sev in TELEMETRY_RULE_CATEGORIES else "warning"
 
-        if not data.get("domain_category"):
-            data["domain_category"] = "Scope"
+        if not data.get("domain_category") or str(data["domain_category"]).lower() in TELEMETRY_RULE_CATEGORIES:
+            legacy_domain = original_category if raw_cat and raw_cat not in TELEMETRY_RULE_CATEGORIES else None
+            default_domain = next((r["domain_category"] for r in DEFAULT_TELEMETRY_RULES if r["id"] == data["id"]), "Scope")
+            data["domain_category"] = legacy_domain or default_domain
 
         # Update severity string for legacy consumers
         cat_lower = data["category"].lower()
@@ -152,7 +148,7 @@ class TelemetryService:
     @staticmethod
     def match_token(pattern: str, text: str, case_sensitive: bool = False) -> Optional[str]:
         """
-        Boundary-aware exact token matching equivalent to \\btoken\\b.
+        Boundary-aware literal matching that excludes hyphenated word components.
         Uses lookarounds to correctly handle tokens with punctuation (e.g. 401(k), TS/SCI).
         Does NOT match arbitrary substrings (e.g. 'FAR' inside 'software' or 'farmer').
         """
@@ -160,7 +156,7 @@ class TelemetryService:
         if not p_clean:
             return None
         flags = 0 if case_sensitive else re.IGNORECASE
-        regex_pattern = r'(?<!\w)' + re.escape(p_clean) + r'(?!\w)'
+        regex_pattern = r'(?<![\w\-\u2010\u2011])' + re.escape(p_clean) + r'(?![\w\-\u2010\u2011])'
         match = re.search(regex_pattern, text, flags)
         return match.group(0) if match else None
 
@@ -174,7 +170,7 @@ class TelemetryService:
         if not p_clean:
             return None
         flags = 0 if case_sensitive else re.IGNORECASE
-        regex_pattern = r'(?<!\w)' + re.escape(p_clean) + r'(?!\w)'
+        regex_pattern = r'(?<![\w\-\u2010\u2011])' + re.escape(p_clean) + r'(?![\w\-\u2010\u2011])'
         match = re.search(regex_pattern, text, flags)
         return match.group(0) if match else None
 
@@ -312,23 +308,65 @@ class TelemetryService:
         return flags, warnings, benefits
 
     @staticmethod
-    def compute_cache_key(raw_jd: str, rules: List[Dict[str, Any]]) -> str:
-        """Computes deterministic cache key from raw JD text and active semantic rules."""
-        semantic_subset = [
-            {"id": r.get("id"), "concept": r.get("concept_description"), "name": r.get("name"), "category": r.get("category")}
-            for r in rules
-            if str(r.get("match_mode", "")).lower() == "concept" and r.get("enabled", True)
-        ]
-        payload = raw_jd.strip() + "::" + json.dumps(semantic_subset, sort_keys=True)
+    def split_display_findings(flags=(), warnings=(), benefits=()):
+        """Keep new classifications explicit; recognize canonical legacy prefixes."""
+        groups = ([], [], [])
+        for default_index, items in enumerate((flags, warnings, benefits)):
+            for item in items or []:
+                if isinstance(item, dict):
+                    item = TelemetryFinding(**item)
+                if isinstance(item, TelemetryFinding):
+                    index = {"flag": 0, "warning": 1, "benefit": 2}.get(item.category, default_index)
+                    value = item.to_display_string()
+                else:
+                    value = str(item).strip()
+                    index = default_index
+                    if value.upper().startswith("FLAG:"):
+                        index = 0
+                    elif value.upper().startswith("BENEFIT:"):
+                        index = 2
+                if index == 1 and value in groups[0]:
+                    continue
+                if value and value not in groups[index]:
+                    groups[index].append(value)
+        return groups
+
+    @classmethod
+    def serialize_display_findings(cls, fit_eval) -> str:
+        flags, warnings, benefits = cls.split_display_findings(
+            fit_eval.telemetry_flags, fit_eval.telemetry_warnings, fit_eval.telemetry_benefits
+        )
+        return json.dumps({"version": 1, "flags": flags, "warnings": warnings, "benefits": benefits})
+
+    @classmethod
+    def load_display_findings(cls, stored, legacy_note=""):
+        """Read the optional Sheets cell, or extract only canonical old signal strings."""
+        try:
+            data = json.loads(stored) if isinstance(stored, str) and stored else stored
+            if isinstance(data, dict) and data.get("version") == 1:
+                if all(isinstance(data.get(k, []), list) for k in ("flags", "warnings", "benefits")):
+                    return cls.split_display_findings(data.get("flags", []), data.get("warnings", []), data.get("benefits", []))
+        except (ValueError, TypeError):
+            pass
+        # Old Fit Warning cells combined reasoning with semicolon-separated findings.
+        matches = re.findall(r"(?:FLAG:\s*|BENEFIT:\s*)?\[[^\]]+\]:\s*.*?(?=;\s*(?:(?:FLAG|BENEFIT):\s*)?\[|$)", str(legacy_note))
+        return cls.split_display_findings([], matches, [])
+
+    @classmethod
+    def compute_cache_key(cls, raw_jd: str, rules: List[Dict[str, Any]]) -> str:
+        """The cached payload includes every finding, so hash every active rule property."""
+        active_rules = [cls.normalize_rule_dict(r) for r in rules if r.get("enabled", True)]
+        serialized = sorted(json.dumps(r, sort_keys=True, ensure_ascii=False) for r in active_rules)
+        payload = json.dumps([raw_jd, serialized], ensure_ascii=False)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
     def get_cached_extraction(cache_key: str) -> Optional[Any]:
-        return _TELEMETRY_EXTRACTION_CACHE.get(cache_key)
+        return deepcopy(_TELEMETRY_EXTRACTION_CACHE.get(cache_key))
 
     @staticmethod
     def set_cached_extraction(cache_key: str, value: Any) -> None:
-        _TELEMETRY_EXTRACTION_CACHE[cache_key] = value
+        _TELEMETRY_EXTRACTION_CACHE[cache_key] = deepcopy(value)
 
     @classmethod
     def build_semantic_prompt_section(cls, rules: List[TelemetryRule]) -> str:
@@ -336,7 +374,7 @@ class TelemetryService:
         Formats active semantic / conceptual rules for the LLM prompt.
         If no semantic rules exist, returns an empty string (0 extra LLM tokens).
         """
-        semantic_rules = [r for r in rules if r.enabled and (r.match_mode or "").lower() == "concept"]
+        semantic_rules = [r for r in rules if r.enabled and (r.match_mode or "").lower() == "concept" and cls.validate_rule(r)[0]]
         if not semantic_rules:
             return ""
 
@@ -344,15 +382,27 @@ class TelemetryService:
         lines = []
         for idx, r in enumerate(semantic_rules, start=1):
             lines.append(
-                f"{idx}. [{r.id}] {r.name} (Category: {r.category}, Severity: {r.severity})\n"
-                f"   - Target Condition/Concept: {r.concept_description}"
+                f"{idx}. [{r.id}] {r.name} (Category: {r.category}, Domain: {r.domain_category})\n"
+                f"   - Target Condition/Concept: {r.concept_description}\n"
+                f"   - Supporting terms/examples: {json.dumps(r.patterns, ensure_ascii=False)}"
             )
 
         return (
             "\n\nCONFIGURABLE SEMANTIC TELEMETRY RULES:\n"
-            "Evaluate the job post against each semantic rule below. If the conceptual condition is met,\n"
-            "add a distinct infraction to 'telemetry_warnings' (for warnings/flags) or 'telemetry_benefits' (for benefits)\n"
-            "in the format '[<Rule Name>]: <Concise rationale tied directly to the job description>'.\n"
+            "You MUST evaluate EVERY semantic rule below independently against the ENTIRE job post.\n"
+            "Treat the rules as an exhaustive checklist: consider rule 1, then rule 2, and continue through the final rule.\n"
+            "Do not stop evaluating after finding several matches. Multiple rules may match the same passage or overlapping evidence.\n"
+            "For each rule, decide whether its Target Condition/Concept is satisfied by the job post.\n"
+            "Return every configured rule whose condition is satisfied. Omit rules whose conditions are not satisfied.\n"
+            "add a distinct finding to 'telemetry_flags', 'telemetry_warnings', or 'telemetry_benefits' according to its configured category.\n"
+            "Each array item MUST be a string in the format '[rule-id]: rationale'. Use the exact stable rule ID supplied below.\n"
+            "Do not substitute the display name for the identifier. Do not return bare IDs: include brackets, a colon, and one short rationale grounded in the job description.\n"
+            f"Format example using a configured ID: '[{semantic_rules[0].id}]: Brief evidence from the job description.'\n"
+            "If a rule does not match, omit it. Do not create new identifiers or signal types.\n"
+            "Return findings ONLY for these active configured rules. Never invent rules or classifications.\n"
+            "Supporting terms are examples and hints, NOT automatic triggers. Their mere presence is not sufficient.\n"
+            "Evaluate the complete job-post context against the target condition, including all qualifiers and exclusions.\n"
+            "Supporting terms/examples are illustrative only. A rule may match even when NONE of its supporting terms appears verbatim, if the job post clearly satisfies the Target Condition/Concept.\n"
             "Do NOT combine multiple violations; record each matching rule separately:\n"
             + "\n".join(lines)
         )
@@ -367,56 +417,57 @@ class TelemetryService:
         Maps strings returned by LLM (e.g. '[Federal Scope]: ...') back to structured TelemetryFinding objects.
         """
         findings: List[TelemetryFinding] = []
+        semantic_rules = [r for r in semantic_rules if r.enabled and r.match_mode == "concept" and cls.validate_rule(r)[0]]
+        rejected = 0
         for msg in llm_messages:
             clean_msg = str(msg).strip()
             if not clean_msg:
                 continue
 
             matched_rule: Optional[TelemetryRule] = None
-            extracted_reason = clean_msg
+            extracted_reason = ""
+            identifier = clean_msg
 
             # Check if formatted as [Rule Name/ID]: Reason
-            match = re.match(r'^(?:(?:FLAG|BENEFIT|WARN):\s*)?\[([^\]]+)\](?::\s*(.*))?$', clean_msg, re.IGNORECASE)
+            match = re.match(r'^(?:(?:FLAG|BENEFIT|WARN):\s*)?\[([^\]]+)\](?::\s*(.*))?$', clean_msg, re.IGNORECASE | re.DOTALL)
             if match:
                 identifier = match.group(1).strip()
-                extracted_reason = (match.group(2) or "").strip() or clean_msg
+                extracted_reason = " ".join((match.group(2) or "").split())
 
-                # Find by id or name
-                for r in semantic_rules:
-                    if r.id.lower() == identifier.lower() or r.name.lower() == identifier.lower():
-                        matched_rule = r
-                        break
+                # IDs take precedence; duplicate names cannot identify a rule safely.
+                matches = [r for r in semantic_rules if r.id.casefold() == identifier.casefold()]
+                if not matches:
+                    matches = [r for r in semantic_rules if r.name.casefold() == identifier.casefold()]
+                if len(matches) == 1:
+                    matched_rule = matches[0]
 
-            # Fallback fuzzy match on rule name
-            if not matched_rule:
-                for r in semantic_rules:
-                    if r.name.lower() in clean_msg.lower() or r.id.lower() in clean_msg.lower():
-                        matched_rule = r
-                        break
+            # Legacy unbracketed output must still use an exact canonical identifier.
+            if not matched_rule and not match:
+                identifier, sep, reason = clean_msg.partition(":")
+                matches = [r for r in semantic_rules if identifier.strip().casefold() == r.id.casefold()]
+                if not matches and sep:
+                    matches = [r for r in semantic_rules if identifier.strip().casefold() == r.name.casefold()]
+                if len(matches) == 1:
+                    matched_rule = matches[0]
+                    extracted_reason = " ".join(reason.split())
 
             if matched_rule:
+                if any(f.rule_id == matched_rule.id for f in findings):
+                    continue
                 findings.append(TelemetryFinding(
                     rule_id=matched_rule.id,
                     rule_name=matched_rule.name,
                     category=matched_rule.category.lower(),
                     match_mode="concept",
                     matched_text=None,
-                    reason=extracted_reason or matched_rule.explanation or "Semantic condition detected in posting.",
+                    reason=extracted_reason or "Model matched this configured rule but supplied no rationale; verify against the job description.",
                     domain_category=matched_rule.domain_category
                 ))
             else:
-                # Generic fallback if rule couldn't be mapped directly
-                is_flag = "FLAG" in clean_msg.upper()
-                is_benefit = "BENEFIT" in clean_msg.upper()
-                cat = "flag" if is_flag else ("benefit" if is_benefit else "warning")
-                findings.append(TelemetryFinding(
-                    rule_id=f"semantic-{uuid.uuid4().hex[:6]}",
-                    rule_name=clean_msg.split(":")[0].replace("[", "").replace("]", "").strip(),
-                    category=cat,
-                    match_mode="concept",
-                    matched_text=None,
-                    reason=clean_msg,
-                    domain_category="Scope"
-                ))
+                rejected += 1
+                safe_identifier = " ".join(identifier.split())[:100]
+                log_warn(f"Discarding semantic finding: identifier {safe_identifier!r} does not resolve to an active configured Concept rule.")
 
+        if llm_messages:
+            log_telemetry(f"Semantic mapping: returned={len(llm_messages)}, accepted={len(findings)}, rejected={rejected}.")
         return findings

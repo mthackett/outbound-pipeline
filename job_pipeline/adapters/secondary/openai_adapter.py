@@ -74,11 +74,12 @@ class JobRequirementsSchema(BaseModel):
     guaranteed_hours: Optional[bool] = Field(
         None, description="True if guaranteed hours are explicitly mentioned, null if unspecified."
     )
+    telemetry_flags: List[str] = Field(default_factory=list, description="Configured flag findings only. Each string MUST be '[rule-id]: rationale', using the exact configured ID and short JD evidence. Never a bare ID or display name. Empty if none match.")
     telemetry_warnings: List[str] = Field(
-        default_factory=list, description="List of warning labels or infractions detected based on the configured warning criteria or job post conditions."
+        default_factory=list, description="Configured warning findings only. Each string MUST be '[rule-id]: rationale', using the exact configured ID and short JD evidence. Never a bare ID or display name. Empty if none match."
     )
     telemetry_benefits: List[str] = Field(
-        default_factory=list, description="List of positive or desirable signal labels detected based on configured benefit criteria or job post conditions."
+        default_factory=list, description="Configured benefit findings only. Each string MUST be '[rule-id]: rationale', using the exact configured ID and short JD evidence. Never a bare ID or display name. Empty if none match."
     )
 
 
@@ -133,16 +134,18 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         # 2. Check cache to avoid repeated LLM work on unchanged JD & rules
         cache_key = TelemetryService.compute_cache_key(
             raw_jd,
-            [r.model_dump() if hasattr(r, "model_dump") else r.dict() for r in normalized_rules]
+            [r if isinstance(r, dict) else r.model_dump() for r in (warning_rules or [])]
         )
+        cache_key = ("online:semantic-v2:" if self.api_key else "offline:") + cache_key
         cached_payload = TelemetryService.get_cached_extraction(cache_key)
         if cached_payload:
+            self.last_telemetry_tokens = 0
             return cached_payload
 
         # 3. Offline fallback if no API key
         if not self.api_key:
             self.last_telemetry_tokens = 0
-            offline_warnings = [f.to_display_string() for f in (det_flags + det_warns)]
+            offline_warnings = [f.to_display_string() for f in det_warns]
             offline_benefits = [f.to_display_string() for f in det_benefits]
 
             payload = JobExtractionPayload(
@@ -157,6 +160,7 @@ class OpenAIEngineAdapter(LLMStrategyPort):
                     employment_arrangement="Employee",
                     pay_basis="Annual",
                     telemetry_warnings=offline_warnings,
+                    telemetry_flags=[f.to_display_string() for f in det_flags],
                     telemetry_benefits=offline_benefits
                 )
             )
@@ -180,7 +184,8 @@ class OpenAIEngineAdapter(LLMStrategyPort):
             "6. Extension & FTE Conversion: Extract extension_possible and fte_conversion_possible independently (e.g. 'contract-to-hire' -> fte_conversion_possible=True).\n"
             "7. Staffing Agency & Client: Extract staffing_agency and client_company only when identifiable from the text.\n"
             "8. Expected Hours: Extract expected_hours_per_week only when explicitly stated. Do NOT invent hours.\n"
-            "9. Never fill missing contract values using industry assumptions; preserve them as null."
+            "9. Never fill missing contract values using industry assumptions; preserve them as null.\n"
+            "Job signals must correspond ONLY to the configured rules below. With no configured semantic rules, return empty telemetry arrays."
             + warning_section
         )
 
@@ -198,7 +203,7 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         # 5. Parse returned semantic infractions & combine with deterministic findings
         llm_warn_raw = list(parsed.requirements.telemetry_warnings or [])
         llm_ben_raw = list(parsed.requirements.telemetry_benefits or [])
-        semantic_findings = TelemetryService.parse_semantic_infractions(llm_warn_raw + llm_ben_raw, semantic_rules)
+        semantic_findings = TelemetryService.parse_semantic_infractions(list(parsed.requirements.telemetry_flags or []) + llm_warn_raw + llm_ben_raw, semantic_rules)
 
         all_findings = list(deterministic_findings)
         for sf in semantic_findings:
@@ -206,7 +211,8 @@ class OpenAIEngineAdapter(LLMStrategyPort):
                 all_findings.append(sf)
 
         flags, warns, benefits = TelemetryService.split_findings(all_findings)
-        parsed.requirements.telemetry_warnings = [f.to_display_string() for f in (flags + warns)]
+        parsed.requirements.telemetry_flags = [f.to_display_string() for f in flags]
+        parsed.requirements.telemetry_warnings = [f.to_display_string() for f in warns]
         parsed.requirements.telemetry_benefits = [f.to_display_string() for f in benefits]
 
         TelemetryService.set_cached_extraction(cache_key, parsed)

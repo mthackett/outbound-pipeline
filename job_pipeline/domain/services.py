@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import uuid
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -408,7 +409,8 @@ class JobQualificationService:
         contract_length_weeks: Optional[float] = None,
         telemetry_warnings: Optional[List[str]] = None,
         telemetry_findings: Optional[List[Union[TelemetryFinding, Dict[str, Any]]]] = None,
-        telemetry_benefits: Optional[List[Union[TelemetryFinding, Dict[str, Any]]]] = None
+        telemetry_benefits: Optional[List[Union[TelemetryFinding, Dict[str, Any], str]]] = None,
+        telemetry_flags: Optional[List[str]] = None
     ) -> FitEvaluation:
         if profile is None:
             profile = CandidateProfile()
@@ -422,21 +424,23 @@ class JobQualificationService:
                 elif isinstance(item, dict):
                     resolved_findings.append(TelemetryFinding(**item))
 
-        resolved_benefits: List[TelemetryFinding] = []
+        resolved_benefits: List[Union[TelemetryFinding, str]] = []
         if telemetry_benefits:
             for item in telemetry_benefits:
                 if isinstance(item, TelemetryFinding):
                     resolved_benefits.append(item)
                 elif isinstance(item, dict):
                     resolved_benefits.append(TelemetryFinding(**item))
+                elif isinstance(item, str):
+                    resolved_benefits.append(item)
 
         t_flags, t_warnings, t_benefits = TelemetryService.split_findings(resolved_findings)
         for b in t_benefits:
-            if not any(rb.rule_id == b.rule_id for rb in resolved_benefits):
+            if not any(getattr(rb, "rule_id", None) == b.rule_id for rb in resolved_benefits):
                 resolved_benefits.append(b)
 
         # Build explainable telemetry warning strings
-        telemetry_warning_strings = list(telemetry_warnings or [])
+        telemetry_warning_strings = list(telemetry_flags or []) + list(telemetry_warnings or [])
         for f in t_flags:
             display_str = f.to_display_string()
             if display_str not in telemetry_warning_strings:
@@ -453,7 +457,7 @@ class JobQualificationService:
                     warnings.append(tw)
 
         # Compute telemetry status (red / yellow / green)
-        if t_flags or any(tw.startswith("FLAG:") or "[FLAG]" in tw.upper() for tw in telemetry_warning_strings):
+        if telemetry_flags or t_flags or any(tw.startswith("FLAG:") or "[FLAG]" in tw.upper() for tw in telemetry_warning_strings):
             telemetry_status = "red"
             has_critical_telemetry_flag = True
         elif t_warnings or telemetry_warning_strings:
@@ -554,7 +558,7 @@ class JobQualificationService:
         elif has_critical_telemetry_flag:
             status = "FLAGGED_TELEMETRY"
             is_qualified = False
-            reasoning = f"Flagged Telemetry: Critical warning condition triggered ({'; '.join(telemetry_warning_strings)})."
+            reasoning = f"Job Signals — Flags: {'; '.join(telemetry_warning_strings)}"
         elif fit_score < 0.2:
             status = "FLAGGED_SKILL_MISMATCH"
             is_qualified = True
@@ -562,15 +566,19 @@ class JobQualificationService:
         elif telemetry_warning_strings:
             status = "PASS"
             is_qualified = True
-            reasoning = f"Passed with telemetry warning(s): {'; '.join(telemetry_warning_strings)}"
+            reasoning = f"Job Signals — Warnings: {'; '.join(telemetry_warning_strings)}"
         else:
             status = "PASS"
             is_qualified = True
             reasoning = f"Passed fit evaluation. Skill score: {int(fit_score * 100)}% ({len(matching_skills)} matching core strengths)."
 
         # Append telemetry warnings to reasoning if other flags took priority, so every infraction is preserved
-        if telemetry_warning_strings and not reasoning.startswith("Passed with telemetry warning") and not reasoning.startswith("Flagged Telemetry"):
-            reasoning += f" | Telemetry Warnings: {'; '.join(telemetry_warning_strings)}"
+        if telemetry_warning_strings and not reasoning.startswith("Job Signals"):
+            reasoning += f" | Job Signals: {'; '.join(telemetry_warning_strings)}"
+
+        flag_strings, warning_strings, _ = TelemetryService.split_display_findings(
+            telemetry_flags or [], telemetry_warning_strings, []
+        )
 
         return FitEvaluation(
             status=status,
@@ -583,6 +591,8 @@ class JobQualificationService:
             reasoning=reasoning,
             telemetry_findings=resolved_findings,
             telemetry_status=telemetry_status,
+            telemetry_flags=flag_strings,
+            telemetry_warnings=warning_strings,
             telemetry_benefits=resolved_benefits,
             duplicate_detected=duplicate_detected,
             is_repost=is_repost,
@@ -717,6 +727,7 @@ class PipelineConfigService:
                     normalized_rules = [TelemetryService.normalize_rule_dict(r) for r in DEFAULT_TELEMETRY_RULES]
 
                 res = {
+                    **data,
                     "enable_cli_logging": bool(enable_logging),
                     "sources": sources if isinstance(sources, list) and sources else list(DEFAULT_APPLICATION_SOURCES),
                     "priorities": priorities if isinstance(priorities, list) and priorities else list(DEFAULT_PRIORITIES),
@@ -800,11 +811,17 @@ class PipelineConfigService:
     @classmethod
     def add_telemetry_rule(cls, rule: Dict[str, Any], filepath: Optional[str] = None) -> List[Dict[str, Any]]:
         cfg = cls.load_config(filepath)
-        norm_rule = TelemetryService.normalize_rule_dict(rule)
+        norm_rule = TelemetryService.normalize_rule_dict({**rule, "id": rule.get("id") or f"warn-{uuid.uuid4().hex[:12]}"})
+        valid, error = TelemetryService.validate_rule(TelemetryRule(**norm_rule))
+        if not valid:
+            raise ValueError(error)
         rules = cfg.setdefault("telemetry_rules", [])
+        if any(r["id"] == norm_rule["id"] for r in rules):
+            raise ValueError("A Job Signal rule with this ID already exists; edit it instead.")
         rules.append(norm_rule)
         cfg["telemetry_warnings"] = list(rules)
-        cls.save_config(cfg, filepath)
+        if not cls.save_config(cfg, filepath):
+            raise OSError("Could not save Job Signal rules.")
         return rules
 
     @classmethod
@@ -813,13 +830,18 @@ class PipelineConfigService:
         rules = cfg.setdefault("telemetry_rules", [])
         for r in rules:
             if r.get("id") == rule_id:
-                r.update(updated_fields)
-                norm = TelemetryService.normalize_rule_dict(r)
+                norm = TelemetryService.normalize_rule_dict({**r, **updated_fields, "id": rule_id})
+                valid, error = TelemetryService.validate_rule(TelemetryRule(**norm))
+                if not valid:
+                    raise ValueError(error)
                 r.clear()
                 r.update(norm)
                 break
+        else:
+            raise ValueError("The Job Signal rule no longer exists. Reload the rule list.")
         cfg["telemetry_warnings"] = list(rules)
-        cls.save_config(cfg, filepath)
+        if not cls.save_config(cfg, filepath):
+            raise OSError("Could not save Job Signal rules.")
         return rules
 
     @classmethod
@@ -996,5 +1018,3 @@ class IngestionRecoveryService:
                     return line0, line1
 
         return "Target Company", "Target Role"
-
-

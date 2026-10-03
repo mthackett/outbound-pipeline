@@ -668,7 +668,10 @@ class TestRawJDPersistencePolicy(unittest.TestCase, _WorkspaceHelper):
         self.assertTrue(saved)
 
         # Updated cells should update Job Description to empty and preserve Raw JD Link
-        mock_ingest_ws.update_cells.assert_called_once()
+        # Older sheets receive the optional Job Signals header before row updates.
+        self.assertEqual(mock_ingest_ws.update_cells.call_count, 2)
+        header_updates = mock_ingest_ws.update_cells.call_args_list[0][0][0]
+        self.assertEqual([(c.row, c.value) for c in header_updates], [(1, "Job Signals")])
         cell_updates = mock_ingest_ws.update_cells.call_args[0][0]
         jd_col_1based = headers.index("Job Description") + 1
         link_col_1based = headers.index("Raw JD Link") + 1
@@ -745,4 +748,3 @@ class TestRawJDPersistencePolicy(unittest.TestCase, _WorkspaceHelper):
 
 if __name__ == "__main__":
     unittest.main()
-

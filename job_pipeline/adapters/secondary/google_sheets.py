@@ -121,7 +121,7 @@ class GoogleSheetsAdapter(JobStoragePort):
             required_cols = [
                 "Opportunity ID", "Company Name", "Job Title", "Title Family", "Status",
                 "Date Created", "Job Description", "Raw JD Link", "Last Modified",
-                "Tokens", "Fit Warning", "Selected Resume",
+                "Tokens", "Fit Warning", "Job Signals", "Selected Resume",
                 "Target Pay Range", "Drive Folder Link", "Screening Doc Link", "Screening QA Count",
                 "Stage History", "Category", "Applied Via", "Priority",
                 "Employment Arrangement", "Worker Classification", "Pay Basis",
@@ -185,6 +185,8 @@ class GoogleSheetsAdapter(JobStoragePort):
             if job.tokens_used:
                 queue("Tokens", f"{job.tokens_used:,}")
             queue("Fit Warning", fit_eval.reasoning)
+            from job_pipeline.domain.telemetry_service import TelemetryService
+            queue("Job Signals", TelemetryService.serialize_display_findings(fit_eval))
             if job.selected_resume_name:
                 queue("Selected Resume", job.selected_resume_name)
             queue("Target Pay Range", fit_eval.pay_bounds.display_range)

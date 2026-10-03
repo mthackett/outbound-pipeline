@@ -16,7 +16,7 @@
       "id": "warn-travel-requirement",
       "name": "High Travel Requirement",
       "category": "warning",
-      "match_mode": "phrase",
+      "match_mode": "concept",
       "patterns": [
         "50% travel",
         "75% travel",
@@ -29,7 +29,7 @@
         "frequent travel",
         "extensive travel"
       ],
-      "concept_description": "Role includes a substantial recurring travel requirement.",
+      "concept_description": "Role includes a substantial recurring travel requirement. Exclude optional or occasional travel and descriptions of other roles.",
       "explanation": "Job description indicates substantial travel may be required.",
       "domain_category": "Work Arrangement",
       "severity": "Warning",
@@ -40,7 +40,7 @@
       "id": "warn-onsite-requirement",
       "name": "Full-Time On-Site Requirement",
       "category": "warning",
-      "match_mode": "phrase",
+      "match_mode": "concept",
       "patterns": [
         "fully onsite",
         "fully on-site",
@@ -55,7 +55,7 @@
         "5 days onsite",
         "in office five days"
       ],
-      "concept_description": "Role requires regular full-time on-site attendance.",
+      "concept_description": "Role requires full-time on-site attendance. Exclude optional office use and hybrid arrangements.",
       "explanation": "Job description indicates a full-time on-site work requirement.",
       "domain_category": "Work Arrangement",
       "severity": "Warning",
@@ -66,7 +66,7 @@
       "id": "warn-short-term-contract",
       "name": "Short-Term Contract",
       "category": "warning",
-      "match_mode": "phrase",
+      "match_mode": "concept",
       "patterns": [
         "3 month contract",
         "three month contract",
@@ -81,7 +81,7 @@
         "six month contract",
         "short-term contract"
       ],
-      "concept_description": "Role is structured as a short-term contract below the user's preferred duration.",
+      "concept_description": "Role is explicitly a short-term contract of six months or less. Exclude probation periods, project milestones, and contracts longer than six months.",
       "explanation": "Job description indicates a short-term contract engagement.",
       "domain_category": "Employment Type",
       "severity": "Warning",
@@ -94,7 +94,7 @@
       "id": "warn-travel-requirement",
       "name": "High Travel Requirement",
       "category": "warning",
-      "match_mode": "phrase",
+      "match_mode": "concept",
       "patterns": [
         "50% travel",
         "75% travel",
@@ -107,10 +107,10 @@
         "frequent travel",
         "extensive travel"
       ],
-      "concept_description": "Role includes a substantial recurring travel requirement.",
+      "concept_description": "Role includes a substantial recurring travel requirement. Exclude optional or occasional travel and descriptions of other roles.",
       "explanation": "Job description indicates substantial travel may be required.",
       "domain_category": "Work Arrangement",
-      "severity": "Flag",
+      "severity": "Warning",
       "enabled": true,
       "case_sensitive": false
     },
@@ -118,7 +118,7 @@
       "id": "warn-onsite-requirement",
       "name": "Full-Time On-Site Requirement",
       "category": "warning",
-      "match_mode": "phrase",
+      "match_mode": "concept",
       "patterns": [
         "fully onsite",
         "fully on-site",
@@ -133,7 +133,7 @@
         "5 days onsite",
         "in office five days"
       ],
-      "concept_description": "Role requires regular full-time on-site attendance.",
+      "concept_description": "Role requires full-time on-site attendance. Exclude optional office use and hybrid arrangements.",
       "explanation": "Job description indicates a full-time on-site work requirement.",
       "domain_category": "Work Arrangement",
       "severity": "Warning",
@@ -144,7 +144,7 @@
       "id": "warn-short-term-contract",
       "name": "Short-Term Contract",
       "category": "warning",
-      "match_mode": "phrase",
+      "match_mode": "concept",
       "patterns": [
         "3 month contract",
         "three month contract",
@@ -159,7 +159,7 @@
         "six month contract",
         "short-term contract"
       ],
-      "concept_description": "Role is structured as a short-term contract below the user's preferred duration.",
+      "concept_description": "Role is explicitly a short-term contract of six months or less. Exclude probation periods, project milestones, and contracts longer than six months.",
       "explanation": "Job description indicates a short-term contract engagement.",
       "domain_category": "Employment Type",
       "severity": "Warning",

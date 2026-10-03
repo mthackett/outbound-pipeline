@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -51,10 +51,10 @@ DEFAULT_TELEMETRY_RULES: List[Dict[str, Any]] = [
         "id": "warn-on-call",
         "name": "On-Call / Weekend Support Required",
         "category": "warning",
-        "match_mode": "token",
+        "match_mode": "concept",
         "patterns": ["on-call", "24/7", "pagerduty", "weekend coverage", "after-hours", "night shift"],
         "keywords": ["on-call", "24/7", "pagerduty", "weekend coverage", "after-hours", "night shift"],
-        "concept_description": "Role requires regular on-call rotation, 24/7 availability, off-hours incident response, or mandatory weekend work.",
+        "concept_description": "Role requires regular on-call rotation, 24/7 availability, off-hours incident response, or mandatory night/weekend work. Exclude optional support and descriptions of the product or other teams.",
         "explanation": "Role requires regular on-call rotation, off-hours response, or mandatory weekend work.",
         "domain_category": "Scope",
         "severity": "Warning",
@@ -65,10 +65,10 @@ DEFAULT_TELEMETRY_RULES: List[Dict[str, Any]] = [
         "id": "warn-excessive-travel",
         "name": "Excessive Travel (>25%)",
         "category": "warning",
-        "match_mode": "phrase",
+        "match_mode": "concept",
         "patterns": ["travel 50%", "travel 75%", "frequent travel", "extensive travel", "road warrior"],
         "keywords": ["travel 50%", "travel 75%", "frequent travel", "extensive travel", "road warrior"],
-        "concept_description": "Role requires heavy or frequent travel (more than 25% travel commitment).",
+        "concept_description": "Role requires more than 25% travel. Require explicit percentage or equivalent recurring commitment; vague mentions of travel alone are insufficient.",
         "explanation": "Role requires heavy or frequent travel exceeding 25%.",
         "domain_category": "Scope",
         "severity": "Warning",
@@ -79,11 +79,11 @@ DEFAULT_TELEMETRY_RULES: List[Dict[str, Any]] = [
         "id": "warn-no-benefits",
         "name": "No Benefits / Commission Only",
         "category": "warning",
-        "match_mode": "phrase",
+        "match_mode": "concept",
         "patterns": ["commission only", "no benefits", "unpaid", "equity only", "stipend only"],
         "keywords": ["commission only", "no benefits", "unpaid", "equity only", "stipend only"],
-        "concept_description": "Role does not offer standard benefits, is commission-only, equity-only, or unpaid.",
-        "explanation": "Role does not offer standard benefits, is commission-only, equity-only, or unpaid.",
+        "concept_description": "Role explicitly offers no standard benefits or no guaranteed base compensation (commission-only, entirely performance-based, equity-only, or unpaid). Do not flag normal salary plus commission or merely unspecified benefits.",
+        "explanation": "Role offers no standard benefits or no guaranteed base compensation.",
         "domain_category": "Benefits",
         "severity": "Warning",
         "enabled": True,
@@ -93,10 +93,10 @@ DEFAULT_TELEMETRY_RULES: List[Dict[str, Any]] = [
         "id": "warn-legacy-stack",
         "name": "Outdated / Legacy Tech Stack",
         "category": "warning",
-        "match_mode": "token",
+        "match_mode": "concept",
         "patterns": ["COBOL", "Visual Basic", "VB6", "Fortran", "Lotus Notes", "Access database", "legacy monolithic"],
         "keywords": ["COBOL", "Visual Basic", "VB6", "Fortran", "Lotus Notes", "Access database", "legacy monolithic"],
-        "concept_description": "Role heavily relies on legacy, deprecated, or obsolete programming languages and architectures.",
+        "concept_description": "Role heavily relies on legacy, deprecated, or obsolete technology. Exclude incidental mentions, optional experience, and work primarily replacing legacy systems with modern tools.",
         "explanation": "Role heavily relies on legacy or deprecated programming languages and architectures.",
         "domain_category": "Skills",
         "severity": "Warning",
@@ -107,10 +107,10 @@ DEFAULT_TELEMETRY_RULES: List[Dict[str, Any]] = [
         "id": "warn-overbroad-scope",
         "name": "Overbroad Scope / Multi-Department Trap",
         "category": "warning",
-        "match_mode": "phrase",
+        "match_mode": "concept",
         "patterns": ["wear many hats", "handle IT and sales and marketing", "one-person department", "do-it-all"],
         "keywords": ["wear many hats", "handle IT and sales and marketing", "one-person department", "do-it-all"],
-        "concept_description": "Job description expects a single person to handle IT helpdesk, office management, sales, and engineering simultaneously without dedicated team support.",
+        "concept_description": "Role assigns one person substantial responsibilities across unrelated departments, such as IT helpdesk, office management, sales, and engineering, without dedicated team support. Exclude ordinary cross-functional collaboration and vague wear-many-hats language alone.",
         "explanation": "Job description expects a single person to handle IT, office management, sales, and engineering simultaneously.",
         "domain_category": "Scope",
         "severity": "Warning",
@@ -173,7 +173,7 @@ class TelemetryRule(BaseModel):
         raw_cat = str(data.get("category", "")).strip().lower()
         raw_sev = str(data.get("severity", "")).strip().lower()
         if raw_cat not in ("warning", "flag", "benefit"):
-            if "category" in data and data["category"]:
+            if "category" in data and data["category"] and not data.get("domain_category"):
                 data["domain_category"] = data["category"]
             if raw_sev in ("warning", "flag", "benefit"):
                 data["category"] = raw_sev
@@ -391,7 +391,9 @@ class FitEvaluation(BaseModel):
     reasoning: str = ""
     telemetry_findings: List[TelemetryFinding] = Field(default_factory=list)
     telemetry_status: str = "green"  # "green", "yellow", "red"
-    telemetry_benefits: List[TelemetryFinding] = Field(default_factory=list)
+    telemetry_flags: List[str] = Field(default_factory=list)
+    telemetry_warnings: List[str] = Field(default_factory=list)
+    telemetry_benefits: List[Union[TelemetryFinding, str]] = Field(default_factory=list)
     duplicate_detected: bool = False
     is_repost: bool = False
     prior_application_date: Optional[str] = None
@@ -439,8 +441,9 @@ class JobPosting(BaseModel):
     drive_screening_doc_link: Optional[str] = None
     screening_qa: List[ScreeningQA] = Field(default_factory=list)
     telemetry_warnings: List[str] = Field(default_factory=list)
+    telemetry_flags: List[str] = Field(default_factory=list)
     telemetry_findings: List[Dict[str, Any]] = Field(default_factory=list)
-    telemetry_benefits: List[Dict[str, Any]] = Field(default_factory=list)
+    telemetry_benefits: List[Union[Dict[str, Any], str]] = Field(default_factory=list)
     row_index: Optional[int] = None
     tokens_used: int = 0
 

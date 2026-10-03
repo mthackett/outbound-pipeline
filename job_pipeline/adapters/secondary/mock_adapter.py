@@ -1,3 +1,4 @@
+from job_pipeline.domain.telemetry_service import TelemetryService
 import os
 import uuid
 from typing import List, Dict, Any, Optional
@@ -136,6 +137,7 @@ class MockJobStorageAdapter(JobStoragePort):
                 "Opportunity ID": j.opportunity_id,
                 "Target Pay Range": fe.pay_bounds.display_range,
                 "Fit Warning": fe.reasoning,
+                "Job Signals": TelemetryService.serialize_display_findings(fe),
                 "Drive Folder Link": j.drive_folder_link or "https://drive.google.com/mock_folder"
             })
         return results
@@ -390,7 +392,7 @@ class MockLLMStrategyAdapter(LLMStrategyPort):
         deterministic_findings = TelemetryService.evaluate_deterministic_rules(normalized_rules, raw_jd)
         det_flags, det_warns, det_benefits = TelemetryService.split_findings(deterministic_findings)
 
-        detected_warnings = [f.to_display_string() for f in (det_flags + det_warns)]
+        detected_warnings = [f.to_display_string() for f in det_warns]
         detected_benefits = [f.to_display_string() for f in det_benefits]
 
         return JobExtractionPayload(
@@ -405,6 +407,7 @@ class MockLLMStrategyAdapter(LLMStrategyPort):
                 employment_arrangement="Employee",
                 pay_basis="Annual",
                 telemetry_warnings=detected_warnings,
+                telemetry_flags=[f.to_display_string() for f in det_flags],
                 telemetry_benefits=detected_benefits
             )
         )

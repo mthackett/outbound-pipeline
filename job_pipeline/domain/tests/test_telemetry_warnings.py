@@ -1,5 +1,6 @@
 import os
 import unittest
+from unittest.mock import patch
 from job_pipeline.domain.models import (
     CandidateProfile, JobPosting, FitEvaluation,
     DEFAULT_TELEMETRY_WARNING_RULES, TELEMETRY_WARNING_CATEGORIES
@@ -98,7 +99,7 @@ class TestTelemetryWarnings(unittest.TestCase):
 
         self.assertTrue(fit_eval.is_qualified)
         self.assertEqual(fit_eval.status, "PASS")
-        self.assertIn("Passed with telemetry warning(s)", fit_eval.reasoning)
+        self.assertIn("Job Signals — Warnings", fit_eval.reasoning)
         for w in telemetry_warns:
             self.assertIn(w, fit_eval.warnings)
             self.assertIn(w, fit_eval.reasoning)
@@ -123,7 +124,7 @@ class TestTelemetryWarnings(unittest.TestCase):
 
         self.assertFalse(fit_eval.is_qualified)
         self.assertEqual(fit_eval.status, "FLAGGED_TELEMETRY")
-        self.assertIn("Flagged Telemetry", fit_eval.reasoning)
+        self.assertIn("Job Signals — Flags", fit_eval.reasoning)
         self.assertIn("Security Clearance Mandatory", fit_eval.reasoning)
 
     def test_mock_adapter_telemetry_keyword_extraction(self):
@@ -160,6 +161,7 @@ class TestTelemetryWarnings(unittest.TestCase):
         self.assertTrue(any("On-Call Support" in w for w in warns))
         self.assertTrue(any("Frequent Travel" in w for w in warns))
 
+    @patch.dict(os.environ, {"OPENAI_API_KEY": ""})
     def test_openai_adapter_offline_keyword_detection(self):
         """Verify OpenAIEngineAdapter detects keywords even when running offline without API key."""
         adapter = OpenAIEngineAdapter(api_key=None)

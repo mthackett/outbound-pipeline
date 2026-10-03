@@ -52,3 +52,9 @@ IMPLEMENTATION_PLAN.md
 COLD_OUTREACH_EXTENSION_ARCHITECTURE.md
 REMEDIATION_PROGRESS.md
 code_fix_instructions.md
+
+# Convenience startup script
+start.ps1
+
+# Internal documents
+docs/
