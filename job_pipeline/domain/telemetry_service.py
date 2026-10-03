@@ -8,11 +8,13 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 from job_pipeline.domain.models import (
     TelemetryRule,
     TelemetryFinding,
+    JobSignalMatch,
+    JobSignalEvaluation,
     TELEMETRY_RULE_CATEGORIES,
     TELEMETRY_MATCH_MODES,
     DEFAULT_TELEMETRY_RULES
 )
-from job_pipeline.logger import log_telemetry, log_warn
+from job_pipeline.logger import log_telemetry, log_warn, log_job_signals
 
 
 # Global in-memory cache to avoid repeated LLM calls on identical job description text & rules
@@ -245,7 +247,8 @@ class TelemetryService:
     def evaluate_deterministic_rules(
         cls,
         rules: List[Union[TelemetryRule, Dict[str, Any]]],
-        text: str
+        text: str,
+        tag: str = "TELEMETRY"
     ) -> List[TelemetryFinding]:
         """
         Evaluates all active deterministic rules against text.
@@ -255,7 +258,10 @@ class TelemetryService:
         normalized_rules = [cls.normalize_rule(r) for r in rules if (r.get("enabled", True) if isinstance(r, dict) else r.enabled)]
         deterministic_rules = [r for r in normalized_rules if (r.match_mode or "").lower() != "concept"]
 
-        log_telemetry(f"Evaluating {len(deterministic_rules)} deterministic rules.")
+        if tag == "JOB SIGNALS":
+            log_job_signals(f"Evaluating {len(deterministic_rules)} deterministic rules.")
+        else:
+            log_telemetry(f"Evaluating {len(deterministic_rules)} deterministic rules.")
 
         findings: List[TelemetryFinding] = []
         for rule in deterministic_rules:
@@ -471,3 +477,116 @@ class TelemetryService:
         if llm_messages:
             log_telemetry(f"Semantic mapping: returned={len(llm_messages)}, accepted={len(findings)}, rejected={rejected}.")
         return findings
+
+    @classmethod
+    def build_dedicated_semantic_prompt(cls, semantic_rules: List[TelemetryRule]) -> str:
+        """
+        Builds the narrow, focused prompt for dedicated pre-ingestion Job Signals evaluation.
+        Evaluates active Concept rules as an exhaustive checklist against the full JD.
+        """
+        valid_rules = [r for r in semantic_rules if r.enabled and (r.match_mode or "").lower() == "concept" and cls.validate_rule(r)[0]]
+        if not valid_rules:
+            return ""
+
+        lines = []
+        for idx, r in enumerate(valid_rules, start=1):
+            lines.append(
+                f"{idx}. Rule ID: {r.id}\n"
+                f"   - Target Condition/Concept: {r.concept_description}\n"
+                f"   - Supporting terms/examples (hints only): {json.dumps(r.patterns, ensure_ascii=False)}"
+            )
+
+        return (
+            "You are an expert recruitment and job specification analyst evaluating whether specific conditions are present in a job post.\n\n"
+            "EVALUATION RULES & CONTRACT:\n"
+            "1. Evaluate EVERY configured rule listed below independently against the ENTIRE job post.\n"
+            "2. Treat the rules as an exhaustive checklist: evaluate rule 1, then rule 2, through the final rule. Do not stop after finding several matches.\n"
+            "3. Return EVERY configured rule whose condition is satisfied by the job post. Omit rules whose conditions are not satisfied.\n"
+            "4. For each matched rule, return:\n"
+            "   - rule_id: The exact stable rule ID from the list below. NEVER invent or alter rule IDs.\n"
+            "   - reason: A concise explanation of why the rule condition was satisfied.\n"
+            "   - evidence: A concise, grounded excerpt or sentence directly from the job description text supporting the match. Do NOT fabricate evidence.\n"
+            "5. Supporting terms/examples are illustrative hints only. A rule may match even if none of its supporting terms appears verbatim, provided the job description satisfies the Target Condition/Concept. Conversely, the mere appearance of a supporting term is not an automatic match if the context does not satisfy the condition.\n"
+            "6. Respect all qualifiers, thresholds, and exclusions in each rule's description.\n"
+            "7. Multiple rules may match the same passage or overlapping evidence.\n"
+            "8. Do not infer classifications (flag, warning, benefit) or make application decisions; only evaluate whether each condition is met.\n\n"
+            "CONFIGURED RULES TO EVALUATE:\n"
+            + "\n".join(lines)
+        )
+
+    @classmethod
+    def parse_dedicated_semantic_matches(
+        cls,
+        matches: List[Union[JobSignalMatch, Dict[str, Any]]],
+        semantic_rules: List[TelemetryRule]
+    ) -> List[TelemetryFinding]:
+        """
+        Resolves model-returned JobSignalMatch items strictly against active configured Concept rules.
+        Configuration remains authoritative for name, classification, and domain.
+        Rejects unknown IDs or matches with empty evidence.
+        Deduplicates matched rule IDs.
+        """
+        valid_rules = [r for r in semantic_rules if r.enabled and (r.match_mode or "").lower() == "concept" and cls.validate_rule(r)[0]]
+        rule_map = {r.id.casefold(): r for r in valid_rules}
+        findings: List[TelemetryFinding] = []
+        seen_ids = set()
+        rejected = 0
+
+        for item in matches:
+            if isinstance(item, dict):
+                rule_id = str(item.get("rule_id", "")).strip()
+                reason = str(item.get("reason", "")).strip()
+                evidence = str(item.get("evidence", "")).strip()
+            else:
+                rule_id = str(getattr(item, "rule_id", "")).strip()
+                reason = str(getattr(item, "reason", "")).strip()
+                evidence = str(getattr(item, "evidence", "")).strip()
+
+            if not rule_id:
+                rejected += 1
+                continue
+
+            matched_rule = rule_map.get(rule_id.casefold())
+            if not matched_rule:
+                rejected += 1
+                safe_id = " ".join(rule_id.split())[:100]
+                log_warn(f"Discarding semantic finding: rule_id {safe_id!r} does not resolve to an active configured Concept rule.")
+                continue
+
+            # Grounded evidence is required
+            if not evidence:
+                rejected += 1
+                log_warn(f"Discarding semantic finding for rule '{matched_rule.id}': no grounded evidence provided.")
+                continue
+
+            if matched_rule.id in seen_ids:
+                continue
+
+            seen_ids.add(matched_rule.id)
+            findings.append(TelemetryFinding(
+                rule_id=matched_rule.id,
+                rule_name=matched_rule.name,
+                category=matched_rule.category.lower(),
+                match_mode="concept",
+                matched_text=None,
+                reason=reason or matched_rule.explanation or "Condition detected.",
+                evidence=evidence,
+                domain_category=matched_rule.domain_category
+            ))
+
+        log_job_signals(f"Semantic matches returned={len(matches)}, accepted={len(findings)}, rejected={rejected}.")
+        return findings
+
+    @staticmethod
+    def merge_findings(
+        deterministic_findings: List[TelemetryFinding],
+        semantic_findings: List[TelemetryFinding]
+    ) -> List[TelemetryFinding]:
+        """Combines deterministic and semantic findings, deduplicating by rule_id."""
+        merged: List[TelemetryFinding] = list(deterministic_findings)
+        seen_ids = {f.rule_id for f in deterministic_findings}
+        for sf in semantic_findings:
+            if sf.rule_id not in seen_ids:
+                merged.append(sf)
+                seen_ids.add(sf.rule_id)
+        return merged

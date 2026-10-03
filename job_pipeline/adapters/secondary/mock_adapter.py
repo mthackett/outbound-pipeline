@@ -1,7 +1,7 @@
 from job_pipeline.domain.telemetry_service import TelemetryService
 import os
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from job_pipeline.domain.models import JobPosting, FitEvaluation, RoleIntelligenceReport, ScreeningQA
 from job_pipeline.ports.storage_port import JobStoragePort, DocumentStoragePort
 from job_pipeline.ports.resume_port import ResumeRepositoryPort, ResumeFileRef
@@ -375,10 +375,39 @@ from job_pipeline.adapters.secondary.openai_adapter import JobExtractionPayload,
 
 
 class MockLLMStrategyAdapter(LLMStrategyPort):
+    def evaluate_job_signals(
+        self,
+        raw_jd: str,
+        rules: Optional[List[Dict[str, Any]]] = None
+    ) -> Tuple[List[Any], List[Any], List[Any]]:
+        from job_pipeline.domain.telemetry_service import TelemetryService
+        from job_pipeline.logger import log_job_signals
+
+        if rules is None:
+            try:
+                from job_pipeline.domain.services import PipelineConfigService
+                rules = PipelineConfigService.get_active_telemetry_rules()
+            except Exception:
+                rules = []
+
+        normalized_rules = [TelemetryService.normalize_rule(r) for r in (rules or []) if (r.get("enabled", True) if isinstance(r, dict) else r.enabled)]
+        deterministic_rules = [r for r in normalized_rules if (r.match_mode or "").lower() != "concept"]
+        semantic_rules = [r for r in normalized_rules if (r.match_mode or "").lower() == "concept" and TelemetryService.validate_rule(r)[0]]
+
+        log_job_signals(f"Evaluating {len(deterministic_rules)} deterministic rules.")
+        det_findings = TelemetryService.evaluate_deterministic_rules(normalized_rules, raw_jd, tag="JOB SIGNALS")
+        log_job_signals(f"Evaluating {len(semantic_rules)} semantic rules via dedicated LLM pass.")
+        log_job_signals("Semantic matches returned=0, accepted=0, rejected=0.")
+
+        flags, warns, benefits = TelemetryService.split_findings(det_findings)
+        log_job_signals(f"Flags={len(flags)} Warnings={len(warns)} Benefits={len(benefits)}.")
+        return flags, warns, benefits
+
     def extract_job_telemetry(
         self,
         raw_jd: str,
-        warning_rules: Optional[List[Dict[str, Any]]] = None
+        warning_rules: Optional[List[Dict[str, Any]]] = None,
+        pre_evaluated_findings: Optional[List[Any]] = None
     ) -> JobExtractionPayload:
         if warning_rules is None:
             try:
@@ -388,12 +417,19 @@ class MockLLMStrategyAdapter(LLMStrategyPort):
                 warning_rules = []
 
         from job_pipeline.domain.telemetry_service import TelemetryService
-        normalized_rules = [TelemetryService.normalize_rule(r) for r in (warning_rules or []) if (r.get("enabled", True) if isinstance(r, dict) else r.enabled)]
-        deterministic_findings = TelemetryService.evaluate_deterministic_rules(normalized_rules, raw_jd)
-        det_flags, det_warns, det_benefits = TelemetryService.split_findings(deterministic_findings)
+        if pre_evaluated_findings is not None:
+            flags, warns, benefits = TelemetryService.split_findings(pre_evaluated_findings)
+            detected_flags = [f.to_display_string() if hasattr(f, "to_display_string") else str(f) for f in flags]
+            detected_warnings = [f.to_display_string() if hasattr(f, "to_display_string") else str(f) for f in warns]
+            detected_benefits = [f.to_display_string() if hasattr(f, "to_display_string") else str(f) for f in benefits]
+        else:
+            normalized_rules = [TelemetryService.normalize_rule(r) for r in (warning_rules or []) if (r.get("enabled", True) if isinstance(r, dict) else r.enabled)]
+            deterministic_findings = TelemetryService.evaluate_deterministic_rules(normalized_rules, raw_jd)
+            det_flags, det_warns, det_benefits = TelemetryService.split_findings(deterministic_findings)
 
-        detected_warnings = [f.to_display_string() for f in det_warns]
-        detected_benefits = [f.to_display_string() for f in det_benefits]
+            detected_flags = [f.to_display_string() for f in det_flags]
+            detected_warnings = [f.to_display_string() for f in det_warns]
+            detected_benefits = [f.to_display_string() for f in det_benefits]
 
         return JobExtractionPayload(
             company_name="Mock Target Company",
@@ -407,7 +443,7 @@ class MockLLMStrategyAdapter(LLMStrategyPort):
                 employment_arrangement="Employee",
                 pay_basis="Annual",
                 telemetry_warnings=detected_warnings,
-                telemetry_flags=[f.to_display_string() for f in det_flags],
+                telemetry_flags=detected_flags,
                 telemetry_benefits=detected_benefits
             )
         )

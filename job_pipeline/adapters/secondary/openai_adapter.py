@@ -3,7 +3,7 @@ import re
 from dotenv import load_dotenv
 load_dotenv()
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal, Tuple
 
 from job_pipeline.domain.models import RoleIntelligenceReport
 from job_pipeline.ports.llm_port import LLMStrategyPort
@@ -111,10 +111,90 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         return self.client is not None
 
 
+    def evaluate_job_signals(
+        self,
+        raw_jd: str,
+        rules: Optional[List[Dict[str, Any]]] = None
+    ) -> Tuple[List[Any], List[Any], List[Any]]:
+        """
+        Dedicated pre-ingestion Job Signals evaluation.
+        Evaluates active deterministic rules locally and active Concept rules
+        in a dedicated LLM call with JobSignalEvaluation schema.
+        Returns (flags, warnings, benefits).
+        """
+        from job_pipeline.domain.telemetry_service import TelemetryService
+        from job_pipeline.domain.models import JobSignalEvaluation, TelemetryFinding
+        from job_pipeline.logger import log_job_signals
+
+        if rules is None:
+            try:
+                from job_pipeline.domain.services import PipelineConfigService
+                rules = PipelineConfigService.get_active_telemetry_rules()
+            except Exception:
+                rules = []
+
+        normalized_rules = [TelemetryService.normalize_rule(r) for r in (rules or []) if (r.get("enabled", True) if isinstance(r, dict) else r.enabled)]
+
+        # 1. Deterministic evaluation (local)
+        deterministic_rules = [r for r in normalized_rules if (r.match_mode or "").lower() != "concept"]
+        semantic_rules = [r for r in normalized_rules if (r.match_mode or "").lower() == "concept" and TelemetryService.validate_rule(r)[0]]
+
+        log_job_signals(f"Evaluating {len(deterministic_rules)} deterministic rules.")
+        det_findings = TelemetryService.evaluate_deterministic_rules(normalized_rules, raw_jd, tag="JOB SIGNALS")
+
+        # 2. Check dedicated cache
+        cache_key = TelemetryService.compute_cache_key(
+            raw_jd,
+            [r if isinstance(r, dict) else r.model_dump() for r in (rules or [])]
+        )
+        cache_key = ("online:dedicated-signals-v1:" if self.api_key else "offline:dedicated-signals-v1:") + cache_key
+        cached_res = TelemetryService.get_cached_extraction(cache_key)
+        if cached_res is not None:
+            log_job_signals(f"Flags={len(cached_res[0])} Warnings={len(cached_res[1])} Benefits={len(cached_res[2])}.")
+            return cached_res
+
+        # 3. If offline / no API key or no semantic rules
+        if not self.api_key or not semantic_rules:
+            if not self.api_key:
+                log_job_signals("Evaluating 0 semantic rules via dedicated LLM pass (offline / no API key).")
+            else:
+                log_job_signals(f"Evaluating {len(semantic_rules)} semantic rules via dedicated LLM pass.")
+            flags, warns, benefits = TelemetryService.split_findings(det_findings)
+            log_job_signals(f"Flags={len(flags)} Warnings={len(warns)} Benefits={len(benefits)}.")
+            res = (flags, warns, benefits)
+            TelemetryService.set_cached_extraction(cache_key, res)
+            return res
+
+        # 4. Online dedicated LLM evaluation
+        log_job_signals(f"Evaluating {len(semantic_rules)} semantic rules via dedicated LLM pass.")
+        system_instruction = TelemetryService.build_dedicated_semantic_prompt(semantic_rules)
+
+        client = self._runner.client
+        completion = client.beta.chat.completions.parse(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": raw_jd}
+            ],
+            response_format=JobSignalEvaluation
+        )
+        parsed_eval = completion.choices[0].message.parsed
+        semantic_findings = TelemetryService.parse_dedicated_semantic_matches(parsed_eval.matches, semantic_rules)
+
+        # Merge deterministic and semantic findings
+        all_findings = TelemetryService.merge_findings(det_findings, semantic_findings)
+        flags, warns, benefits = TelemetryService.split_findings(all_findings)
+        log_job_signals(f"Flags={len(flags)} Warnings={len(warns)} Benefits={len(benefits)}.")
+
+        res = (flags, warns, benefits)
+        TelemetryService.set_cached_extraction(cache_key, res)
+        return res
+
     def extract_job_telemetry(
         self,
         raw_jd: str,
-        warning_rules: Optional[List[Dict[str, Any]]] = None
+        warning_rules: Optional[List[Dict[str, Any]]] = None,
+        pre_evaluated_findings: Optional[List[Any]] = None
     ) -> JobExtractionPayload:
         """Parses raw job description text into structured JobExtractionPayload using gpt-4o-mini and user warning rules."""
         from job_pipeline.domain.telemetry_service import TelemetryService
@@ -145,8 +225,15 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         # 3. Offline fallback if no API key
         if not self.api_key:
             self.last_telemetry_tokens = 0
-            offline_warnings = [f.to_display_string() for f in det_warns]
-            offline_benefits = [f.to_display_string() for f in det_benefits]
+            if pre_evaluated_findings is not None:
+                p_flags, p_warns, p_bens = TelemetryService.split_findings(pre_evaluated_findings)
+                offline_flags = [f.to_display_string() if hasattr(f, "to_display_string") else str(f) for f in p_flags]
+                offline_warnings = [f.to_display_string() if hasattr(f, "to_display_string") else str(f) for f in p_warns]
+                offline_benefits = [f.to_display_string() if hasattr(f, "to_display_string") else str(f) for f in p_bens]
+            else:
+                offline_flags = [f.to_display_string() for f in det_flags]
+                offline_warnings = [f.to_display_string() for f in det_warns]
+                offline_benefits = [f.to_display_string() for f in det_benefits]
 
             payload = JobExtractionPayload(
                 company_name="Target Company",
@@ -160,17 +247,21 @@ class OpenAIEngineAdapter(LLMStrategyPort):
                     employment_arrangement="Employee",
                     pay_basis="Annual",
                     telemetry_warnings=offline_warnings,
-                    telemetry_flags=[f.to_display_string() for f in det_flags],
+                    telemetry_flags=offline_flags,
                     telemetry_benefits=offline_benefits
                 )
             )
             TelemetryService.set_cached_extraction(cache_key, payload)
             return payload
 
-        # 4. Online LLM extraction with semantic rules only
+        # 4. Online LLM extraction with semantic rules (or suppressed if pre-evaluated)
         client = self._runner.client
-        semantic_rules = [r for r in normalized_rules if r.match_mode == "concept"]
-        warning_section = TelemetryService.build_semantic_prompt_section(semantic_rules)
+        if pre_evaluated_findings is not None:
+            semantic_rules = []
+            warning_section = ""
+        else:
+            semantic_rules = [r for r in normalized_rules if r.match_mode == "concept"]
+            warning_section = TelemetryService.build_semantic_prompt_section(semantic_rules)
 
         system_instruction = (
             "You are a precise B2B GTM intelligence engine. Analyze the job description "
@@ -201,19 +292,25 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         parsed = completion.choices[0].message.parsed
 
         # 5. Parse returned semantic infractions & combine with deterministic findings
-        llm_warn_raw = list(parsed.requirements.telemetry_warnings or [])
-        llm_ben_raw = list(parsed.requirements.telemetry_benefits or [])
-        semantic_findings = TelemetryService.parse_semantic_infractions(list(parsed.requirements.telemetry_flags or []) + llm_warn_raw + llm_ben_raw, semantic_rules)
+        if pre_evaluated_findings is not None:
+            flags, warns, benefits = TelemetryService.split_findings(pre_evaluated_findings)
+            parsed.requirements.telemetry_flags = [f.to_display_string() if hasattr(f, "to_display_string") else str(f) for f in flags]
+            parsed.requirements.telemetry_warnings = [f.to_display_string() if hasattr(f, "to_display_string") else str(f) for f in warns]
+            parsed.requirements.telemetry_benefits = [f.to_display_string() if hasattr(f, "to_display_string") else str(f) for f in benefits]
+        else:
+            llm_warn_raw = list(parsed.requirements.telemetry_warnings or [])
+            llm_ben_raw = list(parsed.requirements.telemetry_benefits or [])
+            semantic_findings = TelemetryService.parse_semantic_infractions(list(parsed.requirements.telemetry_flags or []) + llm_warn_raw + llm_ben_raw, semantic_rules)
 
-        all_findings = list(deterministic_findings)
-        for sf in semantic_findings:
-            if not any(af.rule_id == sf.rule_id for af in all_findings):
-                all_findings.append(sf)
+            all_findings = list(deterministic_findings)
+            for sf in semantic_findings:
+                if not any(af.rule_id == sf.rule_id for af in all_findings):
+                    all_findings.append(sf)
 
-        flags, warns, benefits = TelemetryService.split_findings(all_findings)
-        parsed.requirements.telemetry_flags = [f.to_display_string() for f in flags]
-        parsed.requirements.telemetry_warnings = [f.to_display_string() for f in warns]
-        parsed.requirements.telemetry_benefits = [f.to_display_string() for f in benefits]
+            flags, warns, benefits = TelemetryService.split_findings(all_findings)
+            parsed.requirements.telemetry_flags = [f.to_display_string() for f in flags]
+            parsed.requirements.telemetry_warnings = [f.to_display_string() for f in warns]
+            parsed.requirements.telemetry_benefits = [f.to_display_string() for f in benefits]
 
         TelemetryService.set_cached_extraction(cache_key, parsed)
         return parsed

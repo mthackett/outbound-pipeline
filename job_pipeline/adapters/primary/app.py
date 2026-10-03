@@ -166,6 +166,9 @@ if "latest_eval" not in st.session_state:
 if "pending_guardrail_check" not in st.session_state:
     st.session_state.pending_guardrail_check = None
 
+if "pending_job_signals_gate" not in st.session_state:
+    st.session_state.pending_job_signals_gate = None
+
 if "num_screening_qa" not in st.session_state:
     st.session_state.num_screening_qa = 0
 
@@ -1365,6 +1368,214 @@ if active_section == SECTION_INGEST:
             st.session_state.refresh_incomplete_workspaces = True
             st.error(f"Processing failed: {flow_err}. The Drive workspace has been preserved as incomplete and can be recovered.")
 
+    def _run_intake_extraction(
+        jd_text: str,
+        pre_evaluated_findings: list,
+        overrides: dict,
+        screening_inputs: list
+    ):
+        with st.spinner("Analyzing job description and checking guardrails..."):
+            extracted_company = ""
+            extracted_title = ""
+            extracted_family = "revenue_operations"
+            extracted_min = None
+            extracted_max = None
+            req_skills = []
+            pref_skills = []
+            pain_points = ""
+            is_remote = False
+
+            extracted_arrangement = None
+            extracted_worker_class = None
+            extracted_pay_basis = None
+            extracted_duration_raw = None
+            extracted_months = None
+            extracted_weeks = None
+            extracted_hours = None
+            extracted_ext = None
+            extracted_fte = None
+            extracted_agency = None
+            extracted_client = None
+
+            warning_rules = PipelineConfigService.get_active_telemetry_rules()
+            extracted_telemetry_warnings = []
+            extracted_telemetry_flags = []
+            extracted_telemetry_benefits = []
+            telemetry = None
+
+            if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
+                try:
+                    telemetry = llm_adapter.extract_job_telemetry(
+                        jd_text,
+                        warning_rules=warning_rules,
+                        pre_evaluated_findings=pre_evaluated_findings
+                    )
+                    extracted_company = telemetry.company_name
+                    extracted_title = telemetry.job_title
+                    extracted_family = telemetry.title_family
+                    extracted_min = telemetry.requirements.salary_min
+                    extracted_max = telemetry.requirements.salary_max
+                    req_skills = telemetry.requirements.required_tech_stack
+                    pref_skills = telemetry.requirements.preferred_tech_stack
+                    pain_points = telemetry.requirements.core_pain_points or ""
+                    is_remote = telemetry.requirements.is_remote
+                    extracted_arrangement = telemetry.requirements.employment_arrangement
+                    extracted_worker_class = telemetry.requirements.worker_classification
+                    extracted_pay_basis = telemetry.requirements.pay_basis
+                    extracted_duration_raw = telemetry.requirements.contract_length_raw
+                    extracted_months = telemetry.requirements.contract_length_months
+                    extracted_weeks = telemetry.requirements.contract_length_weeks
+                    extracted_hours = telemetry.requirements.expected_hours_per_week
+                    extracted_ext = telemetry.requirements.extension_possible
+                    extracted_fte = telemetry.requirements.fte_conversion_possible
+                    extracted_agency = telemetry.requirements.staffing_agency
+                    extracted_client = telemetry.requirements.client_company
+                    extracted_telemetry_warnings = telemetry.requirements.telemetry_warnings or []
+                    extracted_telemetry_flags = telemetry.requirements.telemetry_flags or []
+                    extracted_telemetry_benefits = getattr(telemetry.requirements, "telemetry_benefits", []) or []
+                except Exception as e:
+                    st.warning(f"Job Signals extraction notice: {e}")
+                    req_skills, pref_skills = ["Salesforce", "SQL", "Tableau", "Clari"], ["dbt"]
+            else:
+                if hasattr(llm_adapter, "extract_job_telemetry"):
+                    try:
+                        mock_telemetry = llm_adapter.extract_job_telemetry(
+                            jd_text,
+                            warning_rules=warning_rules,
+                            pre_evaluated_findings=pre_evaluated_findings
+                        )
+                        extracted_telemetry_warnings = mock_telemetry.requirements.telemetry_warnings or []
+                        extracted_telemetry_flags = mock_telemetry.requirements.telemetry_flags or []
+                        extracted_telemetry_benefits = getattr(mock_telemetry.requirements, "telemetry_benefits", []) or []
+                    except Exception:
+                        extracted_telemetry_warnings = []
+                        extracted_telemetry_flags = []
+                        extracted_telemetry_benefits = []
+                extracted_company = "Planful"
+                extracted_title = "Sales Operations Analyst"
+                extracted_family = "revenue_operations"
+                extracted_min = 110000
+                extracted_max = 135000
+                req_skills = ["Salesforce", "SQL", "Tableau", "Clari"]
+                pref_skills = ["Territory Planning"]
+                pain_points = "Translating messy operational data into clean executive forecasts."
+
+            # Apply Overrides if specified
+            m_comp = overrides.get("company", "")
+            m_title = overrides.get("title", "")
+            m_fam = overrides.get("family", "Auto-Detect")
+            m_min = overrides.get("min_pay", 0)
+            m_max = overrides.get("max_pay", 0)
+            m_url = overrides.get("url", "")
+            m_arr = overrides.get("arrangement", "Auto-Detect")
+            m_wc = overrides.get("worker_class", "Auto-Detect")
+            m_pb = overrides.get("pay_basis", "Auto-Detect")
+            m_dur = overrides.get("duration", "")
+            m_agency = overrides.get("agency_client", "")
+
+            final_company = m_comp.strip() if m_comp and m_comp.strip() else (extracted_company or "Target Company")
+            final_title = m_title.strip() if m_title and m_title.strip() else (extracted_title or "Target Role")
+            final_family = m_fam if m_fam != "Auto-Detect" else (extracted_family or "revenue_operations")
+            final_min_pay = m_min if m_min > 0 else extracted_min
+            final_max_pay = m_max if m_max > 0 else extracted_max
+            final_url = m_url.strip() if m_url and m_url.strip() else (telemetry.source_url if telemetry else None)
+
+            # Resolve Contract & Arrangement Overrides
+            final_arrangement = m_arr if m_arr != "Auto-Detect" else (extracted_arrangement or "Employee")
+            final_pay_basis = m_pb if m_pb != "Auto-Detect" else (
+                extracted_pay_basis or ("Hourly" if (final_min_pay and final_min_pay < 500) else "Annual")
+            )
+            final_worker_class = (None if m_wc in ["Auto-Detect", "Not Specified"] else m_wc) if m_wc != "Auto-Detect" else extracted_worker_class
+            final_duration = m_dur.strip() if m_dur and m_dur.strip() else extracted_duration_raw
+            final_agency = m_agency.strip() if m_agency and m_agency.strip() else extracted_agency
+            final_client = extracted_client
+
+            # Fetch all existing opportunities for guardrail checking
+            all_opps = storage_adapter.fetch_all_opportunities()
+
+            # Guardrail Evaluation: Duplicate & Velocity Checks
+            dup_res = ApplicationGuardrailService.check_duplicate(
+                company_name=final_company,
+                job_title=final_title,
+                existing_records=all_opps,
+                repost_threshold_days=st.session_state.profile.repost_detection_threshold_days
+            )
+            vel_res = ApplicationGuardrailService.check_company_velocity(
+                company_name=final_company,
+                existing_records=all_opps,
+                max_limit=st.session_state.profile.max_company_applications_limit,
+                window_days=st.session_state.profile.company_application_window_days
+            )
+
+            job_payload = {
+                "opportunity_id": st.session_state.setdefault(f"intake_opportunity_{cur_intake}", str(uuid.uuid4())),
+                "company": final_company,
+                "title": final_title,
+                "family": final_family,
+                "min_pay": final_min_pay,
+                "max_pay": final_max_pay,
+                "url": final_url,
+                "req_skills": req_skills,
+                "pref_skills": pref_skills,
+                "pain_points": pain_points,
+                "is_remote": is_remote,
+                "employment_arrangement": final_arrangement,
+                "worker_classification": final_worker_class,
+                "pay_basis": final_pay_basis,
+                "contract_length_raw": final_duration,
+                "contract_length_months": extracted_months,
+                "contract_length_weeks": extracted_weeks,
+                "expected_hours_per_week": extracted_hours,
+                "extension_possible": extracted_ext,
+                "fte_conversion_possible": extracted_fte,
+                "staffing_agency": final_agency,
+                "client_company": final_client,
+                "screening_qa": screening_inputs,
+                "jd_text": jd_text,
+                "all_opps": all_opps,
+                "dup": dup_res,
+                "vel": vel_res,
+                "telemetry_warnings": extracted_telemetry_warnings,
+                "telemetry_flags": extracted_telemetry_flags,
+                "telemetry_benefits": extracted_telemetry_benefits
+            }
+
+            # Check if Guardrails are tripped
+            if (dup_res["is_duplicate"] and not dup_res["is_repost"]) or vel_res["velocity_exceeded"]:
+                st.session_state.pending_guardrail_check = job_payload
+                st.session_state.latest_eval = None
+                st.rerun()
+            else:
+                # Clean check -> proceed directly
+                execute_application_workflow(job_payload)
+                st.rerun()
+
+    # Display Pending Job Signals Review Gate if flagged
+    if st.session_state.pending_job_signals_gate:
+        gate = st.session_state.pending_job_signals_gate
+        st.error("🚩 **Job Signals Review — Flags Detected**")
+        st.markdown(
+            "One or more configured **Flags** were detected in this job description. "
+            "Please review the findings and evidence below before deciding whether to proceed with full ingestion."
+        )
+        render_job_signals(gate["flags"], gate["warnings"], gate["benefits"])
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            if st.button("👉 Proceed with ingestion", type="primary", use_container_width=True):
+                gate_payload = st.session_state.pending_job_signals_gate
+                st.session_state.pending_job_signals_gate = None
+                _run_intake_extraction(
+                    jd_text=gate_payload["jd_text"],
+                    pre_evaluated_findings=gate_payload["all_findings"],
+                    overrides=gate_payload["manual_overrides"],
+                    screening_inputs=gate_payload["screening_inputs"]
+                )
+        with col_s2:
+            if st.button("❌ Cancel / Discard", use_container_width=True):
+                st.session_state.pending_job_signals_gate = None
+                st.info("Ingestion cancelled. No Drive workspace or Sheets records were created.")
+                st.rerun()
+
     # Display Pending Guardrail Warning if tripped
     if st.session_state.pending_guardrail_check:
         chk = st.session_state.pending_guardrail_check
@@ -1407,165 +1618,60 @@ if active_section == SECTION_INGEST:
                 st.rerun()
 
     # Primary Action Button
-    if st.button("⚡ Process Job & Generate Apply Kit", type="primary", use_container_width=True):
-        if not jd_text_input or len(jd_text_input.strip()) < 20:
-            st.error("Please paste a valid job description (at least 20 characters).")
-        else:
-            with st.spinner("Analyzing job description and checking guardrails..."):
-                # 0. Telemetry Extraction via OpenAI gpt-4o-mini
-                telemetry = None
-                extracted_company = ""
-                extracted_title = ""
-                extracted_family = "revenue_operations"
-                extracted_min = None
-                extracted_max = None
-                req_skills = []
-                pref_skills = []
-                pain_points = ""
-                is_remote = False
-
-                extracted_arrangement = None
-                extracted_worker_class = None
-                extracted_pay_basis = None
-                extracted_duration_raw = None
-                extracted_months = None
-                extracted_weeks = None
-                extracted_hours = None
-                extracted_ext = None
-                extracted_fte = None
-                extracted_agency = None
-                extracted_client = None
-
-                warning_rules = PipelineConfigService.get_active_telemetry_rules()
-                extracted_telemetry_warnings = []
-                extracted_telemetry_flags = []
-                extracted_telemetry_benefits = []
-                if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
+    if not st.session_state.pending_job_signals_gate:
+        if st.button("⚡ Process Job & Generate Apply Kit", type="primary", use_container_width=True):
+            if not jd_text_input or len(jd_text_input.strip()) < 20:
+                st.error("Please paste a valid job description (at least 20 characters).")
+            else:
+                with st.spinner("Evaluating Job Signals and analyzing job description..."):
+                    warning_rules = PipelineConfigService.get_active_telemetry_rules()
                     try:
-                        telemetry = llm_adapter.extract_job_telemetry(jd_text_input, warning_rules=warning_rules)
-                        extracted_company = telemetry.company_name
-                        extracted_title = telemetry.job_title
-                        extracted_family = telemetry.title_family
-                        extracted_min = telemetry.requirements.salary_min
-                        extracted_max = telemetry.requirements.salary_max
-                        req_skills = telemetry.requirements.required_tech_stack
-                        pref_skills = telemetry.requirements.preferred_tech_stack
-                        pain_points = telemetry.requirements.core_pain_points or ""
-                        is_remote = telemetry.requirements.is_remote
-                        extracted_arrangement = telemetry.requirements.employment_arrangement
-                        extracted_worker_class = telemetry.requirements.worker_classification
-                        extracted_pay_basis = telemetry.requirements.pay_basis
-                        extracted_duration_raw = telemetry.requirements.contract_length_raw
-                        extracted_months = telemetry.requirements.contract_length_months
-                        extracted_weeks = telemetry.requirements.contract_length_weeks
-                        extracted_hours = telemetry.requirements.expected_hours_per_week
-                        extracted_ext = telemetry.requirements.extension_possible
-                        extracted_fte = telemetry.requirements.fte_conversion_possible
-                        extracted_agency = telemetry.requirements.staffing_agency
-                        extracted_client = telemetry.requirements.client_company
-                        extracted_telemetry_warnings = telemetry.requirements.telemetry_warnings or []
-                        extracted_telemetry_flags = telemetry.requirements.telemetry_flags or []
-                        extracted_telemetry_benefits = getattr(telemetry.requirements, "telemetry_benefits", []) or []
-                    except Exception as e:
-                        st.warning(f"Job Signals extraction notice: {e}")
-                        req_skills, pref_skills = ["Salesforce", "SQL", "Tableau", "Clari"], ["dbt"]
-                else:
-                    if hasattr(llm_adapter, "extract_job_telemetry"):
-                        try:
-                            mock_telemetry = llm_adapter.extract_job_telemetry(jd_text_input, warning_rules=warning_rules)
-                            extracted_telemetry_warnings = mock_telemetry.requirements.telemetry_warnings or []
-                            extracted_telemetry_flags = mock_telemetry.requirements.telemetry_flags or []
-                            extracted_telemetry_benefits = getattr(mock_telemetry.requirements, "telemetry_benefits", []) or []
-                        except Exception:
-                            extracted_telemetry_warnings = []
-                            extracted_telemetry_flags = []
-                            extracted_telemetry_benefits = []
-                    extracted_company = "Planful"
-                    extracted_title = "Sales Operations Analyst"
-                    extracted_family = "revenue_operations"
-                    extracted_min = 110000
-                    extracted_max = 135000
-                    req_skills = ["Salesforce", "SQL", "Tableau", "Clari"]
-                    pref_skills = ["Territory Planning"]
-                    pain_points = "Translating messy operational data into clean executive forecasts."
+                        flags, warnings, benefits = llm_adapter.evaluate_job_signals(jd_text_input, rules=warning_rules)
+                    except Exception as eval_err:
+                        log_warn(f"Job Signals evaluation error: {eval_err}")
+                        st.error(f"Job Signals evaluation failed: {eval_err}. Ingestion stopped for safety. Please retry.")
+                        flags, warnings, benefits = None, None, None
 
-                # Apply Overrides if specified
-                final_company = manual_company.strip() if manual_company and manual_company.strip() else (extracted_company or "Target Company")
-                final_title = manual_title.strip() if manual_title and manual_title.strip() else (extracted_title or "Target Role")
-                final_family = manual_family if manual_family != "Auto-Detect" else (extracted_family or "revenue_operations")
-                final_min_pay = manual_min_pay if manual_min_pay > 0 else extracted_min
-                final_max_pay = manual_max_pay if manual_max_pay > 0 else extracted_max
-                final_url = manual_url.strip() if manual_url and manual_url.strip() else (telemetry.source_url if telemetry else None)
+                    if flags is not None:
+                        all_findings = list(flags) + list(warnings) + list(benefits)
+                        manual_overrides = {
+                            "company": manual_company,
+                            "title": manual_title,
+                            "family": manual_family,
+                            "min_pay": manual_min_pay,
+                            "max_pay": manual_max_pay,
+                            "url": manual_url,
+                            "arrangement": manual_arrangement,
+                            "worker_class": manual_worker_class,
+                            "pay_basis": manual_pay_basis,
+                            "duration": manual_duration,
+                            "agency_client": manual_agency_client,
+                            "category": manual_category,
+                            "applied_via": manual_applied_via,
+                            "priority": manual_priority,
+                        }
 
-                # Resolve Contract & Arrangement Overrides
-                final_arrangement = manual_arrangement if manual_arrangement != "Auto-Detect" else (extracted_arrangement or "Employee")
-                final_pay_basis = manual_pay_basis if manual_pay_basis != "Auto-Detect" else (
-                    extracted_pay_basis or ("Hourly" if (final_min_pay and final_min_pay < 500) else "Annual")
-                )
-                final_worker_class = (None if manual_worker_class in ["Auto-Detect", "Not Specified"] else manual_worker_class) if manual_worker_class != "Auto-Detect" else extracted_worker_class
-                final_duration = manual_duration.strip() if manual_duration and manual_duration.strip() else extracted_duration_raw
-                final_agency = manual_agency_client.strip() if manual_agency_client and manual_agency_client.strip() else extracted_agency
-                final_client = extracted_client
-
-                # Fetch all existing opportunities for guardrail checking
-                all_opps = storage_adapter.fetch_all_opportunities()
-
-                # Guardrail Evaluation: Duplicate & Velocity Checks
-                dup_res = ApplicationGuardrailService.check_duplicate(
-                    company_name=final_company,
-                    job_title=final_title,
-                    existing_records=all_opps,
-                    repost_threshold_days=st.session_state.profile.repost_detection_threshold_days
-                )
-                vel_res = ApplicationGuardrailService.check_company_velocity(
-                    company_name=final_company,
-                    existing_records=all_opps,
-                    max_limit=st.session_state.profile.max_company_applications_limit,
-                    window_days=st.session_state.profile.company_application_window_days
-                )
-
-                job_payload = {
-                    "opportunity_id": st.session_state.setdefault(f"intake_opportunity_{cur_intake}", str(uuid.uuid4())),
-                    "company": final_company,
-                    "title": final_title,
-                    "family": final_family,
-                    "min_pay": final_min_pay,
-                    "max_pay": final_max_pay,
-                    "url": final_url,
-                    "req_skills": req_skills,
-                    "pref_skills": pref_skills,
-                    "pain_points": pain_points,
-                    "is_remote": is_remote,
-                    "employment_arrangement": final_arrangement,
-                    "worker_classification": final_worker_class,
-                    "pay_basis": final_pay_basis,
-                    "contract_length_raw": final_duration,
-                    "contract_length_months": extracted_months,
-                    "contract_length_weeks": extracted_weeks,
-                    "expected_hours_per_week": extracted_hours,
-                    "extension_possible": extracted_ext,
-                    "fte_conversion_possible": extracted_fte,
-                    "staffing_agency": final_agency,
-                    "client_company": final_client,
-                    "screening_qa": screening_inputs,
-                    "jd_text": jd_text_input,
-                    "all_opps": all_opps,
-                    "dup": dup_res,
-                    "vel": vel_res,
-                    "telemetry_warnings": extracted_telemetry_warnings,
-                    "telemetry_flags": extracted_telemetry_flags,
-                    "telemetry_benefits": extracted_telemetry_benefits
-                }
-
-                # Check if Guardrails are tripped
-                if (dup_res["is_duplicate"] and not dup_res["is_repost"]) or vel_res["velocity_exceeded"]:
-                    st.session_state.pending_guardrail_check = job_payload
-                    st.session_state.latest_eval = None
-                    st.rerun()
-                else:
-                    # Clean check -> proceed directly
-                    execute_application_workflow(job_payload)
-                    st.rerun()
+                        if flags:
+                            from job_pipeline.logger import log_job_signals
+                            log_job_signals(f"Ingestion paused for user review due to {len(flags)} flag(s).")
+                            st.session_state.pending_job_signals_gate = {
+                                "jd_text": jd_text_input,
+                                "flags": flags,
+                                "warnings": warnings,
+                                "benefits": benefits,
+                                "all_findings": all_findings,
+                                "manual_overrides": manual_overrides,
+                                "screening_inputs": screening_inputs,
+                            }
+                            st.session_state.latest_eval = None
+                            st.rerun()
+                        else:
+                            _run_intake_extraction(
+                                jd_text=jd_text_input,
+                                pre_evaluated_findings=all_findings,
+                                overrides=manual_overrides,
+                                screening_inputs=screening_inputs
+                            )
 
     # Render Apply Kit if evaluation exists
     if st.session_state.latest_eval:

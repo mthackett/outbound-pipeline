@@ -131,6 +131,12 @@ def render_job_signals(flags=(), warnings=(), benefits=()):
                 clean = re.sub(r"^(?:FLAG|BENEFIT|WARN):\s*", "", finding, flags=re.IGNORECASE)
                 match = re.match(r"^\[([^\]]+)\]:\s*(.*)$", clean, re.DOTALL)
                 if match:
-                    clean = f"**{match[1]}**  \n{match[2]}"
+                    name = match[1]
+                    body = match[2]
+                    if " - Evidence: " in body:
+                        reason_part, _, evidence_part = body.partition(" - Evidence: ")
+                        clean = f"**{name}**  \n{reason_part}  \n**Evidence:** {evidence_part}"
+                    else:
+                        clean = f"**{name}**  \n{body}"
                 lines.append(clean)
             render(f"**{title}**\n\n" + "\n\n".join(lines))

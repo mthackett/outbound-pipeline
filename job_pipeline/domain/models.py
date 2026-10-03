@@ -130,6 +130,7 @@ class TelemetryFinding(BaseModel):
     matched_text: Optional[str] = None
     reason: str = ""
     domain_category: Optional[str] = None
+    evidence: Optional[str] = None
 
     def to_display_string(self) -> str:
         """Formatted explainable string representation."""
@@ -146,9 +147,22 @@ class TelemetryFinding(BaseModel):
             details.append(f"Matched: '{self.matched_text}'")
         if self.reason:
             details.append(self.reason)
+        if self.evidence:
+            clean_ev = self.evidence.strip().strip('"')
+            details.append(f'Evidence: "{clean_ev}"')
 
         detail_str = " - ".join(details) if details else "Condition detected."
         return f"{prefix}: {detail_str}"
+
+
+class JobSignalMatch(BaseModel):
+    rule_id: str = Field(..., description="Exact stable rule ID from configuration.")
+    reason: str = Field(..., description="Concise rationale explaining why the condition was satisfied.")
+    evidence: str = Field(..., description="Concise excerpt or sentence directly from the job description supporting the match.")
+
+
+class JobSignalEvaluation(BaseModel):
+    matches: List[JobSignalMatch] = Field(default_factory=list, description="List of matched configured rules.")
 
 
 class TelemetryRule(BaseModel):

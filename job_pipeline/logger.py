@@ -152,3 +152,7 @@ def log_success(message: str) -> None:
 def log_telemetry(message: str) -> None:
     log_cli("TELEMETRY", message)
 
+
+def log_job_signals(message: str) -> None:
+    log_cli("JOB SIGNALS", message)
+
