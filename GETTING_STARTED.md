@@ -20,7 +20,7 @@ This repository implements a **Hexagonal Architecture** pipeline designed for GT
                                           ▼
                      ┌─────────────────────────────────────────┐
                      │               Domain Core               │
-                     │  - 60%–80% Target Pay Calculator        │
+                     │  - Target Pay Calculator        │
                      │  - Dealbreaker & Fit Guardrail Service  │
                      │  - 10-Second Recall Card Generator      │
                      └────────────────────┬────────────────────┘
@@ -28,7 +28,7 @@ This repository implements a **Hexagonal Architecture** pipeline designed for GT
                                           ▼
                      ┌─────────────────────────────────────────┐
                      │         Secondary Driven Adapters       │
-                     │  - OpenAI Engine (gpt-4o-mini & DOCX)   │
+                     │  - OpenAI Engine (gpt-6-luna & DOCX)   │
                      │  - Google Sheets (Pipeline Table Sync)  │
                      │  - Google Drive (Workspace Folders)     │
                      │  - Resume Router (Title-Based Selector) │
@@ -37,9 +37,9 @@ This repository implements a **Hexagonal Architecture** pipeline designed for GT
 ```
 
 ### Core Value Props:
-1. **60%–80% Target Pay Bounds**: Automatically extracts posted salary bounds and computes your target negotiation anchor:
-   $$\text{Target Min} = \text{Posted Min} + (0.60 \times \text{Spread})$$
-   $$\text{Target Max} = \text{Posted Min} + (0.80 \times \text{Spread})$$
+1. **Target Pay Bounds**: Automatically extracts posted salary bounds and computes your target negotiation anchor:
+   $$\text{Target Min} = \text{Posted Min} + (Lower Percentile \times \text{Spread})$$
+   $$\text{Target Max} = \text{Posted Min} + (Upper Percentile \times \text{Spread})$$
 2. **Fit Guardrails & Dealbreakers**: Flags unwanted tech stacks (e.g. legacy EHRs like Epic, Cerner) and scores match against your core strengths (Salesforce, dbt, SQL, Python, Tableau, etc.).
 3. **10-Second Recruiter Phone Screen Recall Card**: Real-time briefing card giving you instant talking points, compensation targets, matched resume, and key strengths when a recruiter calls.
 4. **Automated Application Workspaces**: Automatically generates Google Drive folders (`<Company>_<Role>_<Date>`), converts raw JD text into zero-quota Google Docs, copies your tailored resume, and uploads a 2-page landscape Word report.
@@ -122,14 +122,14 @@ Run through these 4 verification tests in order:
    * Click **"⚡ Evaluate Job Posting & Generate Report"**.
 4. **Verify**:
    * Status indicators display: Fit status (PASS/FLAGGED), Skill match score, and Matched resume.
-   * The purple **Target Salary Range (60%–80%)** box calculates correct numbers.
+   * The purple **Target Salary Range** box calculates correct numbers.
    * The green **10-Second Recruiter Phone Screen Recall Card** populates.
    * Click **"📄 Download 2-Page Role Intelligence Report (.docx)"** and open the downloaded Word document.
 
 ---
 
 ### Test 2: Live CLI Single Job Evaluation
-* **Goal**: Test live OpenAI telemetry extraction (`gpt-4o-mini`), skill parsing, and report generation using a real job description.
+* **Goal**: Test live OpenAI telemetry extraction (`gpt-6-luna`), skill parsing, and report generation using a real job description.
 1. Check that `jd.txt` contains a job description (e.g., Planful Sales Operations Analyst).
 2. Run the CLI tool:
    ```powershell
@@ -159,7 +159,7 @@ Run through these 4 verification tests in order:
 4. **Verify in Google Sheets**:
    * **`Raw Ingestion` sheet**:
      * Status updates to `Processed` (or `FLAGGED_...`).
-     * `Target Pay Range` shows the computed 60%–80% range.
+     * `Target Pay Range` shows the computed target range.
      * `Selected Resume` shows the matched resume file.
      * `Tokens` shows the OpenAI token count consumed.
      * `Drive Folder Link` contains the direct URL.
@@ -215,7 +215,7 @@ outbound-pipeline/
 └── job_pipeline/
     ├── domain/
     │   ├── models.py              # Pure domain models (JobPosting, FitEvaluation, Profile)
-    │   └── services.py            # Pay calculator (60%-80%) & dealbreaker fit service
+    │   └── services.py            # Target pay calculator & dealbreaker fit service
     │
     ├── ports/
     │   ├── storage_port.py        # Storage & document interfaces
@@ -250,4 +250,4 @@ outbound-pipeline/
 * **Issue: Missing resume warning**
   * **Solution**: Check that your resume Google Docs in Drive match the convention `<Name> <Role Track> Resume` (e.g. `<Your Name> Revenue Operations Analyst Resume`).
 * **Issue: OpenAI rate limit or timeout**
-  * **Solution**: The pipeline uses `gpt-4o-mini` with fallback to basic regex extraction if an API issue occurs. Check your OpenAI balance/key in `.env`.
+  * **Solution**: The pipeline uses `gpt-6-luna` with fallback to basic regex extraction if an API issue occurs. Check your OpenAI balance/key in `.env`.

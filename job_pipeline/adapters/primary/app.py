@@ -464,7 +464,7 @@ st.sidebar.caption("Job Application Pipeline CRM v1.3")
 
 # Main Dashboard Header
 st.markdown('<div class="main-title">🚀 Job Application Pipeline & Apply Cockpit</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Automated JD Ingestion · 60%–80% Target Pay · Google Drive Workspace · Best Resume Match · Google Sheets CRM</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Automated JD Ingestion · Google Drive Workspace · Best Resume Match · Google Sheets CRM</div>', unsafe_allow_html=True)
 
 # Surface Google Auth Warning if operating under reduced capability with 1-click browser sign-in button
 if drive_auth_ctx and drive_auth_ctx.warning_message:
@@ -1098,7 +1098,8 @@ if active_section == SECTION_INGEST:
                                         f"Write a concise, high-impact, professional application answer (2-4 sentences or tight bullet points). Make it ATS-friendly and confident."
                                     )
                                     resp = llm_adapter.client.chat.completions.create(
-                                        model="gpt-4o-mini",
+                                        model="gpt-6-luna",
+                                        reasoning_effort='none',
                                         messages=[{"role": "user", "content": draft_prompt}],
                                         temperature=0.4,
                                         max_tokens=250
@@ -1159,8 +1160,8 @@ if active_section == SECTION_INGEST:
             final_telemetry_flags = job_payload.get("telemetry_flags", [])
             final_telemetry_benefits = job_payload.get("telemetry_benefits", [])
 
-            # 1. Fit Qualification & Target Pay Calculator (60%-80%)
-            log_action(f"🎯 Evaluating fit qualifications & 60%-80% target pay bounds for '{final_title}'...")
+            # 1. Fit Qualification & Target Pay Calculator
+            log_action(f"🎯 Evaluating fit qualifications & target pay bounds for '{final_title}'...")
             fit_eval = JobQualificationService.evaluate(
                 company_name=final_company,
                 job_title=final_title,
@@ -1845,7 +1846,7 @@ if active_section == SECTION_INGEST:
 
             st.markdown(f"""
             <div class="target-pay-box">
-                <h4 style="margin:0; color:#C7D2FE;">💰 Desired Salary Answer (60% – 80% Target Anchor)</h4>
+                <h4 style="margin:0; color:#C7D2FE;">💰 Desired Salary Answer</h4>
                 <h2 style="margin:6px 0; color:#FFFFFF; font-weight:800;">{pb.display_range}</h2>
                 <p style="margin:0; font-size:0.92rem; color:#A5B4FC;">
                     <b>For application form:</b> {form_advice}
@@ -2777,7 +2778,8 @@ if active_section == SECTION_CRM:
                                     f"Write a concise, high-impact, professional application answer (2-4 sentences or tight bullet points). Make it ATS-friendly and confident."
                                 )
                                 resp = llm_adapter.client.chat.completions.create(
-                                    model="gpt-4o-mini",
+                                    model="gpt-6-luna",
+                                    reasoning_effort='none',
                                     messages=[{"role": "user", "content": draft_prompt}],
                                     temperature=0.4,
                                     max_tokens=250

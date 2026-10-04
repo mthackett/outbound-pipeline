@@ -482,9 +482,17 @@ class TelemetryService:
     def build_dedicated_semantic_prompt(cls, semantic_rules: List[TelemetryRule]) -> str:
         """
         Builds the narrow, focused prompt for dedicated pre-ingestion Job Signals evaluation.
-        Evaluates active Concept rules as an exhaustive checklist against the full JD.
+
+        Evaluates active Concept rules as an exhaustive checklist against the full JD,
+        with a precision-first matching standard.
         """
-        valid_rules = [r for r in semantic_rules if r.enabled and (r.match_mode or "").lower() == "concept" and cls.validate_rule(r)[0]]
+        valid_rules = [
+            r for r in semantic_rules
+            if r.enabled
+            and (r.match_mode or "").lower() == "concept"
+            and cls.validate_rule(r)[0]
+        ]
+
         if not valid_rules:
             return ""
 
@@ -493,26 +501,126 @@ class TelemetryService:
             lines.append(
                 f"{idx}. Rule ID: {r.id}\n"
                 f"   - Target Condition/Concept: {r.concept_description}\n"
-                f"   - Supporting terms/examples (hints only): {json.dumps(r.patterns, ensure_ascii=False)}"
+                f"   - Supporting terms/examples (hints only): "
+                f"{json.dumps(r.patterns, ensure_ascii=False)}"
             )
 
         return (
-            "You are an expert recruitment and job specification analyst evaluating whether specific conditions are present in a job post.\n\n"
+            "You are a conservative rule-matching classifier for job-post telemetry.\n"
+            "Your goal is HIGH PRECISION, not broad interpretation or maximum recall.\n"
+            "Most configured rules will not match most job posts. That is expected.\n"
+            "When evidence is ambiguous, indirect, hypothetical, or insufficient, OMIT the rule.\n\n"
+
             "EVALUATION RULES & CONTRACT:\n"
+
             "1. Evaluate EVERY configured rule listed below independently against the ENTIRE job post.\n"
-            "2. Treat the rules as an exhaustive checklist: evaluate rule 1, then rule 2, through the final rule. Do not stop after finding several matches.\n"
-            "3. Return EVERY configured rule whose condition is satisfied by the job post. Omit rules whose conditions are not satisfied.\n"
-            "4. For each matched rule, return:\n"
+
+            "2. Treat the rules as an exhaustive checklist: evaluate rule 1, then rule 2, "
+            "through the final rule. Do not stop after finding several matches.\n"
+
+            "3. Return ONLY configured rules whose target condition is directly and affirmatively "
+            "supported by the job description. Omit all non-matches.\n"
+
+            "4. MATCH CONSERVATIVELY.\n"
+            "   A rule is satisfied only when the job post itself establishes the configured condition.\n"
+            "   Do NOT infer a match from:\n"
+            "   - industry associations or stereotypes\n"
+            "   - what companies in that industry often or typically do\n"
+            "   - hypothetical possibilities\n"
+            "   - adjacent or loosely related concepts\n"
+            "   - absence of contrary evidence\n"
+            "   - responsibilities that merely could involve the target condition\n"
+
+            "5. SPECULATIVE REASONING IS NOT VALID EVIDENCE.\n"
+            "   Do not return a rule based on reasoning such as:\n"
+            "   - 'may involve'\n"
+            "   - 'might require'\n"
+            "   - 'could imply'\n"
+            "   - 'potentially'\n"
+            "   - 'often includes'\n"
+            "   - 'suggests that this company may...'\n"
+            "   If the condition is only plausible rather than established, OMIT the rule.\n"
+
+            "6. RELATED CONCEPTS ARE NOT INTERCHANGEABLE.\n"
+            "   Examples:\n"
+            "   - partnering with or influencing a team is NOT people management\n"
+            "   - analyzing data or using programming/query languages is NOT a human-language requirement\n"
+            "   - operating in healthcare or serving customers nationwide is NOT a government job\n"
+            "   - variable compensation is NOT automatically commission-only\n"
+            "   Apply each configured rule according to its exact Target Condition/Concept.\n"
+
+            "7. CONTRADICTORY EVIDENCE MEANS NO MATCH.\n"
+            "   Never return a rule when the cited evidence disproves or contradicts its target condition.\n"
+            "   Example: a comprehensive employee benefits package is evidence AGAINST a no-benefits rule.\n"
+
+            "8. EVIDENCE SUFFICIENCY TEST.\n"
+            "   Before returning a match, ask:\n"
+            "   'If a reviewer saw ONLY the quoted evidence, would it reasonably establish that this "
+            "configured condition is actually present?'\n"
+            "   If not, OMIT the rule.\n"
+
+            "9. For each matched rule, return:\n"
             "   - rule_id: The exact stable rule ID from the list below. NEVER invent or alter rule IDs.\n"
-            "   - reason: A concise explanation of why the rule condition was satisfied.\n"
-            "   - evidence: A concise, grounded excerpt or sentence directly from the job description text supporting the match. Do NOT fabricate evidence.\n"
-            "5. Supporting terms/examples are illustrative hints only. A rule may match even if none of its supporting terms appears verbatim, provided the job description satisfies the Target Condition/Concept. Conversely, the mere appearance of a supporting term is not an automatic match if the context does not satisfy the condition.\n"
-            "6. Respect all qualifiers, thresholds, and exclusions in each rule's description.\n"
-            "7. Multiple rules may match the same passage or overlapping evidence.\n"
-            "8. Do not infer classifications (flag, warning, benefit) or make application decisions; only evaluate whether each condition is met.\n\n"
+            "   - reason: A concise explanation of why the configured condition is satisfied.\n"
+            "   - evidence: A concise excerpt or sentence directly from the supplied job description "
+            "that establishes the condition. Do NOT fabricate or paraphrase evidence as though it were quoted text.\n"
+
+            "10. Supporting terms/examples are illustrative hints only.\n"
+            "    Their presence does not automatically trigger a match.\n"
+            "    Their absence does not prevent a match when the job description otherwise DIRECTLY "
+            "and clearly satisfies the configured Target Condition/Concept.\n"
+
+            "11. Respect all qualifiers, thresholds, exclusions, and distinctions in each rule description.\n"
+
+            "12. Multiple rules may match the same passage or overlapping evidence when each rule is "
+            "independently satisfied.\n"
+
+            "13. Do not infer classifications such as flag, warning, or benefit, and do not make an "
+            "application decision. Only determine whether each configured condition is directly supported.\n\n"
+
             "CONFIGURED RULES TO EVALUATE:\n"
             + "\n".join(lines)
         )
+
+    @staticmethod
+    def is_semantic_match_sufficient(reason: str, evidence: str) -> Tuple[bool, Optional[str]]:
+        """
+        Rejects obviously speculative or non-grounded semantic matches.
+
+        This is intentionally conservative and acts only as a defensive backstop.
+        The LLM prompt remains responsible for semantic interpretation.
+        """
+        reason_clean = " ".join((reason or "").split()).strip()
+        evidence_clean = " ".join((evidence or "").split()).strip()
+
+        if not evidence_clean:
+            return False, "no evidence provided"
+
+        combined = f"{reason_clean} {evidence_clean}".casefold()
+
+        speculative_phrases = (
+            "may involve",
+            "might involve",
+            "may require",
+            "might require",
+            "could imply",
+            "could indicate",
+            "could involve",
+            "potentially",
+            "often includes",
+            "often involve",
+            "may often",
+            "suggests it may",
+            "suggests that it may",
+            "suggests a possibility",
+            "possibly",
+        )
+
+        for phrase in speculative_phrases:
+            if phrase in combined:
+                return False, f"speculative semantic rationale contains '{phrase}'"
+
+        return True, None
 
     @classmethod
     def parse_dedicated_semantic_matches(
@@ -521,10 +629,20 @@ class TelemetryService:
         semantic_rules: List[TelemetryRule]
     ) -> List[TelemetryFinding]:
         """
-        Resolves model-returned JobSignalMatch items strictly against active configured Concept rules.
+        Resolves model-returned JobSignalMatch items strictly against active
+        configured Concept rules.
+
         Configuration remains authoritative for name, classification, and domain.
-        Rejects unknown IDs or matches with empty evidence.
+
+        Rejects:
+        - unknown rule IDs
+        - empty evidence
+        - obviously speculative semantic rationales
+
         Deduplicates matched rule IDs.
+
+        This parser is intentionally precision-oriented: semantic uncertainty should
+        resolve to no finding rather than a speculative finding.
         """
         valid_rules = [r for r in semantic_rules if r.enabled and (r.match_mode or "").lower() == "concept" and cls.validate_rule(r)[0]]
         rule_map = {r.id.casefold(): r for r in valid_rules}
@@ -556,7 +674,24 @@ class TelemetryService:
             # Grounded evidence is required
             if not evidence:
                 rejected += 1
-                log_warn(f"Discarding semantic finding for rule '{matched_rule.id}': no grounded evidence provided.")
+                log_warn(
+                    f"Discarding semantic finding for rule '{matched_rule.id}': "
+                    "no grounded evidence provided."
+                )
+                continue
+
+            # Reject obviously speculative semantic matches
+            is_sufficient, rejection_reason = cls.is_semantic_match_sufficient(
+                reason=reason,
+                evidence=evidence,
+            )
+
+            if not is_sufficient:
+                rejected += 1
+                log_warn(
+                    f"Discarding semantic finding for rule '{matched_rule.id}': "
+                    f"{rejection_reason}."
+                )
                 continue
 
             if matched_rule.id in seen_ids:

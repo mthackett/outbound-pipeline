@@ -39,7 +39,7 @@ def run_batch_pipeline(demo_mode: bool = False):
     print(f"TOTAL PENDING JOBS FOUND: {len(pending_jobs)}")
 
     for job in pending_jobs:
-        # 0. Extract Telemetry via OpenAI gpt-4o-mini if raw JD text is present
+        # 0. Extract Telemetry via OpenAI gpt-6-luna if raw JD text is present
         sal_min, sal_max = None, None
         warning_rules = PipelineConfigService.get_active_warning_rules()
         telemetry_warnings = []
@@ -74,7 +74,7 @@ def run_batch_pipeline(demo_mode: bool = False):
         # Fetch existing opportunities for duplicate & velocity guardrails
         all_opps = storage_adapter.fetch_all_opportunities()
 
-        # 1. Run Qualification & Target Pay Calculator (60%-80%)
+        # 1. Run Qualification & Target Pay Calculator
         fit_eval = JobQualificationService.evaluate(
             company_name=job.company_name,
             job_title=job.job_title,

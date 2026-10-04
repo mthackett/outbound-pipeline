@@ -172,7 +172,8 @@ class OpenAIEngineAdapter(LLMStrategyPort):
 
         client = self._runner.client
         completion = client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
+            model="gpt-6-luna",
+            reasoning_effort='none',
             messages=[
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": raw_jd}
@@ -197,7 +198,7 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         warning_rules: Optional[List[Dict[str, Any]]] = None,
         pre_evaluated_findings: Optional[List[Any]] = None
     ) -> JobExtractionPayload:
-        """Parses raw job description text into structured JobExtractionPayload using gpt-4o-mini and user warning rules."""
+        """Parses raw job description text into structured JobExtractionPayload using gpt-6-luna and user warning rules."""
         from job_pipeline.domain.telemetry_service import TelemetryService
         if warning_rules is None:
             try:
@@ -282,7 +283,8 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         )
 
         completion = client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
+            model="gpt-6-luna",
+            reasoning_effort='none',
             messages=[
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": raw_jd}

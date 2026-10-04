@@ -94,7 +94,8 @@ class RoleIntelligenceRunner:
             # LLM Call 1: Strategy Stage
             strategy_input = f"{strategy_prompt}\n\n# SOURCE_BUNDLE\n{json.dumps(tagged_bundle, indent=2)}\n"
             strat_completion = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-6-luna",
+                reasoning_effort='none',
                 messages=[
                     {"role": "system", "content": "You are a senior GTM Strategy consultant. Respond strictly in JSON object format."},
                     {"role": "user", "content": strategy_input}
@@ -115,7 +116,8 @@ class RoleIntelligenceRunner:
                 f"\n\n# VALUE_MATCH_STRATEGY\n{json.dumps(strategy_json, indent=2)}\n"
             )
             comp_completion = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-6-luna",
+                reasoning_effort='none',
                 messages=[
                     {"role": "system", "content": compose_system_prompt},
                     {"role": "user", "content": compose_input}

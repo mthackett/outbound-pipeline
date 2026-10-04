@@ -33,11 +33,11 @@ Open **`http://localhost:8501`** in your browser.
 
 ## 🌟 Key Features
 
-1. **Zero-Friction Ingestion**: Paste raw job descriptions without manual data entry. `gpt-4o-mini` extracts Company, Title, Family, Compensation bounds, and Skills.
+1. **Zero-Friction Ingestion**: Paste raw job descriptions without manual data entry. `gpt-6-luna` extracts Company, Title, Family, Compensation bounds, and Skills.
 2. **1-Tap Application Kit**: Instant clickable link to open your matched Google Doc resume, direct link to your newly generated Google Drive workspace folder, and 2-page `.docx` briefing document.
-3. **60%–80% Target Pay Calculator**: Dynamically computes negotiation bounds from posted salary ranges:
-   $$\text{Target Min} = \text{Posted Min} + 0.60 \times (\text{Posted Max} - \text{Posted Min})$$
-   $$\text{Target Max} = \text{Posted Min} + 0.80 \times (\text{Posted Max} - \text{Posted Min})$$
+3. **Target Pay Calculator**: Dynamically computes negotiation bounds from posted salary ranges:
+   $$\text{Target Min} = \text{Posted Min} + Lower Percentile \times (\text{Posted Max} - \text{Posted Min})$$
+   $$\text{Target Max} = \text{Posted Min} + Upper Percentile \times (\text{Posted Max} - \text{Posted Min})$$
 4. **Interactive CRM & Pipeline Tracker**: Live stage updater (`Applied` $\rightarrow$ `Recruiter Screen` $\rightarrow$ `Hiring Manager` $\rightarrow$ `Offer`) synced to your Google Sheet with recruiter notes.
 5. **Google Drive Workspace Sync**: Auto-generates application folders (`[Company]_[Role]_[Date]`), zero-quota JD docs, and tailored resume copies.
 
