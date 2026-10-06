@@ -252,7 +252,14 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
                 existing_text = re.sub(r'\s+', ' ', (self.fetch_resume_text(doc_id) or "").lstrip("\ufeff")).strip()
                 incoming_text = re.sub(r'\s+', ' ', (raw_text or "").lstrip("\ufeff")).strip()
                 if existing_text != incoming_text:
-                    raise ValueError("This workspace already holds a different job description. Resume it or start a new intake.")
+                    try:
+                        self._drive_svc.files().update(
+                            fileId=doc_id,
+                            media_body=media,
+                            fields="id, webViewLink"
+                        ).execute()
+                    except Exception as upd_err:
+                        print(f"INFO: Raw Job Description document update notice: {upd_err}")
                 return {"file_id": doc_id, "file_link": existing[0].get("webViewLink") or f"https://docs.google.com/document/d/{doc_id}/edit"}
             doc_file = self._drive_svc.files().create(
                 body=file_metadata,
@@ -569,15 +576,15 @@ class GoogleDriveAdapter(DocumentStoragePort, ResumeRepositoryPort):
             log_warn(f"Workspace was not discarded: {exc}")
             return False
 
-    def rename_application_workspace(self, folder_id: str, new_name: str) -> bool:
+    def rename_application_workspace(self, folder_id: str, new_name: str, company_name: Optional[str] = None) -> bool:
         """Renames an existing Drive application workspace folder."""
         if not self.is_connected or not folder_id or folder_id == "mock_folder_id":
             return True
         try:
             self._drive_svc.files().update(
                 fileId=folder_id,
-                body={"name": new_name},
-                fields="id, name"
+                body={"name": new_name, **({"properties": {"company": company_name}} if company_name else {})},
+                fields="id, name, properties"
             ).execute()
             log_drive(f"Renamed Drive workspace '{folder_id}' to '{new_name}'.")
             return True

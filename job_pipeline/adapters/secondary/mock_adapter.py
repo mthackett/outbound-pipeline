@@ -13,6 +13,21 @@ class MockJobStorageAdapter(JobStoragePort):
         self.is_connected = True
         self.saved_jobs: List[Dict[str, Any]] = []
         self.screening_qa_store: List[Dict[str, Any]] = []
+        self.requirements_store: List[Dict[str, Any]] = [
+            {
+                "requirement_id": "req_mock_1",
+                "opportunity_id": "opp_mock_1",
+                "years_experience_required": "3-5 years",
+                "required_tech_stack": "{Salesforce, SQL, dbt, HubSpot}",
+                "preferred_tech_stack": "{Python, Snowflake, Tableau}",
+                "core_pain_points": "Align GTM SLAs and lead routing across Sales, Marketing, and Finance.",
+                "is_remote": "TRUE",
+                "salary_min": 110000,
+                "salary_max": 135000,
+                "extraction_confidence": 1.0,
+                "updated_at": "2026-09-22 08:14:00"
+            }
+        ]
 
     def fetch_pending_jobs(self) -> List[JobPosting]:
         return [
@@ -38,6 +53,24 @@ class MockJobStorageAdapter(JobStoragePort):
             self.saved_jobs.append({"job": job, "fit_eval": fit_eval})
         if job.screening_qa:
             self.save_screening_qa(job.opportunity_id, job.company_name, job.job_title, job.screening_qa, job.drive_screening_doc_link)
+        req_match = next((r for r in self.requirements_store if r.get("opportunity_id") == job.opportunity_id), None)
+        req_record = {
+            "requirement_id": (req_match or {}).get("requirement_id", f"req_{job.opportunity_id}"),
+            "opportunity_id": job.opportunity_id,
+            "years_experience_required": "",
+            "required_tech_stack": "{" + ", ".join(f"'{s}'" for s in job.required_skills) + "}" if job.required_skills else "{}",
+            "preferred_tech_stack": "{" + ", ".join(f"'{s}'" for s in job.preferred_skills) + "}" if job.preferred_skills else "{}",
+            "core_pain_points": fit_eval.reasoning if fit_eval else "",
+            "is_remote": "FALSE",
+            "salary_min": fit_eval.pay_bounds.posted_min if fit_eval and fit_eval.pay_bounds else "",
+            "salary_max": fit_eval.pay_bounds.posted_max if fit_eval and fit_eval.pay_bounds else "",
+            "extraction_confidence": 1.0,
+            "updated_at": "2026-09-22 08:14:00"
+        }
+        if req_match:
+            req_match.update(req_record)
+        else:
+            self.requirements_store.append(req_record)
         print(f"MOCK STORAGE: Saved job '{job.company_name} - {job.job_title}'")
         return True
 
@@ -62,7 +95,8 @@ class MockJobStorageAdapter(JobStoragePort):
         company_name: Optional[str] = None,
         job_title: Optional[str] = None,
         target_pay_range: Optional[str] = None,
-        source_url: Optional[str] = None
+        source_url: Optional[str] = None,
+        salary_expectation: Optional[str] = None
     ) -> bool:
         for item in self.saved_jobs:
             j = item["job"]
@@ -102,9 +136,17 @@ class MockJobStorageAdapter(JobStoragePort):
                     j.extension_possible = extension_possible
                 if fte_conversion_possible is not None:
                     j.fte_conversion_possible = fte_conversion_possible
-                item["notes"] = notes
+                if salary_expectation is not None:
+                    j.salary_expectation = salary_expectation
+                    item["salary_expectation"] = salary_expectation
+                if notes is not None:
+                    j.notes = notes
+                    item["notes"] = notes
                 return True
         return True
+
+    def fetch_all_requirements_extractions(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        return list(self.requirements_store)
 
     def fetch_all_opportunities(self, force_refresh: bool = False, require_fresh: bool = False) -> List[Dict[str, Any]]:
         results = []
@@ -112,6 +154,8 @@ class MockJobStorageAdapter(JobStoragePort):
             j = item["job"]
             fe = item["fit_eval"]
             sh = j.stage_history or [{"stage": j.status, "entered_at": "2026-09-22T08:14:00"}]
+            sal_exp = getattr(j, "salary_expectation", "") or item.get("salary_expectation", "")
+            j_notes = getattr(j, "notes", "") or item.get("notes", "")
             results.append({
                 "Company Name": j.company_name,
                 "Job Title": j.job_title,
@@ -133,7 +177,9 @@ class MockJobStorageAdapter(JobStoragePort):
                 "FTE Conversion": "Yes" if j.fte_conversion_possible is True else ("No" if j.fte_conversion_possible is False else ""),
                 "Stage History": sh,
                 "stage_history": sh,
-                "Notes": item.get("notes", ""),
+                "Salary Expectation": sal_exp,
+                "salary_expectation": sal_exp,
+                "Notes": j_notes,
                 "Opportunity ID": j.opportunity_id,
                 "Target Pay Range": fe.pay_bounds.display_range,
                 "Fit Warning": fe.reasoning,
@@ -343,9 +389,11 @@ class MockDocumentStorageAdapter(DocumentStoragePort):
             return list(self.workspaces[folder_id].get("files", []))
         return []
 
-    def rename_application_workspace(self, folder_id: str, new_name: str) -> bool:
+    def rename_application_workspace(self, folder_id: str, new_name: str, company_name: Optional[str] = None) -> bool:
         if folder_id in self.workspaces:
             self.workspaces[folder_id]["folder_name"] = new_name
+            if company_name:
+                self.workspaces[folder_id]["company"] = company_name
             return True
         return True
 

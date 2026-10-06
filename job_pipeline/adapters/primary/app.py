@@ -394,11 +394,11 @@ with st.sidebar.expander("📋 Fast Application Links", expanded=True):
         col_title, col_btn = st.columns([3.2, 2.0])
         with col_title:
             st.markdown(
-                f'<a href="{q_link.url}" target="_blank" style="text-decoration: none; color: #60A5FA; font-weight: 600; font-size: 0.90rem; display: block; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="Open {q_link.title} in new tab ({q_link.url})">{q_link.icon} {q_link.title} ↗</a>',
+                f'<a href="{q_link.url}" target="_blank" style="text-decoration: none; color: #60A5FA; font-weight: 600; font-size: 0.90rem; display: block; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{q_link.icon} {q_link.title} ↗</a>',
                 unsafe_allow_html=True
             )
         with col_btn:
-            if st.button("Copy", key=f"sb_cp_{q_link.id}_{q_idx}", use_container_width=True, help=f"Copy {q_link.title} URL to clipboard"):
+            if st.button("Copy", key=f"sb_cp_{q_link.id}_{q_idx}", use_container_width=True):
                 try:
                     import pyperclip
                     pyperclip.copy(q_link.url)
@@ -762,6 +762,8 @@ if active_section == SECTION_INGEST:
                     category=recovery_category,
                     applied_via=recovery_source,
                     priority=recovery_priority,
+                    salary_expectation=checkpoint.get("salary_expectation") or (existing_record or {}).get("Salary Expectation"),
+                    notes=checkpoint.get("notes") or (existing_record or {}).get("Notes"),
                     employment_arrangement=extracted_arrangement,
                     worker_classification=extracted_worker_class,
                     pay_basis=final_pay_basis,
@@ -927,6 +929,16 @@ if active_section == SECTION_INGEST:
         key=f"jd_text_input_{cur_intake}"
     )
 
+    with st.expander("📝 Application Notes (Optional)", expanded=False):
+        st.caption("Add unstructured notes, referral contacts, outreach angles, or initial application thoughts.")
+        manual_notes = st.text_area(
+            "Application Notes",
+            height=85,
+            placeholder="e.g. Reached out to recruiter Sarah Jenkins; emphasizes ARR forecasting and dbt data modeling...",
+            key=f"ov_notes_{cur_intake}",
+            label_visibility="collapsed"
+        )
+
     with st.expander("⚙️ Advanced / Manual Overrides (Optional)", expanded=False):
         st.caption("Leave blank to let AI auto-extract automatically.")
         col_ov1, col_ov2, col_ov3 = st.columns(3)
@@ -949,7 +961,7 @@ if active_section == SECTION_INGEST:
         sources_list = pipeline_cfg.get("sources", DEFAULT_APPLICATION_SOURCES)
         priorities_list = pipeline_cfg.get("priorities", DEFAULT_PRIORITIES)
 
-        col_ov_cat1, col_ov_cat2, col_ov_src, col_ov_pri = st.columns([1, 1.5, 1, 1])
+        col_ov_cat1, col_ov_cat2, col_ov_src, col_ov_pri, col_ov_sal = st.columns([1, 1.4, 1, 1, 1.2])
         with col_ov_cat1:
             manual_category = st.selectbox(
                 "Strategic Category",
@@ -972,6 +984,13 @@ if active_section == SECTION_INGEST:
                 priorities_list,
                 index=0,
                 help="Priority level for this application."
+            )
+        with col_ov_sal:
+            manual_salary_expectation = st.text_input(
+                "Salary Expectation",
+                placeholder="e.g. $140k or $75/hr",
+                key=f"ov_sal_exp_{cur_intake}",
+                help="Your target/expected compensation for this application."
             )
 
         st.markdown("---")
@@ -1198,7 +1217,13 @@ if active_section == SECTION_INGEST:
             if not folder_id:
                 raise RuntimeError("The application workspace could not be created; retry this intake.")
             checkpoint = {k: v for k, v in job_payload.items() if k not in ("all_opps", "dup", "vel", "screening_qa")}
-            checkpoint.update(category=manual_category, applied_via=manual_applied_via, priority=manual_priority)
+            checkpoint.update(
+                category=manual_category,
+                applied_via=manual_applied_via,
+                priority=manual_priority,
+                salary_expectation=job_payload.get("salary_expectation") or manual_salary_expectation,
+                notes=job_payload.get("notes") or manual_notes
+            )
             checkpoint["screening_qa"] = [q.model_dump(mode="json") for q in screening_qa_list]
             if not drive_adapter.save_ingestion_checkpoint(folder_id, checkpoint):
                 raise RuntimeError("Could not save intake inputs. Retry this intake before resuming the workspace.")
@@ -1273,6 +1298,8 @@ if active_section == SECTION_INGEST:
                 category=manual_category,
                 applied_via=manual_applied_via,
                 priority=manual_priority,
+                salary_expectation=job_payload.get("salary_expectation") or manual_salary_expectation,
+                notes=job_payload.get("notes") or manual_notes,
                 employment_arrangement=final_arrangement,
                 worker_classification=final_worker_class,
                 pay_basis=final_pay_basis,
@@ -1330,6 +1357,8 @@ if active_section == SECTION_INGEST:
                 "category": manual_category,
                 "applied_via": manual_applied_via,
                 "priority": manual_priority,
+                "salary_expectation": job_payload.get("salary_expectation") or manual_salary_expectation,
+                "notes": job_payload.get("notes") or manual_notes,
                 "employment_arrangement": final_arrangement,
                 "worker_classification": final_worker_class,
                 "pay_basis": final_pay_basis,
@@ -1367,6 +1396,8 @@ if active_section == SECTION_INGEST:
         except Exception as flow_err:
             log_warn(f"Application workflow error: {flow_err}")
             st.session_state.refresh_incomplete_workspaces = True
+            st.session_state.pop(f"intake_opportunity_{cur_intake}", None)
+            st.session_state.pop(f"intake_jd_hash_{cur_intake}", None)
             st.error(f"Processing failed: {flow_err}. The Drive workspace has been preserved as incomplete and can be recovered.")
 
     def _run_intake_extraction(
@@ -1508,6 +1539,13 @@ if active_section == SECTION_INGEST:
                 window_days=st.session_state.profile.company_application_window_days
             )
 
+            # If user entered different JD text, refresh intake opportunity ID so it never collides with an older workspace
+            cur_jd_hash = hash(jd_text.strip())
+            saved_jd_hash = st.session_state.get(f"intake_jd_hash_{cur_intake}")
+            if saved_jd_hash != cur_jd_hash:
+                st.session_state[f"intake_opportunity_{cur_intake}"] = str(uuid.uuid4())
+                st.session_state[f"intake_jd_hash_{cur_intake}"] = cur_jd_hash
+
             job_payload = {
                 "opportunity_id": st.session_state.setdefault(f"intake_opportunity_{cur_intake}", str(uuid.uuid4())),
                 "company": final_company,
@@ -1538,7 +1576,12 @@ if active_section == SECTION_INGEST:
                 "vel": vel_res,
                 "telemetry_warnings": extracted_telemetry_warnings,
                 "telemetry_flags": extracted_telemetry_flags,
-                "telemetry_benefits": extracted_telemetry_benefits
+                "telemetry_benefits": extracted_telemetry_benefits,
+                "category": overrides.get("category"),
+                "applied_via": overrides.get("applied_via"),
+                "priority": overrides.get("priority"),
+                "salary_expectation": overrides.get("salary_expectation"),
+                "notes": overrides.get("notes")
             }
 
             # Check if Guardrails are tripped
@@ -1650,6 +1693,8 @@ if active_section == SECTION_INGEST:
                             "category": manual_category,
                             "applied_via": manual_applied_via,
                             "priority": manual_priority,
+                            "salary_expectation": manual_salary_expectation,
+                            "notes": manual_notes,
                         }
 
                         if flags:
@@ -1928,6 +1973,28 @@ if active_section == SECTION_INGEST:
             st.markdown(pills_html, unsafe_allow_html=True)
 
 
+def parse_skills_list(val) -> list[str]:
+    if not val:
+        return []
+    if isinstance(val, list):
+        return [str(s).strip() for s in val if str(s).strip()]
+    if isinstance(val, str):
+        v = val.strip()
+        if v.startswith("{") and v.endswith("}"):
+            v = v[1:-1]
+            items = []
+            for part in v.split(","):
+                p = part.strip().strip('"').strip("'")
+                if p:
+                    items.append(p)
+            return items
+        elif "," in v:
+            return [p.strip() for p in v.split(",") if p.strip()]
+        elif v:
+            return [v]
+    return []
+
+
 # =====================================================================
 # SECTION 2: PIPELINE TRACKER & LIGHTWEIGHT CRM
 # =====================================================================
@@ -1949,10 +2016,12 @@ if active_section == SECTION_CRM:
 
     opportunities = []
     all_screening_qa = []
+    all_requirements = []
     if storage_adapter.is_connected:
         try:
             opportunities = storage_adapter.fetch_all_opportunities(force_refresh=refresh_clicked)
             all_screening_qa = storage_adapter.fetch_screening_qa(force_refresh=refresh_clicked)
+            all_requirements = storage_adapter.fetch_all_requirements_extractions(force_refresh=refresh_clicked)
         except Exception as e:
             st.warning(f"Could not load rows from Google Sheets: {e}")
     else:
@@ -1965,6 +2034,7 @@ if active_section == SECTION_CRM:
                 "Category": "Target",
                 "Applied Via": "LinkedIn",
                 "Priority": "High",
+                "Salary Expectation": "$135,000",
                 "Stage History": [
                     {"stage": "Processed", "entered_at": "2026-09-22T08:14:00"},
                     {"stage": "Applied", "entered_at": "2026-09-22T08:31:00"},
@@ -1998,6 +2068,7 @@ if active_section == SECTION_CRM:
                 "Category": "Stretch",
                 "Applied Via": "Company Website",
                 "Priority": "Medium",
+                "Salary Expectation": "$85/hr",
                 "Employment Arrangement": "Contract",
                 "Worker Classification": "W2",
                 "Pay Basis": "Hourly",
@@ -2025,6 +2096,28 @@ if active_section == SECTION_CRM:
             }
         ]
         all_screening_qa = []
+        all_requirements = [
+            {
+                "opportunity_id": "demo-1",
+                "required_tech_stack": "{Salesforce,SQL,Excel,Looker}",
+                "preferred_tech_stack": "{dbt,Python,Snowflake}",
+                "core_pain_points": "Legacy manual spreadsheets and inconsistent ARR reporting across sales and finance.",
+                "years_experience_required": "3-5 years",
+                "is_remote": "TRUE",
+                "salary_min": "125000",
+                "salary_max": "130000"
+            },
+            {
+                "opportunity_id": "demo-2",
+                "required_tech_stack": "{Workato,HubSpot,Salesforce,Zapier,APIs}",
+                "preferred_tech_stack": "{Python,BigQuery,Segment}",
+                "core_pain_points": "Scaling integration throughput and automating lead routing without dropped payloads.",
+                "years_experience_required": "5+ years",
+                "is_remote": "TRUE",
+                "salary_min": "156000",
+                "salary_max": "166400"
+            }
+        ]
 
     # Load dynamic pipeline configuration (Sources & Priorities)
     pipeline_cfg = PipelineConfigService.load_config()
@@ -2068,6 +2161,13 @@ if active_section == SECTION_CRM:
         oid = str(item.get("opportunity_id", "")).strip()
         if oid:
             opp_qa_map.setdefault(oid, []).append(item)
+
+    # Map requirements extraction by opportunity_id in-memory (0 extra Sheets API calls)
+    opp_req_map = {}
+    for item in all_requirements:
+        oid = str(item.get("opportunity_id", "") or item.get("Opportunity ID", "")).strip()
+        if oid:
+            opp_req_map[oid] = item
 
     if opportunities:
         # High Level Pipeline Metrics
@@ -2269,6 +2369,9 @@ if active_section == SECTION_CRM:
             else:
                 arr_badge = ""
 
+            curr_sal_exp = str(opp.get("Salary Expectation") or opp.get("salary_expectation") or "").strip()
+            sal_exp_badge = f"  |  *Exp:* `{curr_sal_exp}`" if curr_sal_exp else ""
+
             target_pay = opp.get("Target Pay Range", "N/A")
             opp_id = opp.get("Opportunity ID", f"row-{idx}")
             drive_link = opp.get("Drive Folder Link", "")
@@ -2304,12 +2407,16 @@ if active_section == SECTION_CRM:
                 s_icon = "📋"
 
             is_card_open = (st.session_state.get("active_opp_card") == opp_id)
-            with st.expander(f"{s_icon} **{comp}** — {title}  |  *Status:* `{curr_status}`{cat_badge}{pri_badge}{src_badge}{arr_badge}  |  *Pay:* `{target_pay}`", expanded=is_card_open):
+            with st.expander(f"{s_icon} **{comp}** — {title}  |  *Status:* `{curr_status}`{cat_badge}{pri_badge}{src_badge}{arr_badge}{sal_exp_badge}  |  *Pay:* `{target_pay}`", expanded=is_card_open):
                 c_card1, c_card2 = st.columns([1, 1])
 
                 with c_card1:
                     st.write(f"**Date Created**: {date_added or 'Recent'}")
                     st.markdown(f"**Target Pay**: `{target_pay or 'Not calculated'}`")
+                    if curr_sal_exp:
+                        st.markdown(f"**Salary Expectation**: `{curr_sal_exp}`")
+                    else:
+                        st.markdown("**Salary Expectation**: *⚪ Not specified*")
                     st.write(f"**Selected Resume**: {opp.get('Selected Resume') or 'None'}")
                     if cat_display != "Unassigned":
                         st.markdown(f"**Strategic Category**: {cat_ico} **{cat_display}**")
@@ -2353,9 +2460,57 @@ if active_section == SECTION_CRM:
                         st.markdown(f"[🔗 Open Job Posting Link]({curr_url})")
                     if drive_link:
                         st.markdown(f"[📁 Open Application Drive Folder]({drive_link})")
+                        m_fid = re.search(r"(?:folders/|[?&]id=)([\w-]+)", str(drive_link))
+                        folder_id_val = m_fid.group(1) if m_fid else None
+                        if folder_id_val:
+                            if st.button("📋 Copy Raw JD from Drive", key=f"btn_copy_jd_{opp_id}_{idx}", use_container_width=True):
+                                try:
+                                    with st.spinner("Fetching Raw Job Description from Drive..."):
+                                        raw_jd = drive_adapter.fetch_raw_job_description(folder_id_val)
+                                    if raw_jd and raw_jd.strip():
+                                        pyperclip.copy(raw_jd)
+                                        st.toast("✅ Raw Job Description copied to clipboard!")
+                                        st.session_state[f"show_raw_jd_{opp_id}"] = raw_jd
+                                    else:
+                                        st.warning("Raw Job Description is empty or could not be found.")
+                                except Exception as jd_err:
+                                    st.error(f"Could not fetch Raw Job Description: {jd_err}")
+                            if st.session_state.get(f"show_raw_jd_{opp_id}"):
+                                with st.expander("📄 Raw Job Description Text", expanded=False):
+                                    st.text_area("Job Description", value=st.session_state[f"show_raw_jd_{opp_id}"], height=200, key=f"ta_raw_jd_{opp_id}_{idx}", disabled=True)
+
                     screening_doc = opp.get("Screening Doc Link")
                     if screening_doc:
                         st.markdown(f"[📝 Open Screening Questions Doc]({screening_doc})")
+
+                    # Extracted Requirements from Requirements Extraction worksheet
+                    req_data = opp_req_map.get(str(opp_id).strip())
+                    if req_data:
+                        st.markdown("---")
+                        st.markdown("###### 🎯 Extracted Requirements")
+                        req_skills = parse_skills_list(req_data.get("required_tech_stack"))
+                        pref_skills = parse_skills_list(req_data.get("preferred_tech_stack"))
+                        years_exp = str(req_data.get("years_experience_required") or "").strip()
+                        core_pain = str(req_data.get("core_pain_points") or "").strip()
+                        is_rem = str(req_data.get("is_remote") or "").lower() in ["true", "yes", "1"]
+
+                        if req_skills:
+                            pills_html = " ".join(f"<span style='background:#1E3A8A; color:#93C5FD; padding:2px 8px; border-radius:4px; font-size:0.8rem; margin-right:4px;'>{s}</span>" for s in req_skills)
+                            st.markdown(f"**Required Stack:** {pills_html}", unsafe_allow_html=True)
+                        if pref_skills:
+                            pref_html = " ".join(f"<span style='background:#1F2937; color:#D1D5DB; padding:2px 8px; border-radius:4px; font-size:0.8rem; margin-right:4px;'>{s}</span>" for s in pref_skills)
+                            st.markdown(f"**Preferred Stack:** {pref_html}", unsafe_allow_html=True)
+                        if years_exp:
+                            st.markdown(f"**Experience:** `{years_exp}`" + ("  |  `Remote`" if is_rem else ""))
+                        elif is_rem:
+                            st.markdown("**Work Location:** `Remote`")
+                        if core_pain:
+                            st.caption(f"**Key Pain Points:** {core_pain}")
+
+                    if notes and str(notes).strip():
+                        st.markdown("---")
+                        st.markdown(f"###### 📝 Application Notes\n> {notes}")
+
                     saved_signals = TelemetryService.load_display_findings(
                         opp.get("Job Signals"), opp.get("Fit Warning", "")
                     )
@@ -2404,9 +2559,11 @@ if active_section == SECTION_CRM:
                         with col_title_edit:
                             edit_title = st.text_input("Job Title", value=title, key=f"title_in_{opp_id}", autocomplete="off")
 
-                        col_pay_edit, col_pb_edit = st.columns([2, 1])
+                        col_pay_edit, col_sal_exp_edit, col_pb_edit = st.columns([1.5, 1.5, 1])
                         with col_pay_edit:
                             edit_pay = st.text_input("Target / Posted Pay Range", value="" if target_pay == "N/A" else target_pay, placeholder="e.g. $130,000 - $160,000", key=f"pay_in_{opp_id}", autocomplete="off")
+                        with col_sal_exp_edit:
+                            edit_sal_exp = st.text_input("Salary Expectation", value=curr_sal_exp, placeholder="e.g. $140,000 or $75/hr", key=f"sal_exp_in_{opp_id}", autocomplete="off")
                         with col_pb_edit:
                             pb_options = ["Annual", "Hourly"]
                             pb_cur_idx = 1 if curr_pb == "Hourly" else 0
@@ -2504,10 +2661,10 @@ if active_section == SECTION_CRM:
                             new_fte_str = st.selectbox("FTE Conversion Possible?", ext_opts, index=ext_opts.index(fte_current_str), key=f"fte_sel_{opp_id}")
 
                         new_notes = st.text_area(
-                            "Recruiter Contacts & Interview Notes",
+                            "Application Notes & Recruiter Contacts",
                             value=notes,
-                            height=70,
-                            placeholder="e.g. Recruiter Sarah (sjenkins@planful.com). Focus on ARR metrics.",
+                            height=75,
+                            placeholder="e.g. Recruiter Sarah (sjenkins@planful.com). Focus on ARR metrics. Salary discussed: $140k.",
                             key=f"notes_ta_{opp_id}"
                         )
 
@@ -2518,10 +2675,11 @@ if active_section == SECTION_CRM:
                         final_comp = edit_comp.strip() or comp
                         final_title = edit_title.strip() or title
                         final_pay = edit_pay.strip()
+                        final_sal_exp = edit_sal_exp.strip()
                         final_url = edit_url.strip()
                         final_pb = "Hourly" if new_arr == "Contract" else edit_pb
 
-                        log_crm(f"Updating opportunity '{final_comp}' ({opp_id}): Title='{final_title}', Stage='{new_stage}', Pay='{final_pay}', Arrangement='{new_arr}'")
+                        log_crm(f"Updating opportunity '{final_comp}' ({opp_id}): Title='{final_title}', Stage='{new_stage}', Pay='{final_pay}', SalExp='{final_sal_exp}', Arrangement='{new_arr}'")
                         st.session_state.active_opp_card = opp_id
                         st.session_state.active_sub_card = None
 
@@ -2562,12 +2720,28 @@ if active_section == SECTION_CRM:
                         elif new_stage != curr_status:
                             updated_stage_hist.append({"stage": new_stage, "entered_at": now_iso})
 
+                        # Update Google Drive folder name and properties if company name was updated
+                        if final_comp != comp and drive_link:
+                            m_fold = re.search(r"(?:folders/|[?&]id=)([\w-]+)", str(drive_link))
+                            if m_fold:
+                                f_id = m_fold.group(1)
+                                new_folder_name = f"{final_comp} - {final_title}"
+                                try:
+                                    rename_ok = drive_adapter.rename_application_workspace(f_id, new_folder_name, company_name=final_comp)
+                                    if rename_ok:
+                                        log_action(f"📁 Renamed Google Drive folder to '{new_folder_name}' with company property '{final_comp}'")
+                                    else:
+                                        log_warn(f"Failed to rename Google Drive folder '{f_id}' to '{new_folder_name}'")
+                                except Exception as ren_err:
+                                    log_warn(f"Error renaming Google Drive folder: {ren_err}")
+
                         with st.spinner(f"Saving updates for {final_comp} to Google Sheets..."):
                             if storage_adapter.is_connected:
                                 success = storage_adapter.update_opportunity_status(
                                     opportunity_id=opp_id,
                                     status=new_stage,
                                     notes=new_notes,
+                                    salary_expectation=final_sal_exp,
                                     stage_history=updated_stage_hist,
                                     category=saved_cat,
                                     applied_via=final_src,
@@ -2594,6 +2768,8 @@ if active_section == SECTION_CRM:
                                     opp["job_title"] = final_title
                                     opp["Target Pay Range"] = final_pay
                                     opp["target_pay_range"] = final_pay
+                                    opp["Salary Expectation"] = final_sal_exp
+                                    opp["salary_expectation"] = final_sal_exp
                                     opp["Pay Basis"] = final_pb
                                     opp["pay_basis"] = final_pb
                                     opp["Source URL"] = final_url
@@ -2636,6 +2812,8 @@ if active_section == SECTION_CRM:
                                 opp["job_title"] = final_title
                                 opp["Target Pay Range"] = final_pay
                                 opp["target_pay_range"] = final_pay
+                                opp["Salary Expectation"] = final_sal_exp
+                                opp["salary_expectation"] = final_sal_exp
                                 opp["Pay Basis"] = final_pb
                                 opp["pay_basis"] = final_pb
                                 opp["Source URL"] = final_url

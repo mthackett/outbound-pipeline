@@ -36,8 +36,14 @@ class JobStoragePort(ABC):
         company_name: Optional[str] = None,
         job_title: Optional[str] = None,
         target_pay_range: Optional[str] = None,
-        source_url: Optional[str] = None
+        source_url: Optional[str] = None,
+        salary_expectation: Optional[str] = None
     ) -> bool:
+        pass
+
+    @abstractmethod
+    def fetch_all_requirements_extractions(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """Fetches extracted requirements records from storage."""
         pass
 
     @abstractmethod
@@ -149,6 +155,6 @@ class DocumentStoragePort(ABC):
         pass
 
     @abstractmethod
-    def rename_application_workspace(self, folder_id: str, new_name: str) -> bool:
+    def rename_application_workspace(self, folder_id: str, new_name: str, company_name: Optional[str] = None) -> bool:
         """Renames an existing application workspace folder."""
         pass

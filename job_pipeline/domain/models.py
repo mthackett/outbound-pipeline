@@ -453,6 +453,8 @@ class JobPosting(BaseModel):
     drive_folder_link: Optional[str] = None
     drive_jd_link: Optional[str] = None
     drive_screening_doc_link: Optional[str] = None
+    salary_expectation: Optional[str] = None
+    notes: Optional[str] = None
     screening_qa: List[ScreeningQA] = Field(default_factory=list)
     telemetry_warnings: List[str] = Field(default_factory=list)
     telemetry_flags: List[str] = Field(default_factory=list)

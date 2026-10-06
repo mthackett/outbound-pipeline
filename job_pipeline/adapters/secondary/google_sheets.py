@@ -47,6 +47,8 @@ class GoogleSheetsAdapter(JobStoragePort):
         self._opportunities_cache_time = 0
         self._cached_screening_qa = None
         self._screening_qa_cache_time = 0
+        self._cached_requirements = None
+        self._requirements_cache_time = 0
         self._cache_ttl_seconds = 120
         self._headers_cache = None
         self._init_connection()
@@ -126,7 +128,8 @@ class GoogleSheetsAdapter(JobStoragePort):
                 "Stage History", "Category", "Applied Via", "Priority",
                 "Employment Arrangement", "Worker Classification", "Pay Basis",
                 "Contract Duration", "Contract Value", "Staffing Agency",
-                "Client Company", "Extension Possible", "FTE Conversion"
+                "Client Company", "Extension Possible", "FTE Conversion",
+                "Salary Expectation", "Notes"
             ]
             missing_cols = [col for col in required_cols if col not in headers]
             if missing_cols:
@@ -190,6 +193,12 @@ class GoogleSheetsAdapter(JobStoragePort):
             if job.selected_resume_name:
                 queue("Selected Resume", job.selected_resume_name)
             queue("Target Pay Range", fit_eval.pay_bounds.display_range)
+            sal_exp = job.salary_expectation or existing.get("Salary Expectation") or ""
+            if sal_exp:
+                queue("Salary Expectation", sal_exp)
+            job_notes = job.notes or existing.get("Notes") or ""
+            if job_notes:
+                queue("Notes", job_notes)
             if job.drive_folder_link:
                 queue("Drive Folder Link", job.drive_folder_link)
             if job.drive_screening_doc_link:
@@ -297,6 +306,7 @@ class GoogleSheetsAdapter(JobStoragePort):
                 extraction_ws.update_cells([gspread.Cell(row=req_idx, col=c, value=v) for c, v in enumerate(req_row, start=1)])
             else:
                 extraction_ws.append_row(req_row, value_input_option="RAW")
+            self._cached_requirements = None
 
             print(f"SUCCESS: Saved job opportunity '{job.company_name} - {job.job_title}' to Google Sheets.")
             return True
@@ -403,7 +413,8 @@ class GoogleSheetsAdapter(JobStoragePort):
         company_name: Optional[str] = None,
         job_title: Optional[str] = None,
         target_pay_range: Optional[str] = None,
-        source_url: Optional[str] = None
+        source_url: Optional[str] = None,
+        salary_expectation: Optional[str] = None
     ) -> bool:
         if not self.is_connected:
             return False
@@ -418,7 +429,8 @@ class GoogleSheetsAdapter(JobStoragePort):
                 "Stage History", "Category", "Applied Via", "Priority",
                 "Employment Arrangement", "Worker Classification", "Pay Basis",
                 "Contract Duration", "Contract Value", "Staffing Agency",
-                "Client Company", "Extension Possible", "FTE Conversion"
+                "Client Company", "Extension Possible", "FTE Conversion",
+                "Salary Expectation", "Notes"
             ]
             missing_cols = [col for col in needed_cols if col not in headers]
             if missing_cols:
@@ -453,6 +465,7 @@ class GoogleSheetsAdapter(JobStoragePort):
             title_col = headers.index("Job Title") + 1 if "Job Title" in headers else None
             pay_col = headers.index("Target Pay Range") + 1 if "Target Pay Range" in headers else None
             url_col = headers.index("Source URL") + 1 if "Source URL" in headers else None
+            sal_exp_col = headers.index("Salary Expectation") + 1 if "Salary Expectation" in headers else None
 
             # Fast row lookup by Opportunity ID column values instead of downloading entire sheet
             id_column_values = ingest_ws.col_values(opp_id_col)
@@ -474,6 +487,8 @@ class GoogleSheetsAdapter(JobStoragePort):
                     cell_updates.append(gspread.Cell(row=idx, col=pay_col, value=target_pay_range))
                 if source_url is not None and url_col:
                     cell_updates.append(gspread.Cell(row=idx, col=url_col, value=source_url))
+                if salary_expectation is not None and sal_exp_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=sal_exp_col, value=salary_expectation))
                 if notes is not None and notes_col:
                     cell_updates.append(gspread.Cell(row=idx, col=notes_col, value=notes))
                 if stage_history is not None and stage_hist_col:
@@ -516,6 +531,9 @@ class GoogleSheetsAdapter(JobStoragePort):
                                 item["Target Pay Range"] = target_pay_range
                             if source_url is not None:
                                 item["Source URL"] = source_url
+                            if salary_expectation is not None:
+                                item["Salary Expectation"] = salary_expectation
+                                item["salary_expectation"] = salary_expectation
                             if notes is not None:
                                 item["Notes"] = notes
                             if stage_history is not None:
@@ -649,3 +667,27 @@ class GoogleSheetsAdapter(JobStoragePort):
                     return self._cached_opportunities
             log_error(f"Failed to fetch opportunities from Google Sheets: {e}")
             return self._cached_opportunities or []
+
+    def fetch_all_requirements_extractions(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """Retrieves all extracted requirements records from 'Requirements Extraction' worksheet with TTL caching."""
+        if not self.is_connected:
+            return []
+        now = time.time()
+        if not force_refresh and self._cached_requirements is not None and (now - self._requirements_cache_time < self._cache_ttl_seconds):
+            return self._cached_requirements
+        try:
+            with log_timed_action("Fetching 'Requirements Extraction' worksheet from Google Sheets", tag="SHEETS"):
+                req_ws = self._spreadsheet.worksheet("Requirements Extraction")
+                records = req_ws.get_all_records()
+            self._cached_requirements = records
+            self._requirements_cache_time = now
+            log_sheets(f"Loaded {len(records)} requirement extraction records from Google Sheets.")
+            return records
+        except Exception as e:
+            if "429" in str(e) or "Quota exceeded" in str(e):
+                log_warn("Google Sheets read quota reached. Serving cached requirements.")
+                if self._cached_requirements is not None:
+                    return self._cached_requirements
+            log_sheets(f"Requirements Extraction worksheet notice: {e}")
+            return self._cached_requirements or []
+

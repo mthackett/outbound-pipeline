@@ -582,7 +582,8 @@ class TestRawJDPersistencePolicy(unittest.TestCase, _WorkspaceHelper):
             "Stage History", "Category", "Applied Via", "Priority",
             "Employment Arrangement", "Worker Classification", "Pay Basis",
             "Contract Duration", "Contract Value", "Staffing Agency",
-            "Client Company", "Extension Possible", "FTE Conversion"
+            "Client Company", "Extension Possible", "FTE Conversion",
+            "Salary Expectation", "Notes"
         ]
         with patch.object(GoogleSheetsAdapter, "_init_connection"):
             adapter = GoogleSheetsAdapter(spreadsheet_id="mock_sheet_id")
@@ -633,7 +634,8 @@ class TestRawJDPersistencePolicy(unittest.TestCase, _WorkspaceHelper):
             "Stage History", "Category", "Applied Via", "Priority",
             "Employment Arrangement", "Worker Classification", "Pay Basis",
             "Contract Duration", "Contract Value", "Staffing Agency",
-            "Client Company", "Extension Possible", "FTE Conversion"
+            "Client Company", "Extension Possible", "FTE Conversion",
+            "Salary Expectation", "Notes"
         ]
         with patch.object(GoogleSheetsAdapter, "_init_connection"):
             adapter = GoogleSheetsAdapter(spreadsheet_id="mock_sheet_id")
@@ -744,6 +746,83 @@ class TestRawJDPersistencePolicy(unittest.TestCase, _WorkspaceHelper):
         self.assertEqual(opps[0]["Raw JD Link"], recovered_link)
         self.assertEqual(opps[0]["Job Description"], "")
         self.assertNotIn(SAMPLE_JD, opps[0].values())
+
+
+# ===========================================================================
+# TEST 21: Feature Improvements (Notes, Requirements Extraction, Folder Rename, Salary Expectation)
+# ===========================================================================
+
+class TestFeatureImprovements(unittest.TestCase):
+    """Verifies the 6 user-requested feature improvements."""
+
+    def test_job_posting_supports_salary_expectation_and_notes(self):
+        job = _make_job_posting(
+            opp_id="opp-sal-1",
+            company="Acme Corp",
+            title="Senior RevOps Architect",
+            salary_expectation="$145,000",
+            notes="Discussed with hiring lead; prioritize Salesforce integration experience.",
+        )
+        self.assertEqual(job.salary_expectation, "$145,000")
+        self.assertEqual(job.notes, "Discussed with hiring lead; prioritize Salesforce integration experience.")
+
+    def test_storage_persists_and_updates_salary_expectation_and_notes(self):
+        storage = MockJobStorageAdapter()
+        job = _make_job_posting(
+            opp_id="opp-sal-2",
+            company="Braze",
+            title="GTM Systems Architect",
+            salary_expectation="$85/hr",
+            notes="Initial intake note.",
+        )
+        fit = _make_fit_eval()
+        self.assertTrue(storage.save_opportunity(job, fit))
+
+        opps = storage.fetch_all_opportunities()
+        self.assertEqual(len(opps), 1)
+        self.assertEqual(opps[0]["Salary Expectation"], "$85/hr")
+        self.assertEqual(opps[0]["Notes"], "Initial intake note.")
+
+        # Update via update_opportunity_status
+        updated = storage.update_opportunity_status(
+            opportunity_id="opp-sal-2",
+            status="Recruiter Screen",
+            notes="Updated recruiter notes.",
+            salary_expectation="$90/hr",
+        )
+        self.assertTrue(updated)
+        opps_after = storage.fetch_all_opportunities()
+        self.assertEqual(opps_after[0]["Salary Expectation"], "$90/hr")
+        self.assertEqual(opps_after[0]["Notes"], "Updated recruiter notes.")
+        self.assertEqual(opps_after[0]["Status"], "Recruiter Screen")
+
+    def test_fetch_all_requirements_extractions(self):
+        storage = MockJobStorageAdapter()
+        job = _make_job_posting(
+            opp_id="opp-req-1",
+            company="Snowflake",
+            title="RevOps Lead",
+            required_skills=["dbt", "Snowflake", "SQL"],
+            preferred_skills=["Python", "Looker"],
+        )
+        fit = _make_fit_eval()
+        storage.save_opportunity(job, fit)
+
+        extractions = storage.fetch_all_requirements_extractions()
+        self.assertGreaterEqual(len(extractions), 1)
+        match = next((e for e in extractions if e.get("opportunity_id") == "opp-req-1"), None)
+        self.assertIsNotNone(match)
+        self.assertIn("dbt", match["required_tech_stack"])
+
+    def test_rename_workspace_updates_folder_name_and_company_metadata(self):
+        doc_storage = MockDocumentStorageAdapter()
+        ws = doc_storage.create_application_workspace("Original Co", "Staff Engineer", "opp-ren-1")
+        f_id = ws["folder_id"]
+
+        renamed = doc_storage.rename_application_workspace(f_id, "Renamed Co - Staff Engineer", company_name="Renamed Co")
+        self.assertTrue(renamed)
+        self.assertEqual(doc_storage.workspaces[f_id]["folder_name"], "Renamed Co - Staff Engineer")
+        self.assertEqual(doc_storage.workspaces[f_id]["company"], "Renamed Co")
 
 
 if __name__ == "__main__":
