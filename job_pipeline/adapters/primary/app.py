@@ -390,21 +390,129 @@ drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚡ Candidate Quicklinks")
 with st.sidebar.expander("📋 Fast Application Links", expanded=True):
-    for q_idx, q_link in enumerate(st.session_state.quicklinks):
-        col_title, col_btn = st.columns([3.2, 2.0])
-        with col_title:
-            st.markdown(
-                f'<a href="{q_link.url}" target="_blank" style="text-decoration: none; color: #60A5FA; font-weight: 600; font-size: 0.90rem; display: block; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{q_link.icon} {q_link.title} ↗</a>',
-                unsafe_allow_html=True
-            )
-        with col_btn:
-            if st.button("Copy", key=f"sb_cp_{q_link.id}_{q_idx}", use_container_width=True):
-                try:
-                    import pyperclip
-                    pyperclip.copy(q_link.url)
-                    st.toast(f"Copied {q_link.title} link!")
-                except Exception as cp_err:
-                    st.error(f"Copy failed: {cp_err}")
+    if not st.session_state.quicklinks:
+        st.caption("No quicklinks configured.")
+    else:
+        ql_items_html = ""
+        for q_link in st.session_state.quicklinks:
+            safe_url = json.dumps(q_link.url)
+            safe_title = q_link.title.replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+            safe_icon = q_link.icon or "🔗"
+            ql_items_html += f"""
+            <div class="ql-row">
+                <a href="{q_link.url}" target="_blank" class="ql-link" title="{safe_title}">
+                    <span>{safe_icon} {safe_title} ↗</span>
+                </a>
+                <button type="button" class="ql-btn" onclick='copyUrl({safe_url}, this, event)'>Copy</button>
+            </div>
+            """
+
+        ql_full_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <style>
+            body {{
+                margin: 0;
+                padding: 0;
+                background: transparent;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                color: #F8FAFC;
+            }}
+            .ql-row {{
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                margin-bottom: 7px;
+                padding: 2px 0;
+            }}
+            .ql-link {{
+                text-decoration: none;
+                color: #60A5FA;
+                font-weight: 600;
+                font-size: 0.88rem;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                flex: 1;
+            }}
+            .ql-link:hover {{
+                color: #93C5FD;
+                text-decoration: underline;
+            }}
+            .ql-btn {{
+                background: #1E293B;
+                color: #94A3B8;
+                border: 1px solid #475569;
+                border-radius: 5px;
+                padding: 3px 10px;
+                font-size: 0.78rem;
+                font-weight: 600;
+                cursor: pointer;
+                flex-shrink: 0;
+                transition: all 0.15s ease;
+            }}
+            .ql-btn:hover {{
+                background: #334155;
+                color: #F8FAFC;
+                border-color: #64748B;
+            }}
+        </style>
+        </head>
+        <body>
+            {ql_items_html}
+            <script>
+            function copyUrl(text, btn, e) {{
+                if (e) {{
+                    e.preventDefault();
+                    e.stopPropagation();
+                }}
+                if (navigator.clipboard && navigator.clipboard.writeText) {{
+                    navigator.clipboard.writeText(text).then(() => onSuccess(btn)).catch(() => fallback(text, btn));
+                }} else {{
+                    fallback(text, btn);
+                }}
+            }}
+            function fallback(text, btn) {{
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+                try {{
+                    document.execCommand('copy');
+                    onSuccess(btn);
+                }} catch(e) {{
+                    console.error(e);
+                }}
+                document.body.removeChild(ta);
+            }}
+            function onSuccess(btn) {{
+                var orig = btn.innerText;
+                btn.innerText = 'Copied!';
+                btn.style.background = '#065F46';
+                btn.style.borderColor = '#10B981';
+                btn.style.color = '#A7F3D0';
+                setTimeout(() => {{
+                    btn.innerText = orig;
+                    btn.style.background = '#1E293B';
+                    btn.style.borderColor = '#475569';
+                    btn.style.color = '#94A3B8';
+                }}, 1400);
+            }}
+            </script>
+        </body>
+        </html>
+        """
+        if hasattr(st, "iframe"):
+            st.iframe(ql_full_html, height=max(36, len(st.session_state.quicklinks) * 34 + 6))
+        else:
+            import streamlit.components.v1 as components
+            components.html(ql_full_html, height=max(36, len(st.session_state.quicklinks) * 34 + 6), scrolling=False)
 
     bundle_text = QuickLinksService.format_clipboard_bundle(st.session_state.quicklinks)
     with st.expander("📋 Copy All Links (Bundle)", expanded=False):
@@ -1338,6 +1446,9 @@ if active_section == SECTION_INGEST:
             if not drive_adapter.mark_workspace_complete(folder_id):
                 raise RuntimeError("Records were saved, but the workspace completion marker failed. Resume to retry.")
             st.session_state.refresh_incomplete_workspaces = True
+            st.session_state.pop("crm_cached_opportunities", None)
+            st.session_state.pop("crm_cached_qa", None)
+            st.session_state.pop("crm_cached_requirements", None)
 
             # Reset intake input counter so intake field returns to clean blank state after successful processing
             st.session_state.intake_counter = st.session_state.get("intake_counter", 0) + 1
@@ -2018,12 +2129,28 @@ if active_section == SECTION_CRM:
     all_screening_qa = []
     all_requirements = []
     if storage_adapter.is_connected:
-        try:
-            opportunities = storage_adapter.fetch_all_opportunities(force_refresh=refresh_clicked)
-            all_screening_qa = storage_adapter.fetch_screening_qa(force_refresh=refresh_clicked)
-            all_requirements = storage_adapter.fetch_all_requirements_extractions(force_refresh=refresh_clicked)
-        except Exception as e:
-            st.warning(f"Could not load rows from Google Sheets: {e}")
+        needs_fetch = (
+            refresh_clicked
+            or "crm_cached_opportunities" not in st.session_state
+            or "crm_cached_qa" not in st.session_state
+            or "crm_cached_requirements" not in st.session_state
+        )
+        if needs_fetch:
+            try:
+                st.session_state.crm_cached_opportunities = storage_adapter.fetch_all_opportunities(force_refresh=refresh_clicked)
+                st.session_state.crm_cached_qa = storage_adapter.fetch_screening_qa(force_refresh=refresh_clicked)
+                st.session_state.crm_cached_requirements = storage_adapter.fetch_all_requirements_extractions(force_refresh=refresh_clicked)
+            except Exception as e:
+                st.warning(f"Could not load rows from Google Sheets: {e}")
+                if "crm_cached_opportunities" not in st.session_state:
+                    st.session_state.crm_cached_opportunities = []
+                if "crm_cached_qa" not in st.session_state:
+                    st.session_state.crm_cached_qa = []
+                if "crm_cached_requirements" not in st.session_state:
+                    st.session_state.crm_cached_requirements = []
+        opportunities = st.session_state.get("crm_cached_opportunities", [])
+        all_screening_qa = st.session_state.get("crm_cached_qa", [])
+        all_requirements = st.session_state.get("crm_cached_requirements", [])
     else:
         opportunities = [
             {
@@ -2898,6 +3025,7 @@ if active_section == SECTION_CRM:
                                         interviewer=interviewer
                                     )
                                     if success:
+                                        st.session_state.pop("crm_cached_opportunities", None)
                                         st.success("Call note appended to Google Sheets tracker!")
                                         st.rerun()
                                     else:
@@ -3062,6 +3190,8 @@ if active_section == SECTION_CRM:
                                     if key_to_clear in st.session_state:
                                         del st.session_state[key_to_clear]
 
+                                st.session_state.pop("crm_cached_qa", None)
+                                st.session_state.pop("crm_cached_opportunities", None)
                                 st.rerun()
 
         # Cross-Job Screening Questions & Answers Library

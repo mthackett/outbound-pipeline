@@ -49,7 +49,7 @@ class GoogleSheetsAdapter(JobStoragePort):
         self._screening_qa_cache_time = 0
         self._cached_requirements = None
         self._requirements_cache_time = 0
-        self._cache_ttl_seconds = 120
+        self._cache_ttl_seconds = 1800
         self._headers_cache = None
         self._init_connection()
 
