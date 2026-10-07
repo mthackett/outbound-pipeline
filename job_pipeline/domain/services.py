@@ -607,6 +607,64 @@ class QuickLinksService:
     """Domain service for managing, persisting, and formatting candidate application quicklinks."""
 
     DEFAULT_CONFIG_PATH = "quicklinks.json"
+    DEFAULT_CATEGORIES: List[str] = ["Links", "Scheduling", "Contact / Info"]
+
+    ICON_OPTIONS: List[Tuple[str, str]] = [
+        ("", "🚫 (None / Text Only)"),
+        # Links & Web
+        ("🔗", "🔗 Generic Link"),
+        ("🌐", "🌐 Globe / Web"),
+        ("🌍", "🌍 World"),
+        # Work & Dev
+        ("💼", "💼 Briefcase / Work"),
+        ("👔", "👔 Tie / Professional"),
+        ("💻", "💻 Laptop / Dev"),
+        ("🖥️", "🖥️ Desktop / Tech"),
+        ("🧑‍💻", "🧑‍💻 Developer"),
+        ("⌨️", "⌨️ Keyboard"),
+        ("🎨", "🎨 Portfolio / Design"),
+        ("📂", "📂 Projects Folder"),
+        # Scheduling & Time
+        ("📅", "📅 Calendar"),
+        ("🗓️", "🗓️ Spiral Calendar"),
+        ("⏰", "⏰ Clock"),
+        ("⏱️", "⏱️ Stopwatch"),
+        # Communication
+        ("✉️", "✉️ Envelope / Email"),
+        ("📧", "📧 Electronic Mail"),
+        ("📨", "📨 Incoming Message"),
+        ("📞", "📞 Telephone"),
+        ("📱", "📱 Mobile Phone"),
+        ("💬", "💬 Chat / Message"),
+        ("🎥", "🎥 Video / Meeting"),
+        # Personal & Contact
+        ("👤", "👤 Person / User"),
+        ("🧑", "🧑 Personal"),
+        ("🪪", "🪪 ID Card"),
+        ("🏷️", "🏷️ Name Tag"),
+        ("📍", "📍 Map Pin / Location"),
+        ("🏠", "🏠 Home Address"),
+        ("🏢", "🏢 Office / Building"),
+        ("🏙️", "🏙️ Cityscape"),
+        ("🌆", "🌆 Skyline"),
+        ("📮", "📮 Postal Box / Zip"),
+        ("📬", "📬 Mailbox"),
+        # Education & Credentials
+        ("🎓", "🎓 Graduation Cap / College"),
+        ("🏫", "🏫 School / University"),
+        ("📚", "📚 Books / Academia"),
+        # Documents & Highlights
+        ("📄", "📄 Document / Resume"),
+        ("📑", "📑 Bookmarks / Tabs"),
+        ("📝", "📝 Memo / Note"),
+        ("📋", "📋 Clipboard"),
+        ("⭐", "⭐ Star / Highlight"),
+        ("🚀", "🚀 Rocket / Startup"),
+        ("💡", "💡 Idea / Innovation"),
+        ("🏆", "🏆 Trophy / Award"),
+        ("🔒", "🔒 Security / Credential"),
+        ("💲", "💲 Salary / Pay"),
+    ]
 
     @classmethod
     def get_default_quicklinks(cls) -> List[QuickLink]:
@@ -614,31 +672,45 @@ class QuickLinksService:
         return [
             QuickLink(
                 id="link-linkedin",
-                title="LinkedIn Profile",
+                title="LinkedIn",
                 url="https://linkedin.com/in/your-profile",
-                category="Profile",
+                category="Links",
                 icon="💼"
             ),
             QuickLink(
                 id="link-github",
-                title="GitHub Portfolio",
+                title="GitHub",
                 url="https://github.com/your-username",
-                category="Portfolio",
+                category="Links",
                 icon="💻"
             ),
             QuickLink(
                 id="link-website",
-                title="Personal Website",
+                title="Portfolio",
                 url="https://your-portfolio.com",
-                category="Portfolio",
+                category="Links",
                 icon="🌐"
             ),
             QuickLink(
                 id="link-calendly",
-                title="Scheduling / Calendly",
+                title="Scheduling",
                 url="https://calendly.com/your-calendar",
-                category="Calendar",
+                category="Scheduling",
                 icon="📅"
+            ),
+            QuickLink(
+                id="link-email",
+                title="Email",
+                url="candidate@example.com",
+                category="Contact / Info",
+                icon="✉️"
+            ),
+            QuickLink(
+                id="link-phone",
+                title="Phone",
+                url="555-123-4567",
+                category="Contact / Info",
+                icon="📞"
             ),
         ]
 
@@ -669,18 +741,33 @@ class QuickLinksService:
             path.parent.mkdir(parents=True, exist_ok=True)
             data = [link.model_dump() for link in links]
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+                json.dump(data, f, indent=2, ensure_ascii=False)
             return True
         except Exception:
             return False
 
     @classmethod
     def format_clipboard_bundle(cls, links: List[QuickLink]) -> str:
-        """Formats all links into a clean plain-text block for fast copying into applications/emails."""
-        lines = []
+        """Formats all links into a clean plain-text block grouped by category for fast copying into applications/emails."""
+        if not links:
+            return ""
+        categories: List[str] = []
+        grouped: Dict[str, List[QuickLink]] = {}
         for l in links:
-            lines.append(f"{l.title}: {l.url}")
-        return "\n".join(lines)
+            cat = l.category or "Links"
+            if cat not in grouped:
+                categories.append(cat)
+                grouped[cat] = []
+            grouped[cat].append(l)
+
+        sections: List[str] = []
+        for cat in categories:
+            section_lines = [f"[{cat}]"]
+            for l in grouped[cat]:
+                section_lines.append(f"{l.title}: {l.url}")
+            sections.append("\n".join(section_lines))
+        return "\n\n".join(sections)
+
 
 
 class PipelineConfigService:

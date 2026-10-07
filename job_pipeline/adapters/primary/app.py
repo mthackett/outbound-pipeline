@@ -232,66 +232,141 @@ def render_breadcrumb_trail(breadcrumbs: List[StoryBreadcrumb]):
 
 
 def render_quicklinks_manager(context_key: str = "sb"):
-    """Interactive editor to add, update, remove, and reset candidate quicklinks."""
+    """Interactive editor to add, update, remove, and reorder candidate quicklinks."""
     current_links = list(st.session_state.quicklinks)
 
+    # Compile categories pool
+    existing_cats = []
+    for l in current_links:
+        if l.category and l.category not in existing_cats:
+            existing_cats.append(l.category)
+    cat_pool = list(QuickLinksService.DEFAULT_CATEGORIES)
+    for c in existing_cats:
+        if c not in cat_pool:
+            cat_pool.append(c)
+
+    # Icon options setup
+    icon_labels = [label for _, label in QuickLinksService.ICON_OPTIONS]
+    icon_val_to_label = {val: label for val, label in QuickLinksService.ICON_OPTIONS}
+    icon_label_to_val = {label: val for val, label in QuickLinksService.ICON_OPTIONS}
+
     st.markdown("##### ⚙️ Configured Links:")
+    st.caption("Click ⬆️ / ⬇️ to reorder, or expand a link to edit details.")
+
     for idx, link in enumerate(current_links):
-        with st.expander(f"{link.icon} {link.title}", expanded=False):
+        header_icon = f"{link.icon} " if link.icon else ""
+        with st.expander(f"{header_icon}{link.title} ({link.category})", expanded=False):
+            # Reorder & Delete row
+            c_up, c_down, c_del = st.columns([1, 1, 1])
+            with c_up:
+                if st.button("⬆️ Up", key=f"{context_key}_up_{link.id}_{idx}", disabled=(idx == 0), help="Move up in order"):
+                    current_links[idx], current_links[idx - 1] = current_links[idx - 1], current_links[idx]
+                    QuickLinksService.save_quicklinks(current_links)
+                    st.session_state.quicklinks = current_links
+                    st.rerun()
+            with c_down:
+                if st.button("⬇️ Down", key=f"{context_key}_down_{link.id}_{idx}", disabled=(idx == len(current_links) - 1), help="Move down in order"):
+                    current_links[idx], current_links[idx + 1] = current_links[idx + 1], current_links[idx]
+                    QuickLinksService.save_quicklinks(current_links)
+                    st.session_state.quicklinks = current_links
+                    st.rerun()
+            with c_del:
+                if st.button("🗑️ Delete", key=f"{context_key}_del_{link.id}_{idx}", help="Delete this link"):
+                    current_links.pop(idx)
+                    QuickLinksService.save_quicklinks(current_links)
+                    st.session_state.quicklinks = current_links
+                    st.success(f"Deleted {link.title}!")
+                    st.rerun()
+
+            st.markdown("---")
+            # Edit form
             with st.form(key=f"{context_key}_edit_form_{link.id}_{idx}"):
                 ed_title = st.text_input("Title / Label", value=link.title, key=f"{context_key}_t_{link.id}_{idx}", autocomplete="off")
-                ed_url = st.text_input("URL", value=link.url, key=f"{context_key}_u_{link.id}_{idx}", autocomplete="off")
-                c_icon, c_cat = st.columns([1, 2])
-                with c_icon:
-                    ed_icon = st.text_input("Icon", value=link.icon, max_chars=4, key=f"{context_key}_i_{link.id}_{idx}", autocomplete="off")
-                with c_cat:
-                    cat_options = ["Profile", "Portfolio", "Calendar", "Other"]
-                    c_idx = cat_options.index(link.category) if link.category in cat_options else 0
-                    ed_cat = st.selectbox("Category", cat_options, index=c_idx, key=f"{context_key}_c_{link.id}_{idx}")
+                ed_url = st.text_input("Value / URL / Text to Copy", value=link.url, key=f"{context_key}_u_{link.id}_{idx}", autocomplete="off")
+
+                # Category selection
+                cat_choices = cat_pool + ["+ New Category..."]
+                cat_idx = cat_pool.index(link.category) if link.category in cat_pool else 0
+                ed_cat = st.selectbox("Category", cat_choices, index=cat_idx, key=f"{context_key}_c_{link.id}_{idx}")
+                custom_cat = ""
+                if ed_cat == "+ New Category...":
+                    custom_cat = st.text_input("New Category Name", key=f"{context_key}_newcat_{link.id}_{idx}", autocomplete="off")
+
+                # Icon selection
+                curr_icon_val = link.icon if link.icon is not None else ""
+                icon_choices = icon_labels + ["✨ Custom Emoji..."]
+                if curr_icon_val in icon_val_to_label:
+                    sel_icon_idx = icon_choices.index(icon_val_to_label[curr_icon_val])
+                    custom_icon_default = ""
+                else:
+                    sel_icon_idx = icon_choices.index("✨ Custom Emoji...")
+                    custom_icon_default = curr_icon_val
+
+                ed_icon_choice = st.selectbox("Icon", icon_choices, index=sel_icon_idx, key=f"{context_key}_i_{link.id}_{idx}")
+                if ed_icon_choice == "✨ Custom Emoji...":
+                    custom_icon_val = st.text_input("Custom Emoji Character", value=custom_icon_default, max_chars=4, key=f"{context_key}_ce_{link.id}_{idx}", autocomplete="off")
+                    final_icon = custom_icon_val.strip()
+                else:
+                    final_icon = icon_label_to_val[ed_icon_choice]
 
                 btn_update = st.form_submit_button("💾 Update Link")
                 if btn_update:
                     if ed_title.strip() and ed_url.strip():
+                        chosen_category = custom_cat.strip() if ed_cat == "+ New Category..." and custom_cat.strip() else ed_cat
+                        if chosen_category == "+ New Category...":
+                            chosen_category = "Links"
                         current_links[idx] = QuickLink(
                             id=link.id,
                             title=ed_title.strip(),
                             url=ed_url.strip(),
-                            category=ed_cat,
-                            icon=ed_icon.strip() or "🔗"
+                            category=chosen_category,
+                            icon=final_icon
                         )
                         QuickLinksService.save_quicklinks(current_links)
                         st.session_state.quicklinks = current_links
                         st.success(f"Updated '{ed_title}'!")
                         st.rerun()
                     else:
-                        st.warning("Title and URL cannot be empty.")
-
-            if st.button("🗑️ Delete Link", key=f"{context_key}_del_{link.id}_{idx}"):
-                current_links.pop(idx)
-                QuickLinksService.save_quicklinks(current_links)
-                st.session_state.quicklinks = current_links
-                st.success(f"Deleted {link.title}!")
-                st.rerun()
+                        st.warning("Title and Value cannot be empty.")
 
     st.markdown("---")
     st.markdown("##### ➕ Add New Quicklink:")
     with st.form(key=f"{context_key}_add_form", clear_on_submit=True):
-        new_title = st.text_input("Title / Label", placeholder="e.g. Substack or Personal Blog", autocomplete="off")
-        new_url = st.text_input("URL", placeholder="https://...", autocomplete="off")
-        c_n_icon, c_n_cat = st.columns([1, 2])
-        with c_n_icon:
-            new_icon = st.text_input("Icon Emoji", value="🔗", max_chars=4, autocomplete="off")
-        with c_n_cat:
-            new_cat = st.selectbox("Category", ["Profile", "Portfolio", "Calendar", "Other"], key=f"{context_key}_new_cat")
+        new_title = st.text_input("Title / Label", placeholder="e.g. Portfolio or Work Phone", autocomplete="off")
+        new_url = st.text_input("Value / URL / Text to Copy", placeholder="e.g. https://... or 555-0199", autocomplete="off")
+
+        add_cat_choices = cat_pool + ["+ New Category..."]
+        add_cat = st.selectbox("Category", add_cat_choices, key=f"{context_key}_add_cat")
+        add_custom_cat = ""
+        if add_cat == "+ New Category...":
+            add_custom_cat = st.text_input("New Category Name", key=f"{context_key}_add_new_cat", autocomplete="off")
+
+        add_icon_choices = icon_labels + ["✨ Custom Emoji..."]
+        add_icon_sel = st.selectbox("Icon", add_icon_choices, index=1, key=f"{context_key}_add_icon")  # Default to "🔗 Generic Link"
+        add_custom_icon = ""
+        if add_icon_sel == "✨ Custom Emoji...":
+            add_custom_icon = st.text_input("Custom Emoji Character", max_chars=4, key=f"{context_key}_add_custom_icon", autocomplete="off")
 
         btn_add = st.form_submit_button("➕ Add Quicklink")
         if btn_add:
             if new_title.strip() and new_url.strip():
+                if add_cat == "+ New Category..." and add_custom_cat.strip():
+                    final_add_cat = add_custom_cat.strip()
+                elif add_cat == "+ New Category...":
+                    final_add_cat = "Links"
+                else:
+                    final_add_cat = add_cat
+
+                if add_icon_sel == "✨ Custom Emoji...":
+                    final_add_icon = add_custom_icon.strip()
+                else:
+                    final_add_icon = icon_label_to_val[add_icon_sel]
+
                 new_item = QuickLink(
                     title=new_title.strip(),
                     url=new_url.strip(),
-                    category=new_cat,
-                    icon=new_icon.strip() or "🔗"
+                    category=final_add_cat,
+                    icon=final_add_icon
                 )
                 current_links.append(new_item)
                 QuickLinksService.save_quicklinks(current_links)
@@ -299,7 +374,7 @@ def render_quicklinks_manager(context_key: str = "sb"):
                 st.success(f"Added '{new_item.title}'!")
                 st.rerun()
             else:
-                st.warning("Please provide both a Title and a URL.")
+                st.warning("Please provide both a Title and a Value / URL.")
 
     if st.button("🔄 Reset to Default Links", key=f"{context_key}_reset_btn", help="Resets your quicklinks list to the default setup"):
         defaults = QuickLinksService.get_default_quicklinks()
@@ -399,19 +474,54 @@ with st.sidebar.expander("📋 Fast Application Links", expanded=True):
     if not st.session_state.quicklinks:
         st.caption("No quicklinks configured.")
     else:
-        ql_items_html = ""
-        for q_link in st.session_state.quicklinks:
-            safe_url = json.dumps(q_link.url)
-            safe_title = q_link.title.replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-            safe_icon = q_link.icon or "🔗"
-            ql_items_html += f"""
-            <div class="ql-row">
-                <a href="{q_link.url}" target="_blank" class="ql-link" title="{safe_title}">
-                    <span>{safe_icon} {safe_title} ↗</span>
-                </a>
-                <button type="button" class="ql-btn" onclick='copyUrl({safe_url}, this, event)'>Copy</button>
-            </div>
-            """
+        # Group links by category, preserving category encounter order
+        cat_order = []
+        grouped = {}
+        for ql in st.session_state.quicklinks:
+            cat = ql.category or "Links"
+            if cat not in grouped:
+                cat_order.append(cat)
+                grouped[cat] = []
+            grouped[cat].append(ql)
+
+        ql_sections_html = ""
+        total_rows = 0
+
+        for cat in cat_order:
+            links_in_cat = grouped[cat]
+            rows_in_cat = (len(links_in_cat) + 1) // 2
+            total_rows += rows_in_cat
+
+            # Category icon heuristic
+            cat_lower = cat.lower()
+            if "link" in cat_lower or "web" in cat_lower or "profile" in cat_lower:
+                cat_icon = "🔗"
+            elif "sched" in cat_lower or "cal" in cat_lower:
+                cat_icon = "📅"
+            elif "contact" in cat_lower or "info" in cat_lower or "detail" in cat_lower:
+                cat_icon = "📇"
+            else:
+                cat_icon = "📁"
+
+            safe_cat_name = cat.replace("<", "&lt;").replace(">", "&gt;")
+            ql_sections_html += f'<div class="ql-category-title">{cat_icon} {safe_cat_name}</div>'
+            ql_sections_html += '<div class="ql-grid">'
+
+            for q_link in links_in_cat:
+                safe_url = json.dumps(q_link.url)
+                safe_title = q_link.title.replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+                safe_preview = q_link.url.replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+                if q_link.icon and q_link.icon.strip():
+                    btn_text = f"{q_link.icon.strip()} {safe_title}"
+                else:
+                    btn_text = safe_title
+
+                ql_sections_html += f"""
+                <button type="button" class="ql-btn" title="{safe_title}: {safe_preview}" onclick='copyUrl({safe_url}, this, event)'>{btn_text}</button>
+                """
+
+            ql_sections_html += '</div>'
 
         ql_full_html = f"""
         <!DOCTYPE html>
@@ -421,54 +531,61 @@ with st.sidebar.expander("📋 Fast Application Links", expanded=True):
         <style>
             body {{
                 margin: 0;
-                padding: 0;
+                padding: 2px 2px 6px 2px;
                 background: transparent;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
                 color: #F8FAFC;
+                overflow-x: hidden;
             }}
-            .ql-row {{
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 8px;
-                margin-bottom: 7px;
-                padding: 2px 0;
+            .ql-category-title {{
+                font-size: 0.74rem;
+                font-weight: 700;
+                color: #94A3B8;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin: 10px 0 5px 0;
+                padding-bottom: 3px;
+                border-bottom: 1px solid rgba(148, 163, 184, 0.2);
             }}
-            .ql-link {{
-                text-decoration: none;
-                color: #60A5FA;
-                font-weight: 600;
-                font-size: 0.88rem;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                flex: 1;
+            .ql-category-title:first-child {{
+                margin-top: 2px;
             }}
-            .ql-link:hover {{
-                color: #93C5FD;
-                text-decoration: underline;
+            .ql-grid {{
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 5px;
+                margin-bottom: 6px;
             }}
             .ql-btn {{
                 background: #1E293B;
-                color: #94A3B8;
-                border: 1px solid #475569;
-                border-radius: 5px;
-                padding: 3px 10px;
+                color: #E2E8F0;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 6px 6px;
                 font-size: 0.78rem;
                 font-weight: 600;
                 cursor: pointer;
-                flex-shrink: 0;
+                text-align: center;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
                 transition: all 0.15s ease;
+                user-select: none;
+                width: 100%;
+                box-sizing: border-box;
             }}
             .ql-btn:hover {{
                 background: #334155;
-                color: #F8FAFC;
-                border-color: #64748B;
+                color: #FFFFFF;
+                border-color: #60A5FA;
+            }}
+            .ql-btn:active {{
+                transform: scale(0.97);
             }}
         </style>
         </head>
         <body>
-            {ql_items_html}
+            {ql_sections_html}
             <script>
             function copyUrl(text, btn, e) {{
                 if (e) {{
@@ -499,26 +616,27 @@ with st.sidebar.expander("📋 Fast Application Links", expanded=True):
             }}
             function onSuccess(btn) {{
                 var orig = btn.innerText;
-                btn.innerText = 'Copied!';
+                btn.innerText = '✓ Copied!';
                 btn.style.background = '#065F46';
                 btn.style.borderColor = '#10B981';
                 btn.style.color = '#A7F3D0';
                 setTimeout(() => {{
                     btn.innerText = orig;
                     btn.style.background = '#1E293B';
-                    btn.style.borderColor = '#475569';
-                    btn.style.color = '#94A3B8';
-                }}, 1400);
+                    btn.style.borderColor = '#334155';
+                    btn.style.color = '#E2E8F0';
+                }}, 1200);
             }}
             </script>
         </body>
         </html>
         """
+        iframe_height = max(50, len(cat_order) * 28 + total_rows * 36 + 18)
         if hasattr(st, "iframe"):
-            st.iframe(ql_full_html, height=max(36, len(st.session_state.quicklinks) * 34 + 6))
+            st.iframe(ql_full_html, height=iframe_height)
         else:
             import streamlit.components.v1 as components
-            components.html(ql_full_html, height=max(36, len(st.session_state.quicklinks) * 34 + 6), scrolling=False)
+            components.html(ql_full_html, height=iframe_height, scrolling=False)
 
     bundle_text = QuickLinksService.format_clipboard_bundle(st.session_state.quicklinks)
     with st.expander("📋 Copy All Links (Bundle)", expanded=False):

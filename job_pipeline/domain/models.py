@@ -536,5 +536,6 @@ class QuickLink(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
     title: str
     url: str
-    category: str = "Profile"  # Profile, Portfolio, Calendar, Other
+    category: str = "Links"  # Links, Scheduling, Contact / Info, or custom
     icon: str = "🔗"
+

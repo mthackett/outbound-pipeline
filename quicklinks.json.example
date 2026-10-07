@@ -1,30 +1,44 @@
 [
   {
     "id": "link-linkedin",
-    "title": "LinkedIn Profile",
+    "title": "LinkedIn",
     "url": "https://linkedin.com/in/your-profile",
-    "category": "Profile",
+    "category": "Links",
     "icon": "💼"
   },
   {
     "id": "link-github",
-    "title": "GitHub Portfolio",
+    "title": "GitHub",
     "url": "https://github.com/your-username",
-    "category": "Portfolio",
+    "category": "Links",
     "icon": "💻"
   },
   {
     "id": "link-website",
-    "title": "Personal Website",
+    "title": "Portfolio",
     "url": "https://your-portfolio.com",
-    "category": "Portfolio",
+    "category": "Links",
     "icon": "🌐"
   },
   {
     "id": "link-calendly",
-    "title": "Scheduling / Calendly",
+    "title": "Scheduling",
     "url": "https://calendly.com/your-calendar",
-    "category": "Calendar",
+    "category": "Scheduling",
     "icon": "📅"
+  },
+  {
+    "id": "link-email",
+    "title": "Email",
+    "url": "candidate@example.com",
+    "category": "Contact / Info",
+    "icon": "✉️"
+  },
+  {
+    "id": "link-phone",
+    "title": "Phone",
+    "url": "555-123-4567",
+    "category": "Contact / Info",
+    "icon": "📞"
   }
 ]
