@@ -129,7 +129,8 @@ class GoogleSheetsAdapter(JobStoragePort):
                 "Employment Arrangement", "Worker Classification", "Pay Basis",
                 "Contract Duration", "Contract Value", "Staffing Agency",
                 "Client Company", "Extension Possible", "FTE Conversion",
-                "Salary Expectation", "Notes"
+                "Salary Expectation", "Notes",
+                "Role Intelligence Status", "Role Intelligence Link", "Role Intelligence Generated At"
             ]
             missing_cols = [col for col in required_cols if col not in headers]
             if missing_cols:
@@ -226,6 +227,14 @@ class GoogleSheetsAdapter(JobStoragePort):
                 queue("Extension Possible", "Yes" if job.extension_possible else "No")
             if job.fte_conversion_possible is not None:
                 queue("FTE Conversion", "Yes" if job.fte_conversion_possible else "No")
+            ri_status = getattr(job, "role_intelligence_status", None) or existing.get("Role Intelligence Status") or "Not Generated"
+            queue("Role Intelligence Status", ri_status)
+            ri_link = getattr(job, "role_intelligence_link", None) or existing.get("Role Intelligence Link") or ""
+            if ri_link:
+                queue("Role Intelligence Link", ri_link)
+            ri_gen_at = getattr(job, "role_intelligence_generated_at", None) or existing.get("Role Intelligence Generated At") or ""
+            if ri_gen_at:
+                queue("Role Intelligence Generated At", ri_gen_at)
 
             final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
             # Retrying persistence must not reset a later CRM stage/history.
@@ -414,7 +423,10 @@ class GoogleSheetsAdapter(JobStoragePort):
         job_title: Optional[str] = None,
         target_pay_range: Optional[str] = None,
         source_url: Optional[str] = None,
-        salary_expectation: Optional[str] = None
+        salary_expectation: Optional[str] = None,
+        role_intelligence_status: Optional[str] = None,
+        role_intelligence_link: Optional[str] = None,
+        role_intelligence_generated_at: Optional[str] = None
     ) -> bool:
         if not self.is_connected:
             return False
@@ -430,7 +442,8 @@ class GoogleSheetsAdapter(JobStoragePort):
                 "Employment Arrangement", "Worker Classification", "Pay Basis",
                 "Contract Duration", "Contract Value", "Staffing Agency",
                 "Client Company", "Extension Possible", "FTE Conversion",
-                "Salary Expectation", "Notes"
+                "Salary Expectation", "Notes",
+                "Role Intelligence Status", "Role Intelligence Link", "Role Intelligence Generated At"
             ]
             missing_cols = [col for col in needed_cols if col not in headers]
             if missing_cols:
@@ -466,6 +479,9 @@ class GoogleSheetsAdapter(JobStoragePort):
             pay_col = headers.index("Target Pay Range") + 1 if "Target Pay Range" in headers else None
             url_col = headers.index("Source URL") + 1 if "Source URL" in headers else None
             sal_exp_col = headers.index("Salary Expectation") + 1 if "Salary Expectation" in headers else None
+            ri_stat_col = headers.index("Role Intelligence Status") + 1 if "Role Intelligence Status" in headers else None
+            ri_link_col = headers.index("Role Intelligence Link") + 1 if "Role Intelligence Link" in headers else None
+            ri_gen_col = headers.index("Role Intelligence Generated At") + 1 if "Role Intelligence Generated At" in headers else None
 
             # Fast row lookup by Opportunity ID column values instead of downloading entire sheet
             id_column_values = ingest_ws.col_values(opp_id_col)
@@ -517,6 +533,12 @@ class GoogleSheetsAdapter(JobStoragePort):
                     cell_updates.append(gspread.Cell(row=idx, col=ext_col, value="Yes" if extension_possible else "No"))
                 if fte_conversion_possible is not None and fte_col:
                     cell_updates.append(gspread.Cell(row=idx, col=fte_col, value="Yes" if fte_conversion_possible else "No"))
+                if role_intelligence_status is not None and ri_stat_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=ri_stat_col, value=role_intelligence_status))
+                if role_intelligence_link is not None and ri_link_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=ri_link_col, value=role_intelligence_link))
+                if role_intelligence_generated_at is not None and ri_gen_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=ri_gen_col, value=role_intelligence_generated_at))
 
                 ingest_ws.update_cells(cell_updates)
                 if self._cached_opportunities is not None:
@@ -565,6 +587,15 @@ class GoogleSheetsAdapter(JobStoragePort):
                                 item["Extension Possible"] = "Yes" if extension_possible else "No"
                             if fte_conversion_possible is not None:
                                 item["FTE Conversion"] = "Yes" if fte_conversion_possible else "No"
+                            if role_intelligence_status is not None:
+                                item["Role Intelligence Status"] = role_intelligence_status
+                                item["role_intelligence_status"] = role_intelligence_status
+                            if role_intelligence_link is not None:
+                                item["Role Intelligence Link"] = role_intelligence_link
+                                item["role_intelligence_link"] = role_intelligence_link
+                            if role_intelligence_generated_at is not None:
+                                item["Role Intelligence Generated At"] = role_intelligence_generated_at
+                                item["role_intelligence_generated_at"] = role_intelligence_generated_at
                             break
                     self._opportunities_cache_time = time.time()
                 print(f"INFO: Successfully updated opportunity '{opportunity_id}' in Google Sheets.", flush=True)
@@ -625,6 +656,91 @@ class GoogleSheetsAdapter(JobStoragePort):
             return False
         except Exception as e:
             print(f"ERROR: Failed to update screening doc link in Google Sheets: {e}")
+            return False
+
+    def update_role_intelligence_status(
+        self,
+        opportunity_id: str,
+        status: str,
+        report_link: Optional[str] = None,
+        generated_at: Optional[str] = None,
+        tokens_used: Optional[int] = None
+    ) -> bool:
+        """Updates Role Intelligence status, report link, timestamp, and token usage."""
+        if not self.is_connected or not opportunity_id:
+            return False
+        try:
+            ingest_ws = self._spreadsheet.worksheet("Raw Ingestion")
+            if not self._headers_cache:
+                self._headers_cache = [h.strip() for h in ingest_ws.row_values(1)]
+            headers = list(self._headers_cache)
+
+            needed_cols = [
+                "Role Intelligence Status", "Role Intelligence Link", "Role Intelligence Generated At",
+                "Tokens", "Last Modified"
+            ]
+            missing_cols = [c for c in needed_cols if c not in headers]
+            if missing_cols:
+                needed_total = len(headers) + len(missing_cols)
+                if needed_total > ingest_ws.col_count:
+                    ingest_ws.add_cols(needed_total - ingest_ws.col_count + 5)
+                header_cells = [
+                    gspread.Cell(row=1, col=len(headers) + 1 + i, value=col_name)
+                    for i, col_name in enumerate(missing_cols)
+                ]
+                ingest_ws.update_cells(header_cells)
+                headers.extend(missing_cols)
+                self._headers_cache = headers
+
+            opp_id_col = headers.index("Opportunity ID") + 1 if "Opportunity ID" in headers else 10
+            status_col = headers.index("Role Intelligence Status") + 1 if "Role Intelligence Status" in headers else None
+            link_col = headers.index("Role Intelligence Link") + 1 if "Role Intelligence Link" in headers else None
+            gen_col = headers.index("Role Intelligence Generated At") + 1 if "Role Intelligence Generated At" in headers else None
+            tokens_col = headers.index("Tokens") + 1 if "Tokens" in headers else None
+            mod_col = headers.index("Last Modified") + 1 if "Last Modified" in headers else None
+
+            id_column_values = ingest_ws.col_values(opp_id_col)
+            target_row = None
+            for r_idx, val in enumerate(id_column_values[1:], start=2):
+                if str(val).strip() == opportunity_id:
+                    target_row = r_idx
+                    break
+
+            if target_row:
+                cell_updates = []
+                if status_col:
+                    cell_updates.append(gspread.Cell(row=target_row, col=status_col, value=status))
+                if report_link is not None and link_col:
+                    cell_updates.append(gspread.Cell(row=target_row, col=link_col, value=report_link))
+                if generated_at is not None and gen_col:
+                    cell_updates.append(gspread.Cell(row=target_row, col=gen_col, value=generated_at))
+                if tokens_used is not None and tokens_col:
+                    cell_updates.append(gspread.Cell(row=target_row, col=tokens_col, value=f"{tokens_used:,}"))
+                if mod_col:
+                    cell_updates.append(gspread.Cell(row=target_row, col=mod_col, value=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
+                if cell_updates:
+                    ingest_ws.update_cells(cell_updates)
+
+                if self._cached_opportunities is not None:
+                    for item in self._cached_opportunities:
+                        if str(item.get("Opportunity ID", "")).strip() == opportunity_id:
+                            item["Role Intelligence Status"] = status
+                            item["role_intelligence_status"] = status
+                            if report_link is not None:
+                                item["Role Intelligence Link"] = report_link
+                                item["role_intelligence_link"] = report_link
+                            if generated_at is not None:
+                                item["Role Intelligence Generated At"] = generated_at
+                                item["role_intelligence_generated_at"] = generated_at
+                            if tokens_used is not None:
+                                item["Tokens"] = f"{tokens_used:,}"
+                            break
+                    self._opportunities_cache_time = time.time()
+                return True
+            return False
+        except Exception as e:
+            print(f"ERROR: Failed to update Role Intelligence status in Google Sheets: {e}", flush=True)
             return False
 
     def fetch_all_opportunities(self, force_refresh: bool = False, require_fresh: bool = False) -> List[Dict[str, Any]]:

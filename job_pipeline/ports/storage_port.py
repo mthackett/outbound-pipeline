@@ -37,7 +37,10 @@ class JobStoragePort(ABC):
         job_title: Optional[str] = None,
         target_pay_range: Optional[str] = None,
         source_url: Optional[str] = None,
-        salary_expectation: Optional[str] = None
+        salary_expectation: Optional[str] = None,
+        role_intelligence_status: Optional[str] = None,
+        role_intelligence_link: Optional[str] = None,
+        role_intelligence_generated_at: Optional[str] = None
     ) -> bool:
         pass
 
@@ -76,6 +79,18 @@ class JobStoragePort(ABC):
     @abstractmethod
     def update_opportunity_screening_doc(self, opportunity_id: str, gdoc_link: str, qa_count: int) -> bool:
         """Updates screening doc link and QA count for an opportunity in the main tracker."""
+        pass
+
+    @abstractmethod
+    def update_role_intelligence_status(
+        self,
+        opportunity_id: str,
+        status: str,
+        report_link: Optional[str] = None,
+        generated_at: Optional[str] = None,
+        tokens_used: Optional[int] = None
+    ) -> bool:
+        """Updates Role Intelligence status, report link, and generation timestamp."""
         pass
 
 

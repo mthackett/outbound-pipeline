@@ -907,19 +907,23 @@ class IngestionRecoveryService:
         return matches[0] if matches else None
 
     @staticmethod
-    def require_completion(*, workspace_id: str, raw_jd_saved: bool, report_saved: bool,
-                           canonical_saved: bool) -> None:
+    def require_completion(*, workspace_id: str, raw_jd_saved: bool,
+                           canonical_saved: bool, report_saved: Optional[bool] = None,
+                           require_report: bool = False) -> None:
         """Required durable outputs; resume copies, shortcuts and Q&A docs are optional.
 
         Canonical persistence includes submitted screening answers and requirements.
         The caller may mark Drive complete only after this check succeeds.
+        Role Intelligence is decoupled from ingestion and optional unless require_report=True.
         """
-        missing = [name for name, ok in (
+        checks = [
             ("application workspace", bool(workspace_id)),
             ("raw job description", raw_jd_saved),
-            ("Role Intelligence report", report_saved),
             ("canonical opportunity, requirements and screening answers", canonical_saved),
-        ) if not ok]
+        ]
+        if require_report:
+            checks.append(("Role Intelligence report", bool(report_saved)))
+        missing = [name for name, ok in checks if not ok]
         if missing:
             raise RuntimeError("Ingestion is incomplete; persistence failed for: " + ", ".join(missing) + ". Resume processing to retry.")
 

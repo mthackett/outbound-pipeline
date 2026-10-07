@@ -41,7 +41,7 @@ def evaluate_single_job(
         drive_adapter = GoogleDriveAdapter()
         resume_repo = drive_adapter
         llm_adapter = OpenAIEngineAdapter()
-        
+
     # 0. Extract Telemetry with Configurable Job Signal Warnings
     warning_rules = PipelineConfigService.get_active_warning_rules()
     try:
@@ -99,28 +99,16 @@ def evaluate_single_job(
     resume_name = selected_resume.filename if selected_resume else "Default Resume"
     print(f"Matched Resume: {resume_name}")
 
-    resume_text = resume_repo.fetch_resume_text(selected_resume.doc_id) if selected_resume else ""
-
     # 3. Create Application Workspace in Drive
     workspace = drive_adapter.create_application_workspace(company_name, job_title)
     folder_id = workspace.get("folder_id")
     folder_link = workspace.get("folder_link")
     print(f"Drive Workspace Folder: {folder_link}")
 
-    # 4. Generate Role Intelligence Report
-    docx_filename = f"{company_name.replace(' ', '_')}_Role_Intelligence_Report.docx"
-    output_docx_path = f"output_reports/{docx_filename}"
-
-    report = llm_adapter.generate_role_intelligence_report(
-        job_data={"company": company_name, "title": job_title, "description": raw_jd},
-        resume_data={"resume_id": selected_resume.doc_id if selected_resume else "res-1", "text": resume_text},
-        output_docx_path=output_docx_path,
-        target_pay_bounds=fit_eval.pay_bounds.model_dump(),
-        demo_mode=demo_mode
-    )
-    # Save local raw JD backup file
+    # 4. Save local raw JD backup file
     raw_jd_path = f"output_reports/{company_name.replace(' ', '_')}_Raw_JD.txt"
     try:
+        os.makedirs("output_reports", exist_ok=True)
         with open(raw_jd_path, "w", encoding="utf-8") as f_jd:
             f_jd.write(raw_jd)
     except Exception:
@@ -135,12 +123,10 @@ def evaluate_single_job(
             drive_jd_link = jd_file_res.get("file_link") or jd_file_res.get("webViewLink")
         if selected_resume and selected_resume.doc_id:
             drive_adapter.export_resume_pdf(selected_resume.doc_id, folder_id, f"{resume_name}.pdf")
-        if os.path.exists(output_docx_path):
-            drive_adapter.upload_role_intelligence_report(folder_id, output_docx_path)
 
     # 6. Save Opportunity Record & Requirements to Google Sheets
     import uuid
-    tot_tokens = getattr(llm_adapter, "last_telemetry_tokens", 0) + getattr(llm_adapter, "last_report_tokens", 0)
+    tot_tokens = getattr(llm_adapter, "last_telemetry_tokens", 0)
     job_item = JobPosting(
         opportunity_id=str(uuid.uuid4()),
         company_name=company_name,
@@ -155,12 +141,19 @@ def evaluate_single_job(
         selected_resume_name=resume_name,
         drive_folder_link=folder_link,
         drive_jd_link=drive_jd_link,
-        tokens_used=tot_tokens
+        tokens_used=tot_tokens,
+        role_intelligence_status="Not Generated"
     )
+    try:
+        raw_jd_dir = Path("output_reports") / uuid.uuid5(uuid.NAMESPACE_URL, job_item.opportunity_id).hex
+        raw_jd_dir.mkdir(parents=True, exist_ok=True)
+        (raw_jd_dir / "Raw_JD.txt").write_text(raw_jd, encoding="utf-8")
+    except Exception:
+        pass
     storage_adapter.save_opportunity(job_item, fit_eval)
 
-    print("\nSUCCESS: Single Job Evaluation Completed & Saved to Google Sheets!")
-    return report
+    print("\nSUCCESS: Job ingestion complete. Role Intelligence deferred until employer interest or manual generation.")
+    return None
 
 
 def main():

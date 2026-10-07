@@ -103,27 +103,14 @@ def run_batch_pipeline(demo_mode: bool = False):
         job.selected_resume_name = resume_name
         print(f"  SELECTED RESUME: {resume_name}")
 
-        resume_text = resume_repo.fetch_resume_text(selected_resume.doc_id) if selected_resume else ""
-
         # 3. Create Google Drive Application Workspace
         workspace = drive_adapter.create_application_workspace(job.company_name, job.job_title)
         job.drive_folder_link = workspace.get("folder_link")
 
-        # 4. Generate Role Intelligence Report DOCX
-        docx_filename = f"{job.company_name.replace(' ', '_')}_Role_Intelligence_Report.docx"
-        output_docx_path = f"output_reports/{docx_filename}"
+        job.tokens_used = getattr(llm_adapter, "last_telemetry_tokens", 0)
+        job.role_intelligence_status = "Not Generated"
 
-        report = llm_adapter.generate_role_intelligence_report(
-            job_data={"company": job.company_name, "title": job.job_title, "description": job.raw_description},
-            resume_data={"resume_id": selected_resume.doc_id if selected_resume else "res-1", "text": resume_text},
-            output_docx_path=output_docx_path,
-            target_pay_bounds=fit_eval.pay_bounds.model_dump(),
-            demo_mode=demo_mode
-        )
-
-        job.tokens_used = getattr(llm_adapter, "last_telemetry_tokens", 0) + getattr(llm_adapter, "last_report_tokens", 0)
-
-        # 5. Upload Assets to Drive Workspace (Raw JD Document + PDF Resume + DOCX Report)
+        # 4. Upload Assets to Drive Workspace (Raw JD Document + PDF Resume)
         if workspace.get("folder_id"):
             jd_file_res = drive_adapter.upload_raw_job_description(
                 workspace["folder_id"],
@@ -135,12 +122,18 @@ def run_batch_pipeline(demo_mode: bool = False):
                 job.drive_jd_link = jd_file_res.get("file_link") or jd_file_res.get("webViewLink")
             if selected_resume and selected_resume.doc_id:
                 drive_adapter.export_resume_pdf(selected_resume.doc_id, workspace["folder_id"], f"{resume_name}.pdf")
-            drive_adapter.upload_role_intelligence_report(workspace["folder_id"], output_docx_path)
 
-        # 6. Save Opportunity to Google Sheets
+        try:
+            raw_jd_dir = Path("output_reports") / uuid.uuid5(uuid.NAMESPACE_URL, job.opportunity_id).hex
+            raw_jd_dir.mkdir(parents=True, exist_ok=True)
+            (raw_jd_dir / "Raw_JD.txt").write_text(job.raw_description or "", encoding="utf-8")
+        except Exception:
+            pass
+
+        # 5. Save Opportunity to Google Sheets
         storage_adapter.save_opportunity(job, fit_eval)
 
-    print("\nSUCCESS: Batch Pipeline Execution Completed!")
+    print("\nSUCCESS: Job ingestion complete. Role Intelligence deferred until employer interest or manual generation.")
 
 
 if __name__ == "__main__":

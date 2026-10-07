@@ -31,9 +31,15 @@ st.set_page_config(
 from job_pipeline.domain.models import (
     CandidateProfile, JobPosting, FitEvaluation, StakeholderContact, Touchpoint, ScreeningQA, QuickLink,
     SCREENING_CATEGORIES, SCREENING_ARCHETYPES, StoryBreadcrumb, CanonicalStory, StoryCueCard, ScreeningMatchResult,
-    APPLICATION_CATEGORIES, CATEGORY_ICONS, APPLICATION_STAGES,
+    APPLICATION_CATEGORIES, CATEGORY_ICONS, APPLICATION_STAGES, INTERVIEW_STAGES,
+    ROLE_INTELLIGENCE_STATUS_NOT_GENERATED, ROLE_INTELLIGENCE_STATUS_GENERATING,
+    ROLE_INTELLIGENCE_STATUS_GENERATED, ROLE_INTELLIGENCE_STATUS_FAILED,
     DEFAULT_APPLICATION_SOURCES, DEFAULT_PRIORITIES, PRIORITY_ICONS, SOURCE_ICONS,
     EMPLOYMENT_ARRANGEMENTS, PAY_BASES, WORKER_CLASSIFICATIONS
+)
+from job_pipeline.domain.role_intelligence import (
+    has_role_intelligence, get_role_intelligence_status, get_local_report_path,
+    should_trigger_role_intelligence, RoleIntelligenceService
 )
 from job_pipeline.domain.telemetry_service import TelemetryService
 from job_pipeline.adapters.primary.telemetry_ui import render_telemetry_warnings_manager, render_job_signals
@@ -44,7 +50,7 @@ from job_pipeline.domain.services import (
 )
 from job_pipeline.logger import (
     log_startup, log_action, log_config, log_sheets, log_drive,
-    log_llm, log_crm, log_info, log_warn, log_success, log_timed_action,
+    log_llm, log_crm, log_info, log_warn, log_error, log_success, log_timed_action,
     is_logging_enabled, set_logging_enabled
 )
 from job_pipeline.adapters.secondary.google_sheets import GoogleSheetsAdapter
@@ -596,6 +602,67 @@ if drive_auth_ctx and drive_auth_ctx.warning_message:
                     st.error(f"Authentication error: {oa_err}. You can also run 'python -m job_pipeline.setup_oauth' in terminal.")
 
 
+def trigger_role_intelligence_generation(opp_data: Dict[str, Any], show_toasts: bool = True) -> bool:
+    """Helper to run Role Intelligence for an existing opportunity, update storage, and handle errors."""
+    opp_id = str(opp_data.get("Opportunity ID") or opp_data.get("opportunity_id") or "").strip()
+    company = str(opp_data.get("Company Name") or opp_data.get("company_name") or "Target Company").strip()
+    title = str(opp_data.get("Job Title") or opp_data.get("job_title") or "Target Role").strip()
+    folder_link = (
+        opp_data.get("Drive Folder Link") or opp_data.get("drive_folder_link") or
+        opp_data.get("Folder Link") or opp_data.get("folder_link")
+    )
+    folder_id = opp_data.get("folder_id") or opp_data.get("Drive Folder ID") or opp_data.get("drive_folder_id")
+    raw_jd = opp_data.get("raw_description") or opp_data.get("description") or opp_data.get("raw_jd_text")
+    pay_bounds = {}
+    if "fit_eval" in opp_data and hasattr(opp_data["fit_eval"], "pay_bounds"):
+        pay_bounds = opp_data["fit_eval"].pay_bounds.model_dump()
+
+    try:
+        res = RoleIntelligenceService.generate_for_opportunity(
+            opportunity_id=opp_id,
+            company_name=company,
+            job_title=title,
+            raw_description=raw_jd,
+            drive_folder_id=folder_id,
+            drive_folder_link=folder_link,
+            target_pay_bounds=pay_bounds,
+            llm_adapter=llm_adapter,
+            drive_adapter=drive_adapter,
+            resume_repo=resume_repo,
+            storage_adapter=storage_adapter,
+            demo_mode=demo_mode
+        )
+        opp_data["Role Intelligence Status"] = ROLE_INTELLIGENCE_STATUS_GENERATED
+        opp_data["role_intelligence_status"] = ROLE_INTELLIGENCE_STATUS_GENERATED
+        if res.get("report_link"):
+            opp_data["Role Intelligence Link"] = res["report_link"]
+            opp_data["role_intelligence_link"] = res["report_link"]
+        if res.get("generated_at"):
+            opp_data["Role Intelligence Generated At"] = res["generated_at"]
+            opp_data["role_intelligence_generated_at"] = res["generated_at"]
+        if res.get("output_docx_path"):
+            opp_data["output_docx_path"] = res["output_docx_path"]
+        if show_toasts:
+            st.toast(f"✅ Role Intelligence generated for {company}!")
+        return True
+    except Exception as e:
+        log_error(f"Role Intelligence generation failed for {company}: {e}")
+        print(f"ERROR: Role Intelligence generation failed for '{company}': {e}", flush=True)
+        if storage_adapter and hasattr(storage_adapter, "update_role_intelligence_status") and opp_id:
+            try:
+                storage_adapter.update_role_intelligence_status(
+                    opportunity_id=opp_id,
+                    status=ROLE_INTELLIGENCE_STATUS_FAILED
+                )
+            except Exception:
+                pass
+        opp_data["Role Intelligence Status"] = ROLE_INTELLIGENCE_STATUS_FAILED
+        opp_data["role_intelligence_status"] = ROLE_INTELLIGENCE_STATUS_FAILED
+        if show_toasts:
+            st.error(f"Role Intelligence generation failed: {e}")
+        return False
+
+
 # Main Navigation: render only the active section to avoid eager rendering of every view
 SECTION_INGEST = "⚡ Fast Ingestion & Apply Kit"
 SECTION_CRM = "📊 Pipeline Tracker & CRM"
@@ -811,24 +878,8 @@ if active_section == SECTION_INGEST:
 
                 docx_filename = "Role_Intelligence_Report.docx"
                 output_docx_path = str(Path("output_reports") / uuid.uuid5(uuid.NAMESPACE_URL, opp_id).hex / docx_filename)
-                has_report_file = any("role_intelligence_report" in fname or "role intelligence report" in fname for fname in existing_names)
-
+                has_report_file = any("role_intelligence_report" in fname or "role intelligence report" in fname for fname in existing_names) or os.path.exists(output_docx_path)
                 report_saved = has_report_file
-                if not has_report_file:
-                    os.makedirs("output_reports", exist_ok=True)
-                    resume_text = resume_repo.fetch_resume_text(selected_resume.doc_id) if selected_resume else ""
-                    report = llm_adapter.generate_role_intelligence_report(
-                        job_data={"company": final_company, "title": final_title, "description": raw_jd_text},
-                        resume_data={"resume_id": selected_resume.doc_id if selected_resume else "res1", "text": resume_text},
-                        output_docx_path=output_docx_path,
-                        target_pay_bounds=fit_eval.pay_bounds.model_dump(),
-                        demo_mode=demo_mode
-                    )
-                    if not os.path.exists(output_docx_path):
-                        raise RuntimeError("Role Intelligence report was not generated; retry processing.")
-                    report_saved = bool(drive_adapter.upload_role_intelligence_report(folder_id, output_docx_path))
-                    if not report_saved:
-                        raise RuntimeError("Role Intelligence report upload failed; retry processing.")
 
                 has_shortcut = any("pipeline tracker" in fname for fname in existing_names)
                 if not has_shortcut and hasattr(drive_adapter, "_drive_svc") and drive_adapter._drive_svc:
@@ -1365,35 +1416,23 @@ if active_section == SECTION_INGEST:
                 if isinstance(res_sq, dict):
                     drive_screening_doc_link = res_sq.get("file_link")
 
-            # 6. Generate Role Intelligence Report (.docx)
-            docx_filename = "Role_Intelligence_Report.docx"
-            output_docx_path = os.path.join("output_reports", uuid.uuid5(uuid.NAMESPACE_URL, opp_id).hex, docx_filename)
-            os.makedirs("output_reports", exist_ok=True)
-
-            resume_text = resume_repo.fetch_resume_text(selected_resume.doc_id) if selected_resume else ""
-            log_llm(f"🧠 Generating Role Intelligence Report (.docx) for '{final_company}' via OpenAI...")
-            report = llm_adapter.generate_role_intelligence_report(
-                job_data={"company": final_company, "title": final_title, "description": jd_text},
-                resume_data={"resume_id": selected_resume.doc_id if selected_resume else "res1", "text": resume_text},
-                output_docx_path=output_docx_path,
-                target_pay_bounds=fit_eval.pay_bounds.model_dump(),
-                demo_mode=demo_mode
-            )
-
-            # Upload Resume PDF and DOCX Report to Folder
-            report_saved = False
+            # 6. Upload Resume PDF to Google Drive workspace (Role Intelligence generation is deferred)
             if folder_id:
-                log_drive("📤 Uploading resume PDF and Word report to Google Drive workspace...")
+                log_drive("📤 Uploading resume PDF to Google Drive workspace...")
                 if selected_resume and selected_resume.doc_id:
                     drive_adapter.export_resume_pdf(selected_resume.doc_id, folder_id, f"{resume_name}.pdf")
-                if os.path.exists(output_docx_path):
-                    report_saved = bool(drive_adapter.upload_role_intelligence_report(folder_id, output_docx_path))
-            if not report_saved:
-                raise RuntimeError("The Role Intelligence report could not be saved to the workspace.")
+
+            # Save raw JD text locally for deferred Role Intelligence generation
+            try:
+                raw_jd_dir = Path("output_reports") / uuid.uuid5(uuid.NAMESPACE_URL, opp_id).hex
+                raw_jd_dir.mkdir(parents=True, exist_ok=True)
+                (raw_jd_dir / "Raw_JD.txt").write_text(jd_text, encoding="utf-8")
+            except Exception:
+                pass
 
             # 7. Save Opportunity to Google Sheets (Raw Ingestion & Screening QA)
             log_sheets(f"💾 Saving opportunity '{final_company} - {final_title}' to Google Sheets ('Raw Ingestion')...")
-            tot_tokens = getattr(llm_adapter, "last_telemetry_tokens", 0) + getattr(llm_adapter, "last_report_tokens", 0)
+            tot_tokens = getattr(llm_adapter, "last_telemetry_tokens", 0)
             final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
             now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             job_posting = JobPosting(
@@ -1434,17 +1473,20 @@ if active_section == SECTION_INGEST:
                 drive_jd_link=drive_jd_link,
                 drive_screening_doc_link=drive_screening_doc_link,
                 screening_qa=screening_qa_list,
-                tokens_used=tot_tokens
+                tokens_used=tot_tokens,
+                role_intelligence_status="Not Generated"
             )
             canonical_saved = storage_adapter.save_opportunity(job_posting, fit_eval)
             IngestionRecoveryService.require_completion(
                 workspace_id=folder_id, raw_jd_saved=bool(drive_jd_link),
-                report_saved=report_saved, canonical_saved=canonical_saved,
+                canonical_saved=canonical_saved,
             )
 
             # Mark workspace complete in Drive now that canonical opportunity record and artifacts are saved
             if not drive_adapter.mark_workspace_complete(folder_id):
                 raise RuntimeError("Records were saved, but the workspace completion marker failed. Resume to retry.")
+            log_success("Job ingestion complete. Role Intelligence deferred until employer interest or manual generation.")
+            print("SUCCESS: Job ingestion complete. Role Intelligence deferred until employer interest or manual generation.", flush=True)
             st.session_state.refresh_incomplete_workspaces = True
             st.session_state.pop("crm_cached_opportunities", None)
             st.session_state.pop("crm_cached_qa", None)
@@ -1489,8 +1531,9 @@ if active_section == SECTION_INGEST:
                 "drive_jd_link": drive_jd_link,
                 "drive_screening_doc_link": drive_screening_doc_link,
                 "screening_qa": screening_qa_list,
-                "output_docx_path": output_docx_path,
-                "docx_filename": docx_filename,
+                "output_docx_path": None,
+                "docx_filename": "Role_Intelligence_Report.docx",
+                "role_intelligence_status": "Not Generated",
                 "req_skills": req_skills,
                 "pref_skills": pref_skills,
                 "pain_points": pain_points,
@@ -1920,15 +1963,27 @@ if active_section == SECTION_INGEST:
                     use_container_width=True,
                     help="Opens the Screening Questions Google Doc in Drive"
                 )
-            elif os.path.exists(ev["output_docx_path"]):
+            elif ev.get("role_intelligence_link") and str(ev["role_intelligence_link"]).startswith("http"):
+                st.link_button(
+                    "📄 Role Intelligence Doc",
+                    ev["role_intelligence_link"],
+                    use_container_width=True,
+                    help="Opens the Role Intelligence Report in Drive"
+                )
+            elif ev.get("output_docx_path") and os.path.exists(ev["output_docx_path"]):
                 with open(ev["output_docx_path"], "rb") as df:
                     st.download_button(
                         label="📥 Download .docx Brief",
                         data=df,
-                        file_name=ev["docx_filename"],
+                        file_name=ev.get("docx_filename", "Role_Intelligence_Report.docx"),
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         use_container_width=True
                     )
+            else:
+                if st.button("🧠 Generate Role Intelligence", key="btn_apply_kit_gen_ri", use_container_width=True):
+                    with st.spinner("Generating Role Intelligence..."):
+                        trigger_role_intelligence_generation(ev, show_toasts=True)
+                        st.rerun()
 
         # Target Compensation Negotiation Box
         pb = ev["fit_eval"].pay_bounds
@@ -2610,6 +2665,54 @@ if active_section == SECTION_CRM:
                     if screening_doc:
                         st.markdown(f"[📝 Open Screening Questions Doc]({screening_doc})")
 
+                    # Role Intelligence Status & On-demand Actions
+                    ri_status = get_role_intelligence_status(opp)
+                    ri_link = opp.get("Role Intelligence Link") or opp.get("role_intelligence_link")
+                    local_docx = get_local_report_path(opp_id, comp)
+                    has_local_docx = local_docx.exists()
+
+                    st.markdown("---")
+                    st.markdown("###### 🧠 Role Intelligence")
+
+                    if ri_status == ROLE_INTELLIGENCE_STATUS_GENERATED or (has_local_docx and ri_status != ROLE_INTELLIGENCE_STATUS_FAILED):
+                        badge = '<span style="background:#065F46; color:#A7F3D0; padding:2px 8px; border-radius:4px; font-size:0.8rem; font-weight:600;">Generated</span>'
+                        st.markdown(f"**Status:** {badge}", unsafe_allow_html=True)
+                        if ri_link and str(ri_link).startswith("http"):
+                            st.markdown(f"[📄 Open Role Intelligence Report (Drive)]({ri_link})")
+                        elif has_local_docx:
+                            with open(local_docx, "rb") as f_docx:
+                                st.download_button(
+                                    "📥 Download Role Intelligence (.docx)",
+                                    data=f_docx,
+                                    file_name=f"{comp.replace(' ', '_')}_Role_Intelligence_Report.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    key=f"dl_ri_docx_{opp_id}_{idx}",
+                                    use_container_width=True
+                                )
+                        if st.button("🔄 Regenerate Role Intelligence", key=f"btn_regen_ri_{opp_id}_{idx}", use_container_width=True):
+                            with st.spinner(f"Regenerating Role Intelligence for {comp}..."):
+                                trigger_role_intelligence_generation(opp, show_toasts=True)
+                                st.session_state.pop("crm_cached_opportunities", None)
+                                st.rerun()
+                    elif ri_status == ROLE_INTELLIGENCE_STATUS_FAILED:
+                        badge = '<span style="background:#7F1D1D; color:#FCA5A5; padding:2px 8px; border-radius:4px; font-size:0.8rem; font-weight:600;">Failed</span>'
+                        st.markdown(f"**Status:** {badge}", unsafe_allow_html=True)
+                        st.caption("Generation failed during stage transition or request. Status was preserved.")
+                        if st.button("🔄 Retry Role Intelligence", key=f"btn_retry_ri_{opp_id}_{idx}", use_container_width=True):
+                            with st.spinner(f"Retrying Role Intelligence for {comp}..."):
+                                trigger_role_intelligence_generation(opp, show_toasts=True)
+                                st.session_state.pop("crm_cached_opportunities", None)
+                                st.rerun()
+                    else:
+                        badge = '<span style="background:#1F2937; color:#9CA3AF; padding:2px 8px; border-radius:4px; font-size:0.8rem; font-weight:600;">Not Generated</span>'
+                        st.markdown(f"**Status:** {badge}", unsafe_allow_html=True)
+                        st.caption("Deferred until interview stage or manual request.")
+                        if st.button("🧠 Generate Role Intelligence", key=f"btn_gen_ri_{opp_id}_{idx}", use_container_width=True):
+                            with st.spinner(f"Generating Role Intelligence for {comp}..."):
+                                trigger_role_intelligence_generation(opp, show_toasts=True)
+                                st.session_state.pop("crm_cached_opportunities", None)
+                                st.rerun()
+
                     # Extracted Requirements from Requirements Extraction worksheet
                     req_data = opp_req_map.get(str(opp_id).strip())
                     if req_data:
@@ -2926,7 +3029,16 @@ if active_section == SECTION_CRM:
                                     opp["fte_conversion_possible"] = new_fte_val
                                     opp["Stage History"] = updated_stage_hist
                                     opp["stage_history"] = updated_stage_hist
-                                    st.session_state["crm_flash_message"] = f"Successfully updated **{final_comp}** — {final_title} ({new_stage})!"
+
+                                    if should_trigger_role_intelligence(curr_status, new_stage, opp):
+                                        log_info(f"Automatic Role Intelligence trigger activated for '{final_comp}' on transition '{curr_status}' -> '{new_stage}'.")
+                                        ri_success = trigger_role_intelligence_generation(opp, show_toasts=False)
+                                        if ri_success:
+                                            st.session_state["crm_flash_message"] = f"Successfully updated **{final_comp}** to **{new_stage}** and generated Role Intelligence report!"
+                                        else:
+                                            st.session_state["crm_flash_message"] = f"Stage updated to **{new_stage}** successfully. Role Intelligence generation failed (retry available on card)."
+                                    else:
+                                        st.session_state["crm_flash_message"] = f"Successfully updated **{final_comp}** — {final_title} ({new_stage})!"
                                     st.rerun()
                                 else:
                                     print(f"ERROR: [CRM Form Submit] Failed to update '{final_comp}' in Google Sheets.", flush=True)
@@ -2970,7 +3082,16 @@ if active_section == SECTION_CRM:
                                 opp["fte_conversion_possible"] = new_fte_val
                                 opp["Stage History"] = updated_stage_hist
                                 opp["stage_history"] = updated_stage_hist
-                                st.session_state["crm_flash_message"] = f"Simulated update for **{final_comp}** — {final_title} (Demo Mode)."
+
+                                if should_trigger_role_intelligence(curr_status, new_stage, opp):
+                                    log_info(f"Automatic Role Intelligence trigger activated for '{final_comp}' on transition '{curr_status}' -> '{new_stage}'.")
+                                    ri_success = trigger_role_intelligence_generation(opp, show_toasts=False)
+                                    if ri_success:
+                                        st.session_state["crm_flash_message"] = f"Simulated update for **{final_comp}** to **{new_stage}** and generated Role Intelligence report!"
+                                    else:
+                                        st.session_state["crm_flash_message"] = f"Simulated update for **{final_comp}** to **{new_stage}**. Role Intelligence generation failed."
+                                else:
+                                    st.session_state["crm_flash_message"] = f"Simulated update for **{final_comp}** — {final_title} (Demo Mode)."
                                 st.rerun()
 
                 # Section: Targeted Behavioral Story Cue Cards for this Role

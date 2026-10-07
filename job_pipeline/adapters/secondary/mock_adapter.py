@@ -96,7 +96,10 @@ class MockJobStorageAdapter(JobStoragePort):
         job_title: Optional[str] = None,
         target_pay_range: Optional[str] = None,
         source_url: Optional[str] = None,
-        salary_expectation: Optional[str] = None
+        salary_expectation: Optional[str] = None,
+        role_intelligence_status: Optional[str] = None,
+        role_intelligence_link: Optional[str] = None,
+        role_intelligence_generated_at: Optional[str] = None
     ) -> bool:
         for item in self.saved_jobs:
             j = item["job"]
@@ -142,6 +145,15 @@ class MockJobStorageAdapter(JobStoragePort):
                 if notes is not None:
                     j.notes = notes
                     item["notes"] = notes
+                if role_intelligence_status is not None:
+                    j.role_intelligence_status = role_intelligence_status
+                    item["role_intelligence_status"] = role_intelligence_status
+                if role_intelligence_link is not None:
+                    j.role_intelligence_link = role_intelligence_link
+                    item["role_intelligence_link"] = role_intelligence_link
+                if role_intelligence_generated_at is not None:
+                    j.role_intelligence_generated_at = role_intelligence_generated_at
+                    item["role_intelligence_generated_at"] = role_intelligence_generated_at
                 return True
         return True
 
@@ -184,7 +196,13 @@ class MockJobStorageAdapter(JobStoragePort):
                 "Target Pay Range": fe.pay_bounds.display_range,
                 "Fit Warning": fe.reasoning,
                 "Job Signals": TelemetryService.serialize_display_findings(fe),
-                "Drive Folder Link": j.drive_folder_link or "https://drive.google.com/mock_folder"
+                "Drive Folder Link": j.drive_folder_link or "https://drive.google.com/mock_folder",
+                "Role Intelligence Status": getattr(j, "role_intelligence_status", None) or "Not Generated",
+                "role_intelligence_status": getattr(j, "role_intelligence_status", None) or "Not Generated",
+                "Role Intelligence Link": getattr(j, "role_intelligence_link", None) or "",
+                "role_intelligence_link": getattr(j, "role_intelligence_link", None) or "",
+                "Role Intelligence Generated At": getattr(j, "role_intelligence_generated_at", None) or "",
+                "role_intelligence_generated_at": getattr(j, "role_intelligence_generated_at", None) or ""
             })
         return results
 
@@ -231,6 +249,30 @@ class MockJobStorageAdapter(JobStoragePort):
             if opp.get("Opportunity ID") == opportunity_id:
                 opp["Screening Doc Link"] = gdoc_link
                 opp["Screening QA Count"] = qa_count
+                return True
+        return True
+
+    def update_role_intelligence_status(
+        self,
+        opportunity_id: str,
+        status: str,
+        report_link: Optional[str] = None,
+        generated_at: Optional[str] = None,
+        tokens_used: Optional[int] = None
+    ) -> bool:
+        for item in self.saved_jobs:
+            j = item["job"]
+            if j.opportunity_id == opportunity_id:
+                j.role_intelligence_status = status
+                item["role_intelligence_status"] = status
+                if report_link is not None:
+                    j.role_intelligence_link = report_link
+                    item["role_intelligence_link"] = report_link
+                if generated_at is not None:
+                    j.role_intelligence_generated_at = generated_at
+                    item["role_intelligence_generated_at"] = generated_at
+                if tokens_used is not None:
+                    j.tokens_used = tokens_used
                 return True
         return True
 

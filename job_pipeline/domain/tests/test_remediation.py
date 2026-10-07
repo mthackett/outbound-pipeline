@@ -145,15 +145,25 @@ class TestCompletionGating(unittest.TestCase):
             canonical_saved=True,
         )
 
-    def test_missing_report_prevents_completion(self):
+    def test_missing_report_prevents_completion_when_required(self):
         with self.assertRaises(RuntimeError) as ctx:
             IngestionRecoveryService.require_completion(
                 workspace_id="folder_x",
                 raw_jd_saved=True,
                 report_saved=False,
                 canonical_saved=True,
+                require_report=True,
             )
         self.assertIn("Role Intelligence report", str(ctx.exception))
+
+    def test_missing_report_by_default_allows_completion(self):
+        # A newly ingested application can exist and complete with no report
+        IngestionRecoveryService.require_completion(
+            workspace_id="folder_x",
+            raw_jd_saved=True,
+            report_saved=False,
+            canonical_saved=True,
+        )
 
     def test_missing_workspace_prevents_completion(self):
         with self.assertRaises(RuntimeError) as ctx:
@@ -635,7 +645,8 @@ class TestRawJDPersistencePolicy(unittest.TestCase, _WorkspaceHelper):
             "Employment Arrangement", "Worker Classification", "Pay Basis",
             "Contract Duration", "Contract Value", "Staffing Agency",
             "Client Company", "Extension Possible", "FTE Conversion",
-            "Salary Expectation", "Notes"
+            "Salary Expectation", "Notes",
+            "Role Intelligence Status", "Role Intelligence Link", "Role Intelligence Generated At"
         ]
         with patch.object(GoogleSheetsAdapter, "_init_connection"):
             adapter = GoogleSheetsAdapter(spreadsheet_id="mock_sheet_id")

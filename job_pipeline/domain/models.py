@@ -278,6 +278,19 @@ APPLICATION_STAGES: List[str] = [
     "Archived / Rejected"
 ]
 
+INTERVIEW_STAGES: List[str] = [
+    "Recruiter Screen",
+    "Hiring Manager",
+    "Technical Screen",
+    "Final Round",
+    "Offer"
+]
+
+ROLE_INTELLIGENCE_STATUS_NOT_GENERATED: str = "Not Generated"
+ROLE_INTELLIGENCE_STATUS_GENERATING: str = "Generating"
+ROLE_INTELLIGENCE_STATUS_GENERATED: str = "Generated"
+ROLE_INTELLIGENCE_STATUS_FAILED: str = "Failed"
+
 DEFAULT_APPLICATION_SOURCES: List[str] = [
     "LinkedIn",
     "Indeed",
@@ -462,6 +475,9 @@ class JobPosting(BaseModel):
     telemetry_benefits: List[Union[Dict[str, Any], str]] = Field(default_factory=list)
     row_index: Optional[int] = None
     tokens_used: int = 0
+    role_intelligence_status: Optional[str] = "Not Generated"
+    role_intelligence_link: Optional[str] = None
+    role_intelligence_generated_at: Optional[str] = None
 
 
 class CandidateProfile(BaseModel):
