@@ -793,11 +793,10 @@ def trigger_role_intelligence_generation(opp_data: Dict[str, Any], show_toasts: 
 SECTION_INGEST = "⚡ Fast Ingestion & Apply Kit"
 SECTION_CRM = "📊 Pipeline Tracker & CRM"
 SECTION_STORIES = "📖 Global Story Bank & Interview Map"
-SECTION_FUTURE = "🔮 Integrations & Future Modules"
 
 active_section = st.radio(
     "Main Navigation",
-    [SECTION_INGEST, SECTION_CRM, SECTION_STORIES, SECTION_FUTURE],
+    [SECTION_INGEST, SECTION_CRM, SECTION_STORIES],
     index=0,
     horizontal=True,
     key="active_main_section",
@@ -1992,7 +1991,7 @@ if active_section == SECTION_INGEST:
 
         # Primary Action Button
         if not st.session_state.pending_job_signals_gate:
-            if st.button("⚡ Process Job & Generate Apply Kit", type="primary", use_container_width=True):
+            if st.button("⚡ Process Job", type="primary", use_container_width=True):
                 if not jd_text_input or len(jd_text_input.strip()) < 20:
                     st.error("Please paste a valid job description (at least 20 characters).")
                 else:
@@ -3959,56 +3958,6 @@ if active_section == SECTION_STORIES:
                                 st.rerun()
 
 
-# =====================================================================
-# SECTION 4: INTEGRATIONS & EXPANSION (PLACEHOLDERS & ROADMAP)
-# =====================================================================
-if active_section == SECTION_FUTURE:
-    st.subheader("🔮 Planned Integrations & Future Modules")
-    st.caption("These secondary integrations have clean architectural adapters built and are ready to be plugged in when you're ready.")
-
-    col_int1, col_int2 = st.columns(2)
-
-    with col_int1:
-        st.markdown("""
-        <div class="metric-card">
-            <h3 style="color:#60A5FA; margin-top:0;">📞 Twilio Phone Screen Assistant</h3>
-            <p><b>Status:</b> 🟡 Simulation Mode (Adapter Staged)</p>
-            <p><b>Purpose:</b> Sends real-time SMS alerts with 10-second recall cards before recruiter phone calls and simulates call transcript capture.</p>
-            <p><b>Activation Requirements:</b></p>
-            <ul>
-                <li><code>TWILIO_ACCOUNT_SID</code></li>
-                <li><code>TWILIO_AUTH_TOKEN</code></li>
-                <li><code>TWILIO_PHONE_NUMBER</code></li>
-            </ul>
-            <p><i>Code adapter ready at: <code>job_pipeline/adapters/secondary/twilio_adapter.py</code></i></p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col_int2:
-        st.markdown("""
-        <div class="metric-card">
-            <h3 style="color:#34D399; margin-top:0;">✉️ Inbound Email & Job Alert Ingestion</h3>
-            <p><b>Status:</b> 🟡 Adapter Prototype Staged</p>
-            <p><b>Purpose:</b> Connects to your email to auto-extract incoming job alert emails from LinkedIn, Indeed, and ZipRecruiter directly into your pipeline.</p>
-            <p><b>Activation Requirements:</b></p>
-            <ul>
-                <li>Google Workspace Gmail API or IMAP Credentials</li>
-                <li><code>GMAIL_CLIENT_SECRET</code> or App Password</li>
-            </ul>
-            <p><i>Code adapter ready at: <code>job_pipeline/adapters/secondary/gmail_adapter.py</code></i></p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("---")
-    st.markdown("#### ⚙️ Candidate Guardrails & Scoring Profile")
-    prof = st.session_state.profile
-    col_p1, col_p2 = st.columns(2)
-    with col_p1:
-        st.write(f"**Target Compensation Floor**: ${prof.minimum_compensation_floor:,.0f}")
-        st.write(f"**Target Pay Percentiles**: {int(prof.target_pay_percentiles[0]*100)}% – {int(prof.target_pay_percentiles[1]*100)}%")
-        st.write(f"**Dealbreaker Tech Stack**: {', '.join(prof.dealbreaker_skills)}")
-    with col_p2:
-        st.write(f"**Core Strengths**: {', '.join(prof.core_strengths)}")
 
 # Startup completion notice
 if st.session_state.get("app_session_started") and not st.session_state.get("app_render_completed"):
