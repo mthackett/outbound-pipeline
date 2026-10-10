@@ -87,6 +87,7 @@ def render_rule_editor(key, existing=None):
     return False
 
 
+@st.fragment
 def render_telemetry_warnings_manager(key_prefix="sb"):
     rules = PipelineConfigService.get_telemetry_rules()
     active = sum(r.get("enabled", True) for r in rules)

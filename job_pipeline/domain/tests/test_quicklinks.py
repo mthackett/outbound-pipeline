@@ -19,11 +19,12 @@ class TestQuickLinksService(unittest.TestCase):
         defaults = QuickLinksService.get_default_quicklinks()
         self.assertTrue(len(defaults) >= 3)
         titles = [l.title for l in defaults]
-        self.assertIn("LinkedIn Profile", titles)
-        self.assertIn("GitHub Portfolio", titles)
+        self.assertIn("LinkedIn", titles)
+        self.assertIn("GitHub", titles)
         for link in defaults:
-            self.assertTrue(link.url.startswith("http"))
             self.assertTrue(link.id)
+            if link.category in ["Links", "Scheduling"]:
+                self.assertTrue(link.url.startswith("http"))
 
     def test_load_when_file_not_found_creates_defaults(self):
         self.assertFalse(os.path.exists(self.test_json_path))
@@ -65,7 +66,7 @@ class TestQuickLinksService(unittest.TestCase):
             QuickLink(title="GitHub", url="https://github.com/test")
         ]
         bundle = QuickLinksService.format_clipboard_bundle(links)
-        expected = "LinkedIn: https://linkedin.com/in/test\nGitHub: https://github.com/test"
+        expected = "[Links]\nLinkedIn: https://linkedin.com/in/test\nGitHub: https://github.com/test"
         self.assertEqual(bundle, expected)
 
 

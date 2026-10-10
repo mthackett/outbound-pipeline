@@ -1109,3 +1109,172 @@ class IngestionRecoveryService:
                     return line0, line1
 
         return "Target Company", "Target Role"
+
+
+class PipelineSearchPaginationService:
+    """Pure domain service for Pipeline Tracker search filtering, sorting, and pagination state."""
+
+    PAGE_SIZE_OPTIONS = [5, 10, 15, 25, 50]
+    DEFAULT_PAGE_SIZE = 5
+
+    @staticmethod
+    def filter_opportunities(
+        opportunities: List[Dict[str, Any]],
+        search_query: str = "",
+        arrangement_filter: str = "All Types",
+        category_filter: str = "All Categories",
+        priority_filter: str = "All Priorities",
+        source_filter: str = "All Sources",
+        application_categories: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        app_cats = application_categories or ["Target", "Stretch", "Opportunistic", "Practice", "Fallback"]
+        filtered = list(opportunities)
+
+        if arrangement_filter and arrangement_filter != "All Types":
+            filtered = [
+                o for o in filtered
+                if str(o.get("Employment Arrangement") or o.get("employment_arrangement") or "").strip() == arrangement_filter
+            ]
+
+        if category_filter and category_filter != "All Categories":
+            if category_filter == "Unassigned":
+                filtered = [
+                    o for o in filtered
+                    if str(o.get("Category", "")).strip() not in app_cats
+                ]
+            else:
+                filtered = [
+                    o for o in filtered
+                    if str(o.get("Category", "")).strip() == category_filter
+                ]
+
+        if priority_filter and priority_filter != "All Priorities":
+            if priority_filter == "Unspecified":
+                filtered = [
+                    o for o in filtered
+                    if not o.get("Priority") or o.get("Priority") == "Not Specified"
+                ]
+            else:
+                filtered = [
+                    o for o in filtered
+                    if str(o.get("Priority", "")).strip() == priority_filter
+                ]
+
+        if source_filter and source_filter != "All Sources":
+            if source_filter == "Unspecified":
+                filtered = [
+                    o for o in filtered
+                    if not o.get("Applied Via") or o.get("Applied Via") == "Not Specified"
+                ]
+            else:
+                filtered = [
+                    o for o in filtered
+                    if str(o.get("Applied Via", "")).strip() == source_filter
+                ]
+
+        if search_query and search_query.strip():
+            sq = search_query.strip().lower()
+            filtered = [
+                o for o in filtered
+                if sq in str(o.get("Company Name", "")).lower()
+                or sq in str(o.get("Job Title", "")).lower()
+                or sq in str(o.get("Status", "")).lower()
+                or sq in str(o.get("Notes", "")).lower()
+                or sq in str(o.get("Category", "")).lower()
+                or sq in str(o.get("Priority", "")).lower()
+                or sq in str(o.get("Applied Via", "")).lower()
+                or sq in str(o.get("Employment Arrangement", "")).lower()
+                or sq in str(o.get("Worker Classification", "")).lower()
+                or sq in str(o.get("Staffing Agency", "")).lower()
+                or sq in str(o.get("Client Company", "")).lower()
+            ]
+
+        return filtered
+
+    @staticmethod
+    def calculate_pagination(
+        total_items: int,
+        items_per_page: int = 5,
+        current_page: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Calculates total pages, safe clamped page, start offset, and end offset.
+        Deterministic, 1-indexed page, 0-indexed offsets.
+        """
+        items_per_page = max(1, items_per_page)
+        if total_items <= 0:
+            return {
+                "total_items": 0,
+                "total_pages": 1,
+                "current_page": 1,
+                "start_offset": 0,
+                "end_offset": 0
+            }
+
+        import math
+        total_pages = max(1, math.ceil(total_items / items_per_page))
+        safe_page = min(max(1, current_page), total_pages)
+        start_offset = (safe_page - 1) * items_per_page
+        end_offset = min(start_offset + items_per_page, total_items)
+        return {
+            "total_items": total_items,
+            "total_pages": total_pages,
+            "current_page": safe_page,
+            "start_offset": start_offset,
+            "end_offset": end_offset
+        }
+
+    @staticmethod
+    def paginate_records(
+        records: List[Dict[str, Any]],
+        items_per_page: int = 5,
+        current_page: int = 1,
+        reverse: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Orders records (newest first by default) and returns paginated slice with metadata.
+        """
+        ordered = list(reversed(records)) if reverse else list(records)
+        pagination = PipelineSearchPaginationService.calculate_pagination(
+            total_items=len(ordered),
+            items_per_page=items_per_page,
+            current_page=current_page
+        )
+        paginated_items = ordered[pagination["start_offset"]:pagination["end_offset"]]
+        return {
+            **pagination,
+            "items": paginated_items,
+            "ordered_records": ordered
+        }
+
+    @staticmethod
+    def resolve_page_on_filter_change(
+        previous_filter_tuple: Optional[tuple],
+        current_filter_tuple: tuple,
+        current_page: int
+    ) -> int:
+        """
+        Resets page to 1 if search query or any filter has changed.
+        """
+        if previous_filter_tuple is not None and previous_filter_tuple != current_filter_tuple:
+            return 1
+        return current_page
+
+    @staticmethod
+    def find_card_page(
+        card_id: str,
+        ordered_records: List[Dict[str, Any]],
+        items_per_page: int = 5
+    ) -> Optional[int]:
+        """
+        Finds the 1-indexed page of a specific opportunity card in ordered records.
+        """
+        if not card_id or items_per_page <= 0:
+            return None
+        target = str(card_id).strip()
+        for idx, item in enumerate(ordered_records):
+            oid = str(item.get("Opportunity ID") or item.get("opportunity_id") or "").strip()
+            if oid == target:
+                return (idx // items_per_page) + 1
+        return None
+

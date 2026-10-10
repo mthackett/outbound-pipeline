@@ -1,4 +1,5 @@
 import os
+import time
 import re
 import sys
 import uuid
@@ -47,12 +48,13 @@ from job_pipeline.adapters.primary.telemetry_ui import render_telemetry_warnings
 
 from job_pipeline.domain.services import (
     JobQualificationService, ApplicationGuardrailService, ScreeningQAService, QuickLinksService,
-    ScreeningIntelligenceService, StoryBankService, PipelineConfigService, IngestionRecoveryService
+    ScreeningIntelligenceService, StoryBankService, PipelineConfigService, IngestionRecoveryService,
+    PipelineSearchPaginationService
 )
 from job_pipeline.logger import (
     log_startup, log_action, log_config, log_sheets, log_drive,
     log_llm, log_crm, log_info, log_warn, log_error, log_success, log_timed_action,
-    is_logging_enabled, set_logging_enabled
+    log_cli, is_logging_enabled, set_logging_enabled
 )
 from job_pipeline.adapters.secondary.google_sheets import GoogleSheetsAdapter
 from job_pipeline.adapters.secondary.google_drive import GoogleDriveAdapter
@@ -472,9 +474,12 @@ drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚡ Candidate Quicklinks")
 with st.sidebar.expander("📋 Fast Application Links", expanded=True):
-    if not st.session_state.quicklinks:
-        st.caption("No quicklinks configured.")
-    else:
+    @st.fragment
+    def render_quicklinks_sidebar_view():
+        if not st.session_state.quicklinks:
+            st.caption("No quicklinks configured.")
+            return
+
         # Group links by category, preserving category encounter order
         cat_order = []
         grouped = {}
@@ -638,6 +643,8 @@ with st.sidebar.expander("📋 Fast Application Links", expanded=True):
         else:
             import streamlit.components.v1 as components
             components.html(ql_full_html, height=iframe_height, scrolling=False)
+
+    render_quicklinks_sidebar_view()
 
     bundle_text = QuickLinksService.format_clipboard_bundle(st.session_state.quicklinks)
     with st.expander("📋 Copy All Links (Bundle)", expanded=False):
@@ -1196,801 +1203,855 @@ if active_section == SECTION_INGEST:
         st.session_state.intake_counter = 0
     cur_intake = st.session_state.intake_counter
 
-    st.markdown("### 1. Paste Job Posting Text")
-    st.caption("Paste the full job description from LinkedIn, Indeed, or company careers page. The AI automatically extracts the company, title, salary, skills, and matches your best resume.")
+    @st.fragment
+    def render_intake_view():
+        t_start = time.perf_counter()
+        cur_intake = st.session_state.get("intake_counter", 0)
+        st.markdown("### 1. Paste Job Posting Text")
+        st.caption("Paste the full job description from LinkedIn, Indeed, or company careers page. The AI automatically extracts the company, title, salary, skills, and matches your best resume.")
 
-    jd_text_input = st.text_area(
-        "Job Description Text",
-        height=240,
-        placeholder="Paste full job description text here...",
-        label_visibility="collapsed",
-        key=f"jd_text_input_{cur_intake}"
-    )
-
-    with st.expander("📝 Application Notes (Optional)", expanded=False):
-        st.caption("Add unstructured notes, referral contacts, outreach angles, or initial application thoughts.")
-        manual_notes = st.text_area(
-            "Application Notes",
-            height=85,
-            placeholder="e.g. Reached out to recruiter Sarah Jenkins; emphasizes ARR forecasting and dbt data modeling...",
-            key=f"ov_notes_{cur_intake}",
-            label_visibility="collapsed"
+        jd_text_input = st.text_area(
+            "Job Description Text",
+            height=240,
+            placeholder="Paste full job description text here...",
+            label_visibility="collapsed",
+            key=f"jd_text_input_{cur_intake}"
         )
 
-    with st.expander("⚙️ Advanced / Manual Overrides (Optional)", expanded=False):
-        st.caption("Leave blank to let AI auto-extract automatically.")
-        col_ov1, col_ov2, col_ov3 = st.columns(3)
-        with col_ov1:
-            manual_company = st.text_input("Override Company Name", placeholder="Auto-detect from text", key=f"ov_comp_{cur_intake}")
-            manual_title = st.text_input("Override Job Title", placeholder="Auto-detect from text", key=f"ov_title_{cur_intake}")
-        with col_ov2:
-            manual_family = st.selectbox(
-                "Role Family",
-                ["Auto-Detect", "revenue_operations", "revenue_systems", "business_analytics", "gtm_engineering", "solutions_implementation"],
-                key=f"ov_family_{cur_intake}"
-            )
-            manual_url = st.text_input("Job Source URL", placeholder="https://linkedin.com/jobs/...", key=f"ov_url_{cur_intake}")
-        with col_ov3:
-            manual_min_pay = st.number_input("Override Min Pay ($ / hr or yr)", value=0, step=5, help="Enter hourly rate (e.g. 65) or annual salary (e.g. 120000)", key=f"ov_min_{cur_intake}")
-            manual_max_pay = st.number_input("Override Max Pay ($ / hr or yr)", value=0, step=5, help="Enter hourly rate (e.g. 75) or annual salary (e.g. 140000)", key=f"ov_max_{cur_intake}")
-
-        st.markdown("---")
-        pipeline_cfg = PipelineConfigService.load_config()
-        sources_list = pipeline_cfg.get("sources", DEFAULT_APPLICATION_SOURCES)
-        priorities_list = pipeline_cfg.get("priorities", DEFAULT_PRIORITIES)
-
-        col_ov_cat1, col_ov_cat2, col_ov_src, col_ov_pri, col_ov_sal = st.columns([1, 1.4, 1, 1, 1.2])
-        with col_ov_cat1:
-            manual_category = st.selectbox(
-                "Strategic Category",
-                ["Target", "Stretch", "Opportunistic", "Practice", "Fallback"],
-                index=0,
-                help="Select strategic category for this role."
-            )
-        with col_ov_cat2:
-            st.caption(f"{CATEGORY_ICONS.get(manual_category, '')} **{manual_category}**: *{APPLICATION_CATEGORIES[manual_category]}*")
-        with col_ov_src:
-            manual_applied_via = st.selectbox(
-                "Applied Via",
-                sources_list,
-                index=0,
-                help="Where you applied to this job."
-            )
-        with col_ov_pri:
-            manual_priority = st.selectbox(
-                "Priority",
-                priorities_list,
-                index=0,
-                help="Priority level for this application."
-            )
-        with col_ov_sal:
-            manual_salary_expectation = st.text_input(
-                "Salary Expectation",
-                placeholder="e.g. $140k or $75/hr",
-                key=f"ov_sal_exp_{cur_intake}",
-                help="Your target/expected compensation for this application."
+        with st.expander("📝 Application Notes (Optional)", expanded=False):
+            st.caption("Add unstructured notes, referral contacts, outreach angles, or initial application thoughts.")
+            manual_notes = st.text_area(
+                "Application Notes",
+                height=85,
+                placeholder="e.g. Reached out to recruiter Sarah Jenkins; emphasizes ARR forecasting and dbt data modeling...",
+                key=f"ov_notes_{cur_intake}",
+                label_visibility="collapsed"
             )
 
-        st.markdown("---")
-        st.markdown("###### 💼 Contract & Employment Arrangement Overrides (Optional)")
-        col_arr1, col_arr2, col_arr3 = st.columns(3)
-        with col_arr1:
-            manual_arrangement = st.selectbox(
-                "Employment Arrangement",
-                ["Auto-Detect", "Employee", "Contract"],
-                help="Specify whether this role is a direct Employee or Contract arrangement."
-            )
-        with col_arr2:
-            manual_pay_basis = st.selectbox(
-                "Pay Basis",
-                ["Auto-Detect", "Annual", "Hourly"],
-                help="Specify Annual salary or Hourly rate."
-            )
-        with col_arr3:
-            manual_worker_class = st.selectbox(
-                "Worker Classification",
-                ["Auto-Detect", "Not Specified", "W2", "1099", "C2C"],
-                help="W2, 1099, or C2C classification (only if explicitly known)."
-            )
+        with st.expander("⚙️ Advanced / Manual Overrides (Optional)", expanded=False):
+            st.caption("Leave blank to let AI auto-extract automatically.")
+            col_ov1, col_ov2, col_ov3 = st.columns(3)
+            with col_ov1:
+                manual_company = st.text_input("Override Company Name", placeholder="Auto-detect from text", key=f"ov_comp_{cur_intake}")
+                manual_title = st.text_input("Override Job Title", placeholder="Auto-detect from text", key=f"ov_title_{cur_intake}")
+            with col_ov2:
+                manual_family = st.selectbox(
+                    "Role Family",
+                    ["Auto-Detect", "revenue_operations", "revenue_systems", "business_analytics", "gtm_engineering", "solutions_implementation"],
+                    key=f"ov_family_{cur_intake}"
+                )
+                manual_url = st.text_input("Job Source URL", placeholder="https://linkedin.com/jobs/...", key=f"ov_url_{cur_intake}")
+            with col_ov3:
+                manual_min_pay = st.number_input("Override Min Pay ($ / hr or yr)", value=0, step=5, help="Enter hourly rate (e.g. 65) or annual salary (e.g. 120000)", key=f"ov_min_{cur_intake}")
+                manual_max_pay = st.number_input("Override Max Pay ($ / hr or yr)", value=0, step=5, help="Enter hourly rate (e.g. 75) or annual salary (e.g. 140000)", key=f"ov_max_{cur_intake}")
 
-        col_dur1, col_dur2 = st.columns(2)
-        with col_dur1:
-            manual_duration = st.text_input(
-                "Contract Duration",
-                placeholder="e.g. 6 months, 12-month contract-to-hire",
-                help="Specified contract length or duration.",
-                autocomplete="off"
-            )
-        with col_dur2:
-            manual_agency_client = st.text_input(
-                "Staffing Agency / Client Company",
-                placeholder="e.g. Acme Staffing supporting Contoso",
-                help="Staffing agency and/or client company if role is through an agency.",
-                autocomplete="off"
-            )
+            st.markdown("---")
+            pipeline_cfg = PipelineConfigService.load_config()
+            sources_list = pipeline_cfg.get("sources", DEFAULT_APPLICATION_SOURCES)
+            priorities_list = pipeline_cfg.get("priorities", DEFAULT_PRIORITIES)
 
-    # 2. Optional Application Screening Questions & Answers
-    with st.expander("📝 Application Screening Questions & Custom Answers (Optional)", expanded=False):
-        st.caption("Optionally record questions and answers requested on this application. When provided, they are saved into a dedicated 'Screening Questions' Google Doc in your Drive folder and logged into your reusable master Q&A library.")
+            col_ov_cat1, col_ov_cat2, col_ov_src, col_ov_pri, col_ov_sal = st.columns([1, 1.4, 1, 1, 1.2])
+            with col_ov_cat1:
+                manual_category = st.selectbox(
+                    "Strategic Category",
+                    ["Target", "Stretch", "Opportunistic", "Practice", "Fallback"],
+                    index=0,
+                    help="Select strategic category for this role."
+                )
+            with col_ov_cat2:
+                st.caption(f"{CATEGORY_ICONS.get(manual_category, '')} **{manual_category}**: *{APPLICATION_CATEGORIES[manual_category]}*")
+            with col_ov_src:
+                manual_applied_via = st.selectbox(
+                    "Applied Via",
+                    sources_list,
+                    index=0,
+                    help="Where you applied to this job."
+                )
+            with col_ov_pri:
+                manual_priority = st.selectbox(
+                    "Priority",
+                    priorities_list,
+                    index=0,
+                    help="Priority level for this application."
+                )
+            with col_ov_sal:
+                manual_salary_expectation = st.text_input(
+                    "Salary Expectation",
+                    placeholder="e.g. $140k or $75/hr",
+                    key=f"ov_sal_exp_{cur_intake}",
+                    help="Your target/expected compensation for this application."
+                )
 
-        col_q_actions = st.columns([1, 1, 3])
-        with col_q_actions[0]:
-            if st.button("➕ Add Question"):
-                st.session_state.num_screening_qa += 1
-                st.rerun()
-        with col_q_actions[1]:
-            if st.session_state.num_screening_qa > 0:
-                if st.button("➖ Remove Last"):
-                    st.session_state.num_screening_qa -= 1
+            st.markdown("---")
+            st.markdown("###### 💼 Contract & Employment Arrangement Overrides (Optional)")
+            col_arr1, col_arr2, col_arr3 = st.columns(3)
+            with col_arr1:
+                manual_arrangement = st.selectbox(
+                    "Employment Arrangement",
+                    ["Auto-Detect", "Employee", "Contract"],
+                    help="Specify whether this role is a direct Employee or Contract arrangement."
+                )
+            with col_arr2:
+                manual_pay_basis = st.selectbox(
+                    "Pay Basis",
+                    ["Auto-Detect", "Annual", "Hourly"],
+                    help="Specify Annual salary or Hourly rate."
+                )
+            with col_arr3:
+                manual_worker_class = st.selectbox(
+                    "Worker Classification",
+                    ["Auto-Detect", "Not Specified", "W2", "1099", "C2C"],
+                    help="W2, 1099, or C2C classification (only if explicitly known)."
+                )
+
+            col_dur1, col_dur2 = st.columns(2)
+            with col_dur1:
+                manual_duration = st.text_input(
+                    "Contract Duration",
+                    placeholder="e.g. 6 months, 12-month contract-to-hire",
+                    help="Specified contract length or duration.",
+                    autocomplete="off"
+                )
+            with col_dur2:
+                manual_agency_client = st.text_input(
+                    "Staffing Agency / Client Company",
+                    placeholder="e.g. Acme Staffing supporting Contoso",
+                    help="Staffing agency and/or client company if role is through an agency.",
+                    autocomplete="off"
+                )
+
+        # 2. Optional Application Screening Questions & Answers
+        with st.expander("📝 Application Screening Questions & Custom Answers (Optional)", expanded=False):
+            st.caption("Optionally record questions and answers requested on this application. When provided, they are saved into a dedicated 'Screening Questions' Google Doc in your Drive folder and logged into your reusable master Q&A library.")
+
+            col_q_actions = st.columns([1, 1, 3])
+            with col_q_actions[0]:
+                if st.button("➕ Add Question"):
+                    st.session_state.num_screening_qa += 1
                     st.rerun()
-
-        # Load historical screening QA for similarity recall
-        historical_qa = storage_adapter.fetch_screening_qa() if storage_adapter.is_connected else []
-
-        screening_inputs = []
-        for i in range(st.session_state.num_screening_qa):
-            st.markdown(f"---")
-            st.markdown(f"**Screening Question {i + 1}**")
-            cq1, cq2 = st.columns([3, 1])
-            with cq1:
-                q_text = st.text_input(f"Question Prompt", key=f"sq_q_{i}", placeholder="e.g. Describe your experience with Salesforce & dbt.")
-            with cq2:
-                q_cat = st.selectbox(f"Category", SCREENING_CATEGORIES, key=f"sq_cat_{i}")
-
-            # Screening Question Intelligence: Archetype & Recall
-            q_arch = "GENERAL"
-            q_signals = []
-            if q_text and q_text.strip():
-                q_arch = ScreeningIntelligenceService.classify_archetype(q_text)
-                q_signals = ScreeningIntelligenceService.extract_competency_signals(q_text)
-
-                c_info1, c_info2 = st.columns([2, 1])
-                with c_info1:
-                    if q_signals:
-                        pills = " ".join([f'<span class="badge-pill" style="background:#1E3A8A; color:#BFDBFE; font-size:0.75rem;">{s}</span>' for s in q_signals])
-                        st.markdown(f"<b>Competencies Detected:</b> {pills}", unsafe_allow_html=True)
-                with c_info2:
-                    st.caption(f"Archetype: `{SCREENING_ARCHETYPES.get(q_arch, q_arch)}`")
-
-                # Prior-answer similarity check
-                sim_matches = ScreeningIntelligenceService.find_similar_questions(q_text, historical_qa, threshold=0.38)
-                if sim_matches:
-                    top_m = sim_matches[0]
-                    st.info(
-                        f"💡 **Similar Past Question Found ({int(top_m.similarity_score * 100)}% match)**\n\n"
-                        f"*Prior Question:* \"{top_m.matched_question}\" ({top_m.company_name or 'Past Role'})\n\n"
-                        f"**Prior Answer:** {top_m.matched_answer}"
-                    )
-                    if st.button(f"📋 Use Prior Answer for Question {i + 1}", key=f"btn_recall_qa_{i}"):
-                        st.session_state[f"sq_a_{i}"] = top_m.matched_answer
-                        if top_m.archetype == "COMPENSATION":
-                            st.session_state[f"sq_cat_{i}"] = "Salary"
-                        elif top_m.archetype == "TECHNICAL_STACK":
-                            st.session_state[f"sq_cat_{i}"] = "Technical"
-                        elif top_m.archetype == "EXPERIENCE_DOMAIN":
-                            st.session_state[f"sq_cat_{i}"] = "Experience"
-                        elif top_m.archetype == "QUESTIONS_FOR_COMPANY":
-                            st.session_state[f"sq_cat_{i}"] = "Questions for Company"
+            with col_q_actions[1]:
+                if st.session_state.num_screening_qa > 0:
+                    if st.button("➖ Remove Last"):
+                        rem_idx = st.session_state.num_screening_qa - 1
+                        st.session_state.pop(f"sq_sim_matches_{rem_idx}", None)
+                        st.session_state.pop(f"sq_sim_query_{rem_idx}", None)
+                        st.session_state.num_screening_qa -= 1
                         st.rerun()
 
-            ca1, ca2 = st.columns([4, 1])
-            with ca1:
-                ans_text = st.text_area(f"Your Answer", key=f"sq_a_{i}", height=85, placeholder="Enter your response for this application...")
-            with ca2:
-                ai_draft_btn = st.button(f"✨ Draft with AI", key=f"sq_ai_{i}", help="Draft a tailored answer using your profile & the JD")
-                if ai_draft_btn:
-                    if not q_text:
-                        st.warning("Please enter a question prompt first.")
+            # Load historical screening QA for similarity recall (cached in session state)
+            if "_cached_historical_qa" not in st.session_state:
+                st.session_state._cached_historical_qa = storage_adapter.fetch_screening_qa() if storage_adapter.is_connected else []
+            historical_qa = st.session_state._cached_historical_qa
+
+            screening_inputs = []
+            for i in range(st.session_state.num_screening_qa):
+                st.markdown(f"---")
+                st.markdown(f"**Screening Question {i + 1}**")
+                cq1, cq2 = st.columns([3, 1])
+                with cq1:
+                    q_text = st.text_input(f"Question Prompt", key=f"sq_q_{i}", placeholder="e.g. Describe your experience with Salesforce & dbt.")
+                with cq2:
+                    q_cat = st.selectbox(f"Category", SCREENING_CATEGORIES, key=f"sq_cat_{i}")
+
+                # Screening Question Intelligence: Archetype & Recall
+                q_arch = "GENERAL"
+                q_signals = []
+                if q_text and len(q_text.strip()) >= 5:
+                    q_arch = ScreeningIntelligenceService.classify_archetype(q_text)
+                    q_signals = ScreeningIntelligenceService.extract_competency_signals(q_text)
+
+                    c_info1, c_info2 = st.columns([2, 1])
+                    with c_info1:
+                        if q_signals:
+                            pills = " ".join([f'<span class="badge-pill" style="background:#1E3A8A; color:#BFDBFE; font-size:0.75rem;">{s}</span>' for s in q_signals])
+                            st.markdown(f"<b>Competencies Detected:</b> {pills}", unsafe_allow_html=True)
+                    with c_info2:
+                        st.caption(f"Archetype: `{SCREENING_ARCHETYPES.get(q_arch, q_arch)}`")
+
+                # On-demand prior-answer similarity search (avoids typing latency)
+                col_sim_action, col_sim_empty = st.columns([1.5, 2.5])
+                with col_sim_action:
+                    btn_find_sim = st.button("🔍 Find Similar Answers", key=f"btn_find_sim_{i}", help="Search historical Q&A for similar past questions and answers")
+
+                if btn_find_sim:
+                    if not q_text or len(q_text.strip()) < 3:
+                        st.warning("Please enter a question prompt to search past answers.")
+                        st.session_state[f"sq_sim_matches_{i}"] = None
                     else:
-                        with st.spinner("Drafting answer with AI..."):
-                            if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter) and getattr(llm_adapter, "client", None):
-                                try:
-                                    draft_prompt = (
-                                        f"You are helping candidate {st.session_state.profile.candidate_name} answer a screening question.\n"
-                                        f"Core strengths: {', '.join(st.session_state.profile.core_strengths)}.\n"
-                                        f"Target role: {manual_title or 'RevOps / Analytics professional'}.\n"
-                                        f"Target company: {manual_company or 'Tech Company'}.\n"
-                                        f"Job Description excerpt: {jd_text_input[:800] if jd_text_input else 'N/A'}\n"
-                                        f"Screening Question: {q_text}\n\n"
-                                        f"Write a concise, high-impact, professional application answer (2-4 sentences or tight bullet points). Make it ATS-friendly and confident."
+                        matches = ScreeningIntelligenceService.find_similar_questions(q_text, historical_qa, threshold=0.35)
+                        st.session_state[f"sq_sim_matches_{i}"] = matches
+                        st.session_state[f"sq_sim_query_{i}"] = q_text.strip()
+
+                saved_matches = st.session_state.get(f"sq_sim_matches_{i}")
+                if saved_matches is not None:
+                    # Invalidate if user modified the question prompt after running search
+                    if q_text.strip() != st.session_state.get(f"sq_sim_query_{i}", ""):
+                        st.session_state[f"sq_sim_matches_{i}"] = None
+                        saved_matches = None
+
+                if saved_matches:
+                    top_m = saved_matches[0]
+                    c_sim1, c_sim2 = st.columns([5, 1])
+                    with c_sim1:
+                        st.info(
+                            f"💡 **Similar Past Question Found ({int(top_m.similarity_score * 100)}% match)**\n\n"
+                            f"*Prior Question:* \"{top_m.matched_question}\" ({top_m.company_name or 'Past Role'})\n\n"
+                            f"**Prior Answer:** {top_m.matched_answer}"
+                        )
+                    with c_sim2:
+                        if st.button("✖ Close", key=f"btn_close_sim_{i}", help="Dismiss match"):
+                            st.session_state[f"sq_sim_matches_{i}"] = None
+                            st.rerun()
+
+                    def _apply_recall_answer(idx=i, ans_val=top_m.matched_answer, arch=top_m.archetype):
+                        st.session_state[f"sq_a_{idx}"] = ans_val
+                        if arch == "COMPENSATION":
+                            st.session_state[f"sq_cat_{idx}"] = "Salary"
+                        elif arch == "TECHNICAL_STACK":
+                            st.session_state[f"sq_cat_{idx}"] = "Technical"
+                        elif arch == "EXPERIENCE_DOMAIN":
+                            st.session_state[f"sq_cat_{idx}"] = "Experience"
+                        elif arch == "QUESTIONS_FOR_COMPANY":
+                            st.session_state[f"sq_cat_{idx}"] = "Questions for Company"
+                        st.session_state[f"sq_sim_matches_{idx}"] = None
+
+                    st.button(
+                        f"📋 Use Prior Answer for Question {i + 1}",
+                        key=f"btn_recall_qa_{i}",
+                        on_click=_apply_recall_answer
+                    )
+                elif saved_matches == []:
+                    c_none1, c_none2 = st.columns([5, 1])
+                    with c_none1:
+                        st.caption(f"ℹ️ No similar questions found in past records for *\"{st.session_state.get(f'sq_sim_query_{i}', '')}\"*.")
+                    with c_none2:
+                        if st.button("✖ Close", key=f"btn_close_none_{i}"):
+                            st.session_state[f"sq_sim_matches_{i}"] = None
+                            st.rerun()
+
+                ca1, ca2 = st.columns([4, 1])
+                with ca1:
+                    ans_text = st.text_area(f"Your Answer", key=f"sq_a_{i}", height=85, placeholder="Enter your response for this application...")
+                with ca2:
+                    ai_draft_btn = st.button(f"✨ Draft with AI", key=f"sq_ai_{i}", help="Draft a tailored answer using your profile & the JD")
+                    if ai_draft_btn:
+                        if not q_text:
+                            st.warning("Please enter a question prompt first.")
+                        else:
+                            with st.spinner("Drafting answer with AI..."):
+                                if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter) and getattr(llm_adapter, "client", None):
+                                    try:
+                                        draft_prompt = (
+                                            f"You are helping candidate {st.session_state.profile.candidate_name} answer a screening question.\n"
+                                            f"Core strengths: {', '.join(st.session_state.profile.core_strengths)}.\n"
+                                            f"Target role: {manual_title or 'RevOps / Analytics professional'}.\n"
+                                            f"Target company: {manual_company or 'Tech Company'}.\n"
+                                            f"Job Description excerpt: {jd_text_input[:800] if jd_text_input else 'N/A'}\n"
+                                            f"Screening Question: {q_text}\n\n"
+                                            f"Write a concise, high-impact, professional application answer (2-4 sentences or tight bullet points). Make it ATS-friendly and confident."
+                                        )
+                                        resp = llm_adapter.client.chat.completions.create(
+                                            model="gpt-6-luna",
+                                            reasoning_effort='none',
+                                            messages=[{"role": "user", "content": draft_prompt}],
+                                            temperature=0.4,
+                                            max_tokens=250
+                                        )
+                                        drafted = resp.choices[0].message.content.strip()
+                                        st.session_state[f"sq_a_{i}"] = drafted
+                                        st.rerun()
+                                    except Exception as d_err:
+                                        st.error(f"AI draft notice: {d_err}")
+                                else:
+                                    st.session_state[f"sq_a_{i}"] = (
+                                        f"I bring deep expertise across {st.session_state.profile.core_strengths[0]} and {st.session_state.profile.core_strengths[1]}, "
+                                        f"having scaled reporting models, automated data funnels, and partnered cross-functionally to accelerate revenue pipeline."
                                     )
-                                    resp = llm_adapter.client.chat.completions.create(
-                                        model="gpt-6-luna",
-                                        reasoning_effort='none',
-                                        messages=[{"role": "user", "content": draft_prompt}],
-                                        temperature=0.4,
-                                        max_tokens=250
-                                    )
-                                    drafted = resp.choices[0].message.content.strip()
-                                    st.session_state[f"sq_a_{i}"] = drafted
                                     st.rerun()
-                                except Exception as d_err:
-                                    st.error(f"AI draft notice: {d_err}")
-                            else:
-                                st.session_state[f"sq_a_{i}"] = (
-                                    f"I bring deep expertise across {st.session_state.profile.core_strengths[0]} and {st.session_state.profile.core_strengths[1]}, "
-                                    f"having scaled reporting models, automated data funnels, and partnered cross-functionally to accelerate revenue pipeline."
-                                )
-                                st.rerun()
 
-            if q_text and ans_text:
-                screening_inputs.append(ScreeningQA(
-                    question=q_text,
-                    answer=ans_text,
-                    category=q_cat,
-                    archetype=q_arch,
-                    competency_signals=q_signals
-                ))
+                if q_text and ans_text:
+                    screening_inputs.append(ScreeningQA(
+                        question=q_text,
+                        answer=ans_text,
+                        category=q_cat,
+                        archetype=q_arch,
+                        competency_signals=q_signals
+                    ))
 
-    def _run_workflow(job_payload: dict):
-        st.session_state.latest_eval = None
-        opp_id = job_payload.setdefault("opportunity_id", str(uuid.uuid4()))
-        final_company = job_payload["company"]
-        final_title = job_payload["title"]
-        log_action(f"⚡ Ingestion workflow started for '{final_company}' - '{final_title}'")
-        with st.spinner("Processing job, generating Google Drive workspace, documents, and logging to Sheets..."):
-            final_family = job_payload["family"]
-            final_min_pay = job_payload["min_pay"]
-            final_max_pay = job_payload["max_pay"]
-            final_url = job_payload["url"]
-            req_skills = job_payload["req_skills"]
-            pref_skills = job_payload["pref_skills"]
-            pain_points = job_payload["pain_points"]
-            is_remote = job_payload["is_remote"]
-            screening_qa_list = job_payload["screening_qa"]
-            jd_text = job_payload["jd_text"]
-            all_opps = job_payload["all_opps"]
+        def _run_workflow(job_payload: dict):
+            st.session_state.latest_eval = None
+            opp_id = job_payload.setdefault("opportunity_id", str(uuid.uuid4()))
+            final_company = job_payload["company"]
+            final_title = job_payload["title"]
+            log_action(f"⚡ Ingestion workflow started for '{final_company}' - '{final_title}'")
+            with st.spinner("Processing job, generating Google Drive workspace, documents, and logging to Sheets..."):
+                final_family = job_payload["family"]
+                final_min_pay = job_payload["min_pay"]
+                final_max_pay = job_payload["max_pay"]
+                final_url = job_payload["url"]
+                req_skills = job_payload["req_skills"]
+                pref_skills = job_payload["pref_skills"]
+                pain_points = job_payload["pain_points"]
+                is_remote = job_payload["is_remote"]
+                screening_qa_list = job_payload["screening_qa"]
+                jd_text = job_payload["jd_text"]
+                all_opps = job_payload["all_opps"]
 
-            # Contract & Arrangement attributes
-            final_arrangement = job_payload.get("employment_arrangement", "Employee")
-            final_worker_class = job_payload.get("worker_classification")
-            final_pay_basis = job_payload.get("pay_basis", "Annual")
-            final_duration = job_payload.get("contract_length_raw")
-            final_months = job_payload.get("contract_length_months")
-            final_weeks = job_payload.get("contract_length_weeks")
-            final_hours = job_payload.get("expected_hours_per_week")
-            final_ext = job_payload.get("extension_possible")
-            final_fte = job_payload.get("fte_conversion_possible")
-            final_agency = job_payload.get("staffing_agency")
-            final_client = job_payload.get("client_company")
-            final_telemetry_warnings = job_payload.get("telemetry_warnings", [])
-            final_telemetry_flags = job_payload.get("telemetry_flags", [])
-            final_telemetry_benefits = job_payload.get("telemetry_benefits", [])
+                # Contract & Arrangement attributes
+                final_arrangement = job_payload.get("employment_arrangement", "Employee")
+                final_worker_class = job_payload.get("worker_classification")
+                final_pay_basis = job_payload.get("pay_basis", "Annual")
+                final_duration = job_payload.get("contract_length_raw")
+                final_months = job_payload.get("contract_length_months")
+                final_weeks = job_payload.get("contract_length_weeks")
+                final_hours = job_payload.get("expected_hours_per_week")
+                final_ext = job_payload.get("extension_possible")
+                final_fte = job_payload.get("fte_conversion_possible")
+                final_agency = job_payload.get("staffing_agency")
+                final_client = job_payload.get("client_company")
+                final_telemetry_warnings = job_payload.get("telemetry_warnings", [])
+                final_telemetry_flags = job_payload.get("telemetry_flags", [])
+                final_telemetry_benefits = job_payload.get("telemetry_benefits", [])
 
-            # 1. Fit Qualification & Target Pay Calculator
-            log_action(f"🎯 Evaluating fit qualifications & target pay bounds for '{final_title}'...")
-            fit_eval = JobQualificationService.evaluate(
-                company_name=final_company,
-                job_title=final_title,
-                raw_description=jd_text,
-                required_skills=req_skills,
-                preferred_skills=pref_skills,
-                salary_min=final_min_pay,
-                salary_max=final_max_pay,
-                profile=st.session_state.profile,
-                existing_company_titles=all_opps,
-                pay_basis=final_pay_basis,
-                expected_hours_per_week=final_hours,
-                expected_hours_per_week_is_assumed=(final_hours is None),
-                contract_length_months=final_months,
-                contract_length_weeks=final_weeks,
-                telemetry_warnings=final_telemetry_warnings,
-                telemetry_flags=final_telemetry_flags,
-                telemetry_benefits=final_telemetry_benefits
-            )
-
-            # 2. Select Best Fit Resume
-            selected_resume = resume_repo.select_best_fit_resume(final_title, final_family)
-            resume_name = selected_resume.filename if selected_resume else "Default Resume"
-            log_action(f"📄 Selected best-fit resume: '{resume_name}'")
-            resume_link = getattr(selected_resume, "web_link", None) if selected_resume else None
-            if not resume_link and selected_resume and selected_resume.doc_id and not selected_resume.doc_id.startswith("doc_"):
-                resume_link = f"https://docs.google.com/document/d/{selected_resume.doc_id}/edit"
-
-            # 3. Create Google Drive Application Workspace Folder
-            log_drive(f"📁 Creating Drive application workspace folder for '{final_company}'...")
-            workspace = drive_adapter.create_application_workspace(final_company, final_title, opp_id)
-            folder_id = workspace.get("folder_id")
-            folder_link = workspace.get("folder_link")
-            if not folder_id:
-                raise RuntimeError("The application workspace could not be created; retry this intake.")
-            checkpoint = {k: v for k, v in job_payload.items() if k not in ("all_opps", "dup", "vel", "screening_qa")}
-            checkpoint.update(
-                category=manual_category,
-                applied_via=manual_applied_via,
-                priority=manual_priority,
-                salary_expectation=job_payload.get("salary_expectation") or manual_salary_expectation,
-                notes=job_payload.get("notes") or manual_notes
-            )
-            checkpoint["screening_qa"] = [q.model_dump(mode="json") for q in screening_qa_list]
-            if not drive_adapter.save_ingestion_checkpoint(folder_id, checkpoint):
-                raise RuntimeError("Could not save intake inputs. Retry this intake before resuming the workspace.")
-
-            # 4. Save Raw Job Description Document into Drive Folder (Reliable Upload)
-            drive_jd_link = None
-            if folder_id:
-                log_drive("📝 Uploading raw job description document to Google Drive...")
-                res_jd = drive_adapter.upload_raw_job_description(
-                    folder_id,
-                    jd_text,
-                    company_name=final_company,
-                    job_title=final_title
-                )
-                if isinstance(res_jd, dict):
-                    drive_jd_link = res_jd.get("file_link") or res_jd.get("webViewLink")
-            if not drive_jd_link:
-                raise RuntimeError("The workspace raw job description could not be saved; retry this intake.")
-
-            # 5. Create 'Screening Questions' Google Doc if questions were provided
-            drive_screening_doc_link = None
-            if folder_id and screening_qa_list:
-                log_drive(f"📝 Creating Screening Questions Google Doc ({len(screening_qa_list)} items)...")
-                res_sq = drive_adapter.create_screening_questions_doc(
-                    folder_id=folder_id,
+                # 1. Fit Qualification & Target Pay Calculator
+                log_action(f"🎯 Evaluating fit qualifications & target pay bounds for '{final_title}'...")
+                fit_eval = JobQualificationService.evaluate(
                     company_name=final_company,
                     job_title=final_title,
-                    qa_items=screening_qa_list,
-                    opportunity_id=opp_id
+                    raw_description=jd_text,
+                    required_skills=req_skills,
+                    preferred_skills=pref_skills,
+                    salary_min=final_min_pay,
+                    salary_max=final_max_pay,
+                    profile=st.session_state.profile,
+                    existing_company_titles=all_opps,
+                    pay_basis=final_pay_basis,
+                    expected_hours_per_week=final_hours,
+                    expected_hours_per_week_is_assumed=(final_hours is None),
+                    contract_length_months=final_months,
+                    contract_length_weeks=final_weeks,
+                    telemetry_warnings=final_telemetry_warnings,
+                    telemetry_flags=final_telemetry_flags,
+                    telemetry_benefits=final_telemetry_benefits
                 )
-                if isinstance(res_sq, dict):
-                    drive_screening_doc_link = res_sq.get("file_link")
 
-            # 6. Upload Resume PDF to Google Drive workspace (Role Intelligence generation is deferred)
-            if folder_id:
-                log_drive("📤 Uploading resume PDF to Google Drive workspace...")
-                if selected_resume and selected_resume.doc_id:
-                    drive_adapter.export_resume_pdf(selected_resume.doc_id, folder_id, f"{resume_name}.pdf")
+                # 2. Select Best Fit Resume
+                selected_resume = resume_repo.select_best_fit_resume(final_title, final_family)
+                resume_name = selected_resume.filename if selected_resume else "Default Resume"
+                log_action(f"📄 Selected best-fit resume: '{resume_name}'")
+                resume_link = getattr(selected_resume, "web_link", None) if selected_resume else None
+                if not resume_link and selected_resume and selected_resume.doc_id and not selected_resume.doc_id.startswith("doc_"):
+                    resume_link = f"https://docs.google.com/document/d/{selected_resume.doc_id}/edit"
 
-            # Save raw JD text locally for deferred Role Intelligence generation
-            try:
-                raw_jd_dir = Path("output_reports") / uuid.uuid5(uuid.NAMESPACE_URL, opp_id).hex
-                raw_jd_dir.mkdir(parents=True, exist_ok=True)
-                (raw_jd_dir / "Raw_JD.txt").write_text(jd_text, encoding="utf-8")
-            except Exception:
-                pass
+                # 3. Create Google Drive Application Workspace Folder
+                log_drive(f"📁 Creating Drive application workspace folder for '{final_company}'...")
+                workspace = drive_adapter.create_application_workspace(final_company, final_title, opp_id)
+                folder_id = workspace.get("folder_id")
+                folder_link = workspace.get("folder_link")
+                if not folder_id:
+                    raise RuntimeError("The application workspace could not be created; retry this intake.")
+                checkpoint = {k: v for k, v in job_payload.items() if k not in ("all_opps", "dup", "vel", "screening_qa")}
+                checkpoint.update(
+                    category=manual_category,
+                    applied_via=manual_applied_via,
+                    priority=manual_priority,
+                    salary_expectation=job_payload.get("salary_expectation") or manual_salary_expectation,
+                    notes=job_payload.get("notes") or manual_notes
+                )
+                checkpoint["screening_qa"] = [q.model_dump(mode="json") for q in screening_qa_list]
+                if not drive_adapter.save_ingestion_checkpoint(folder_id, checkpoint):
+                    raise RuntimeError("Could not save intake inputs. Retry this intake before resuming the workspace.")
 
-            # 7. Save Opportunity to Google Sheets (Raw Ingestion & Screening QA)
-            log_sheets(f"💾 Saving opportunity '{final_company} - {final_title}' to Google Sheets ('Raw Ingestion')...")
-            tot_tokens = getattr(llm_adapter, "last_telemetry_tokens", 0)
-            final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
-            now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-            job_posting = JobPosting(
-                opportunity_id=opp_id,
-                company_name=final_company,
-                job_title=final_title,
-                title_family=final_family,
-                raw_description=jd_text,
-                source_url=final_url,
-                category=manual_category,
-                applied_via=manual_applied_via,
-                priority=manual_priority,
-                salary_expectation=job_payload.get("salary_expectation") or manual_salary_expectation,
-                notes=job_payload.get("notes") or manual_notes,
-                employment_arrangement=final_arrangement,
-                worker_classification=final_worker_class,
-                pay_basis=final_pay_basis,
-                expected_hours_per_week=fit_eval.pay_bounds.expected_hours_per_week,
-                expected_hours_per_week_is_assumed=fit_eval.pay_bounds.expected_hours_per_week_is_assumed,
-                contract_length_months=final_months,
-                contract_length_weeks=final_weeks,
-                contract_length_raw=final_duration,
-                contract_value_min=fit_eval.pay_bounds.contract_value_min,
-                contract_value_max=fit_eval.pay_bounds.contract_value_max,
-                contract_value_display=fit_eval.pay_bounds.contract_value_display,
-                extension_possible=final_ext,
-                fte_conversion_possible=final_fte,
-                staffing_agency=final_agency,
-                client_company=final_client,
-                stage_history=[{"stage": final_status, "entered_at": now_iso}],
-                required_skills=req_skills,
-                preferred_skills=pref_skills,
-                telemetry_warnings=final_telemetry_warnings,
-                telemetry_flags=final_telemetry_flags,
-                telemetry_benefits=final_telemetry_benefits,
-                selected_resume_name=resume_name,
-                drive_folder_link=folder_link,
-                drive_jd_link=drive_jd_link,
-                drive_screening_doc_link=drive_screening_doc_link,
-                screening_qa=screening_qa_list,
-                tokens_used=tot_tokens,
-                role_intelligence_status="Not Generated"
-            )
-            canonical_saved = storage_adapter.save_opportunity(job_posting, fit_eval)
-            IngestionRecoveryService.require_completion(
-                workspace_id=folder_id, raw_jd_saved=bool(drive_jd_link),
-                canonical_saved=canonical_saved,
-            )
-
-            # Mark workspace complete in Drive now that canonical opportunity record and artifacts are saved
-            if not drive_adapter.mark_workspace_complete(folder_id):
-                raise RuntimeError("Records were saved, but the workspace completion marker failed. Resume to retry.")
-            log_success("Job ingestion complete. Role Intelligence deferred until employer interest or manual generation.")
-            print("SUCCESS: Job ingestion complete. Role Intelligence deferred until employer interest or manual generation.", flush=True)
-            st.session_state.refresh_incomplete_workspaces = True
-            st.session_state.pop("crm_cached_opportunities", None)
-            st.session_state.pop("crm_cached_qa", None)
-            st.session_state.pop("crm_cached_requirements", None)
-
-            # Reset intake input counter so intake field returns to clean blank state after successful processing
-            st.session_state.intake_counter = st.session_state.get("intake_counter", 0) + 1
-            for sk in list(st.session_state.keys()):
-                if sk.startswith("sq_q_") or sk.startswith("sq_a_") or sk.startswith("sq_cat_") or sk.startswith("sq_ai_"):
-                    del st.session_state[sk]
-
-            # Clear pending guardrail check
-            st.session_state.pending_guardrail_check = None
-
-            # Store in session state for rendering Apply Kit
-            st.session_state.latest_eval = {
-                "company": final_company,
-                "title": final_title,
-                "family": final_family,
-                "fit_eval": fit_eval,
-                "category": manual_category,
-                "applied_via": manual_applied_via,
-                "priority": manual_priority,
-                "salary_expectation": job_payload.get("salary_expectation") or manual_salary_expectation,
-                "notes": job_payload.get("notes") or manual_notes,
-                "employment_arrangement": final_arrangement,
-                "worker_classification": final_worker_class,
-                "pay_basis": final_pay_basis,
-                "contract_length_raw": final_duration,
-                "contract_length_months": final_months,
-                "contract_length_weeks": final_weeks,
-                "contract_value_display": fit_eval.pay_bounds.contract_value_display,
-                "extension_possible": final_ext,
-                "fte_conversion_possible": final_fte,
-                "staffing_agency": final_agency,
-                "client_company": final_client,
-                "stage_history": job_posting.stage_history,
-                "selected_resume": selected_resume,
-                "resume_name": resume_name,
-                "resume_link": resume_link,
-                "folder_link": folder_link,
-                "drive_jd_link": drive_jd_link,
-                "drive_screening_doc_link": drive_screening_doc_link,
-                "screening_qa": screening_qa_list,
-                "output_docx_path": None,
-                "docx_filename": "Role_Intelligence_Report.docx",
-                "role_intelligence_status": "Not Generated",
-                "req_skills": req_skills,
-                "pref_skills": pref_skills,
-                "pain_points": pain_points,
-                "is_remote": is_remote,
-                "telemetry_warnings": final_telemetry_warnings,
-                "telemetry_flags": final_telemetry_flags,
-                "telemetry_benefits": final_telemetry_benefits,
-                "opp_id": opp_id
-            }
-
-    def execute_application_workflow(job_payload: dict):
-        try:
-            _run_workflow(job_payload)
-        except Exception as flow_err:
-            log_warn(f"Application workflow error: {flow_err}")
-            st.session_state.refresh_incomplete_workspaces = True
-            st.session_state.pop(f"intake_opportunity_{cur_intake}", None)
-            st.session_state.pop(f"intake_jd_hash_{cur_intake}", None)
-            st.error(f"Processing failed: {flow_err}. The Drive workspace has been preserved as incomplete and can be recovered.")
-
-    def _run_intake_extraction(
-        jd_text: str,
-        pre_evaluated_findings: list,
-        overrides: dict,
-        screening_inputs: list
-    ):
-        with st.spinner("Analyzing job description and checking guardrails..."):
-            extracted_company = ""
-            extracted_title = ""
-            extracted_family = "revenue_operations"
-            extracted_min = None
-            extracted_max = None
-            req_skills = []
-            pref_skills = []
-            pain_points = ""
-            is_remote = False
-
-            extracted_arrangement = None
-            extracted_worker_class = None
-            extracted_pay_basis = None
-            extracted_duration_raw = None
-            extracted_months = None
-            extracted_weeks = None
-            extracted_hours = None
-            extracted_ext = None
-            extracted_fte = None
-            extracted_agency = None
-            extracted_client = None
-
-            warning_rules = PipelineConfigService.get_active_telemetry_rules()
-            extracted_telemetry_warnings = []
-            extracted_telemetry_flags = []
-            extracted_telemetry_benefits = []
-            telemetry = None
-
-            if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
-                try:
-                    telemetry = llm_adapter.extract_job_telemetry(
+                # 4. Save Raw Job Description Document into Drive Folder (Reliable Upload)
+                drive_jd_link = None
+                if folder_id:
+                    log_drive("📝 Uploading raw job description document to Google Drive...")
+                    res_jd = drive_adapter.upload_raw_job_description(
+                        folder_id,
                         jd_text,
-                        warning_rules=warning_rules,
-                        pre_evaluated_findings=pre_evaluated_findings
+                        company_name=final_company,
+                        job_title=final_title
                     )
-                    extracted_company = telemetry.company_name
-                    extracted_title = telemetry.job_title
-                    extracted_family = telemetry.title_family
-                    extracted_min = telemetry.requirements.salary_min
-                    extracted_max = telemetry.requirements.salary_max
-                    req_skills = telemetry.requirements.required_tech_stack
-                    pref_skills = telemetry.requirements.preferred_tech_stack
-                    pain_points = telemetry.requirements.core_pain_points or ""
-                    is_remote = telemetry.requirements.is_remote
-                    extracted_arrangement = telemetry.requirements.employment_arrangement
-                    extracted_worker_class = telemetry.requirements.worker_classification
-                    extracted_pay_basis = telemetry.requirements.pay_basis
-                    extracted_duration_raw = telemetry.requirements.contract_length_raw
-                    extracted_months = telemetry.requirements.contract_length_months
-                    extracted_weeks = telemetry.requirements.contract_length_weeks
-                    extracted_hours = telemetry.requirements.expected_hours_per_week
-                    extracted_ext = telemetry.requirements.extension_possible
-                    extracted_fte = telemetry.requirements.fte_conversion_possible
-                    extracted_agency = telemetry.requirements.staffing_agency
-                    extracted_client = telemetry.requirements.client_company
-                    extracted_telemetry_warnings = telemetry.requirements.telemetry_warnings or []
-                    extracted_telemetry_flags = telemetry.requirements.telemetry_flags or []
-                    extracted_telemetry_benefits = getattr(telemetry.requirements, "telemetry_benefits", []) or []
-                except Exception as e:
-                    st.warning(f"Job Signals extraction notice: {e}")
-                    req_skills, pref_skills = ["Salesforce", "SQL", "Tableau", "Clari"], ["dbt"]
-            else:
-                if hasattr(llm_adapter, "extract_job_telemetry"):
+                    if isinstance(res_jd, dict):
+                        drive_jd_link = res_jd.get("file_link") or res_jd.get("webViewLink")
+                if not drive_jd_link:
+                    raise RuntimeError("The workspace raw job description could not be saved; retry this intake.")
+
+                # 5. Create 'Screening Questions' Google Doc if questions were provided
+                drive_screening_doc_link = None
+                if folder_id and screening_qa_list:
+                    log_drive(f"📝 Creating Screening Questions Google Doc ({len(screening_qa_list)} items)...")
+                    res_sq = drive_adapter.create_screening_questions_doc(
+                        folder_id=folder_id,
+                        company_name=final_company,
+                        job_title=final_title,
+                        qa_items=screening_qa_list,
+                        opportunity_id=opp_id
+                    )
+                    if isinstance(res_sq, dict):
+                        drive_screening_doc_link = res_sq.get("file_link")
+
+                # 6. Upload Resume PDF to Google Drive workspace (Role Intelligence generation is deferred)
+                if folder_id:
+                    log_drive("📤 Uploading resume PDF to Google Drive workspace...")
+                    if selected_resume and selected_resume.doc_id:
+                        drive_adapter.export_resume_pdf(selected_resume.doc_id, folder_id, f"{resume_name}.pdf")
+
+                # Save raw JD text locally for deferred Role Intelligence generation
+                try:
+                    raw_jd_dir = Path("output_reports") / uuid.uuid5(uuid.NAMESPACE_URL, opp_id).hex
+                    raw_jd_dir.mkdir(parents=True, exist_ok=True)
+                    (raw_jd_dir / "Raw_JD.txt").write_text(jd_text, encoding="utf-8")
+                except Exception:
+                    pass
+
+                # 7. Save Opportunity to Google Sheets (Raw Ingestion & Screening QA)
+                log_sheets(f"💾 Saving opportunity '{final_company} - {final_title}' to Google Sheets ('Raw Ingestion')...")
+                tot_tokens = getattr(llm_adapter, "last_telemetry_tokens", 0)
+                final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
+                now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                job_posting = JobPosting(
+                    opportunity_id=opp_id,
+                    company_name=final_company,
+                    job_title=final_title,
+                    title_family=final_family,
+                    raw_description=jd_text,
+                    source_url=final_url,
+                    category=manual_category,
+                    applied_via=manual_applied_via,
+                    priority=manual_priority,
+                    salary_expectation=job_payload.get("salary_expectation") or manual_salary_expectation,
+                    notes=job_payload.get("notes") or manual_notes,
+                    employment_arrangement=final_arrangement,
+                    worker_classification=final_worker_class,
+                    pay_basis=final_pay_basis,
+                    expected_hours_per_week=fit_eval.pay_bounds.expected_hours_per_week,
+                    expected_hours_per_week_is_assumed=fit_eval.pay_bounds.expected_hours_per_week_is_assumed,
+                    contract_length_months=final_months,
+                    contract_length_weeks=final_weeks,
+                    contract_length_raw=final_duration,
+                    contract_value_min=fit_eval.pay_bounds.contract_value_min,
+                    contract_value_max=fit_eval.pay_bounds.contract_value_max,
+                    contract_value_display=fit_eval.pay_bounds.contract_value_display,
+                    extension_possible=final_ext,
+                    fte_conversion_possible=final_fte,
+                    staffing_agency=final_agency,
+                    client_company=final_client,
+                    stage_history=[{"stage": final_status, "entered_at": now_iso}],
+                    required_skills=req_skills,
+                    preferred_skills=pref_skills,
+                    telemetry_warnings=final_telemetry_warnings,
+                    telemetry_flags=final_telemetry_flags,
+                    telemetry_benefits=final_telemetry_benefits,
+                    selected_resume_name=resume_name,
+                    drive_folder_link=folder_link,
+                    drive_jd_link=drive_jd_link,
+                    drive_screening_doc_link=drive_screening_doc_link,
+                    screening_qa=screening_qa_list,
+                    tokens_used=tot_tokens,
+                    role_intelligence_status="Not Generated"
+                )
+                canonical_saved = storage_adapter.save_opportunity(job_posting, fit_eval)
+                IngestionRecoveryService.require_completion(
+                    workspace_id=folder_id, raw_jd_saved=bool(drive_jd_link),
+                    canonical_saved=canonical_saved,
+                )
+
+                # Mark workspace complete in Drive now that canonical opportunity record and artifacts are saved
+                if not drive_adapter.mark_workspace_complete(folder_id):
+                    raise RuntimeError("Records were saved, but the workspace completion marker failed. Resume to retry.")
+                log_success("Job ingestion complete. Role Intelligence deferred until employer interest or manual generation.")
+                print("SUCCESS: Job ingestion complete. Role Intelligence deferred until employer interest or manual generation.", flush=True)
+                st.session_state.refresh_incomplete_workspaces = True
+                st.session_state.pop("crm_cached_opportunities", None)
+                st.session_state.pop("crm_cached_qa", None)
+                st.session_state.pop("crm_cached_requirements", None)
+
+                # Reset intake input counter so intake field returns to clean blank state after successful processing
+                st.session_state.intake_counter = st.session_state.get("intake_counter", 0) + 1
+                for sk in list(st.session_state.keys()):
+                    if sk.startswith("sq_q_") or sk.startswith("sq_a_") or sk.startswith("sq_cat_") or sk.startswith("sq_ai_") or sk.startswith("sq_sim_"):
+                        del st.session_state[sk]
+
+                # Clear pending guardrail check
+                st.session_state.pending_guardrail_check = None
+
+                # Store in session state for rendering Apply Kit
+                st.session_state.latest_eval = {
+                    "company": final_company,
+                    "title": final_title,
+                    "family": final_family,
+                    "fit_eval": fit_eval,
+                    "category": manual_category,
+                    "applied_via": manual_applied_via,
+                    "priority": manual_priority,
+                    "salary_expectation": job_payload.get("salary_expectation") or manual_salary_expectation,
+                    "notes": job_payload.get("notes") or manual_notes,
+                    "employment_arrangement": final_arrangement,
+                    "worker_classification": final_worker_class,
+                    "pay_basis": final_pay_basis,
+                    "contract_length_raw": final_duration,
+                    "contract_length_months": final_months,
+                    "contract_length_weeks": final_weeks,
+                    "contract_value_display": fit_eval.pay_bounds.contract_value_display,
+                    "extension_possible": final_ext,
+                    "fte_conversion_possible": final_fte,
+                    "staffing_agency": final_agency,
+                    "client_company": final_client,
+                    "stage_history": job_posting.stage_history,
+                    "selected_resume": selected_resume,
+                    "resume_name": resume_name,
+                    "resume_link": resume_link,
+                    "folder_link": folder_link,
+                    "drive_jd_link": drive_jd_link,
+                    "drive_screening_doc_link": drive_screening_doc_link,
+                    "screening_qa": screening_qa_list,
+                    "output_docx_path": None,
+                    "docx_filename": "Role_Intelligence_Report.docx",
+                    "role_intelligence_status": "Not Generated",
+                    "req_skills": req_skills,
+                    "pref_skills": pref_skills,
+                    "pain_points": pain_points,
+                    "is_remote": is_remote,
+                    "telemetry_warnings": final_telemetry_warnings,
+                    "telemetry_flags": final_telemetry_flags,
+                    "telemetry_benefits": final_telemetry_benefits,
+                    "opp_id": opp_id
+                }
+
+        def execute_application_workflow(job_payload: dict):
+            try:
+                _run_workflow(job_payload)
+            except Exception as flow_err:
+                log_warn(f"Application workflow error: {flow_err}")
+                st.session_state.refresh_incomplete_workspaces = True
+                st.session_state.pop(f"intake_opportunity_{cur_intake}", None)
+                st.session_state.pop(f"intake_jd_hash_{cur_intake}", None)
+                st.error(f"Processing failed: {flow_err}. The Drive workspace has been preserved as incomplete and can be recovered.")
+
+        def _run_intake_extraction(
+            jd_text: str,
+            pre_evaluated_findings: list,
+            overrides: dict,
+            screening_inputs: list
+        ):
+            with st.spinner("Analyzing job description and checking guardrails..."):
+                extracted_company = ""
+                extracted_title = ""
+                extracted_family = "revenue_operations"
+                extracted_min = None
+                extracted_max = None
+                req_skills = []
+                pref_skills = []
+                pain_points = ""
+                is_remote = False
+
+                extracted_arrangement = None
+                extracted_worker_class = None
+                extracted_pay_basis = None
+                extracted_duration_raw = None
+                extracted_months = None
+                extracted_weeks = None
+                extracted_hours = None
+                extracted_ext = None
+                extracted_fte = None
+                extracted_agency = None
+                extracted_client = None
+
+                warning_rules = PipelineConfigService.get_active_telemetry_rules()
+                extracted_telemetry_warnings = []
+                extracted_telemetry_flags = []
+                extracted_telemetry_benefits = []
+                telemetry = None
+
+                if not demo_mode and isinstance(llm_adapter, OpenAIEngineAdapter):
                     try:
-                        mock_telemetry = llm_adapter.extract_job_telemetry(
+                        telemetry = llm_adapter.extract_job_telemetry(
                             jd_text,
                             warning_rules=warning_rules,
                             pre_evaluated_findings=pre_evaluated_findings
                         )
-                        extracted_telemetry_warnings = mock_telemetry.requirements.telemetry_warnings or []
-                        extracted_telemetry_flags = mock_telemetry.requirements.telemetry_flags or []
-                        extracted_telemetry_benefits = getattr(mock_telemetry.requirements, "telemetry_benefits", []) or []
-                    except Exception:
-                        extracted_telemetry_warnings = []
-                        extracted_telemetry_flags = []
-                        extracted_telemetry_benefits = []
-                extracted_company = "Planful"
-                extracted_title = "Sales Operations Analyst"
-                extracted_family = "revenue_operations"
-                extracted_min = 110000
-                extracted_max = 135000
-                req_skills = ["Salesforce", "SQL", "Tableau", "Clari"]
-                pref_skills = ["Territory Planning"]
-                pain_points = "Translating messy operational data into clean executive forecasts."
-
-            # Apply Overrides if specified
-            m_comp = overrides.get("company", "")
-            m_title = overrides.get("title", "")
-            m_fam = overrides.get("family", "Auto-Detect")
-            m_min = overrides.get("min_pay", 0)
-            m_max = overrides.get("max_pay", 0)
-            m_url = overrides.get("url", "")
-            m_arr = overrides.get("arrangement", "Auto-Detect")
-            m_wc = overrides.get("worker_class", "Auto-Detect")
-            m_pb = overrides.get("pay_basis", "Auto-Detect")
-            m_dur = overrides.get("duration", "")
-            m_agency = overrides.get("agency_client", "")
-
-            final_company = m_comp.strip() if m_comp and m_comp.strip() else (extracted_company or "Target Company")
-            final_title = m_title.strip() if m_title and m_title.strip() else (extracted_title or "Target Role")
-            final_family = m_fam if m_fam != "Auto-Detect" else (extracted_family or "revenue_operations")
-            final_min_pay = m_min if m_min > 0 else extracted_min
-            final_max_pay = m_max if m_max > 0 else extracted_max
-            final_url = m_url.strip() if m_url and m_url.strip() else (telemetry.source_url if telemetry else None)
-
-            # Resolve Contract & Arrangement Overrides
-            final_arrangement = m_arr if m_arr != "Auto-Detect" else (extracted_arrangement or "Employee")
-            final_pay_basis = m_pb if m_pb != "Auto-Detect" else (
-                extracted_pay_basis or ("Hourly" if (final_min_pay and final_min_pay < 500) else "Annual")
-            )
-            final_worker_class = (None if m_wc in ["Auto-Detect", "Not Specified"] else m_wc) if m_wc != "Auto-Detect" else extracted_worker_class
-            final_duration = m_dur.strip() if m_dur and m_dur.strip() else extracted_duration_raw
-            final_agency = m_agency.strip() if m_agency and m_agency.strip() else extracted_agency
-            final_client = extracted_client
-
-            # Fetch all existing opportunities for guardrail checking
-            all_opps = storage_adapter.fetch_all_opportunities()
-
-            # Guardrail Evaluation: Duplicate & Velocity Checks
-            dup_res = ApplicationGuardrailService.check_duplicate(
-                company_name=final_company,
-                job_title=final_title,
-                existing_records=all_opps,
-                repost_threshold_days=st.session_state.profile.repost_detection_threshold_days
-            )
-            vel_res = ApplicationGuardrailService.check_company_velocity(
-                company_name=final_company,
-                existing_records=all_opps,
-                max_limit=st.session_state.profile.max_company_applications_limit,
-                window_days=st.session_state.profile.company_application_window_days
-            )
-
-            # If user entered different JD text, refresh intake opportunity ID so it never collides with an older workspace
-            cur_jd_hash = hash(jd_text.strip())
-            saved_jd_hash = st.session_state.get(f"intake_jd_hash_{cur_intake}")
-            if saved_jd_hash != cur_jd_hash:
-                st.session_state[f"intake_opportunity_{cur_intake}"] = str(uuid.uuid4())
-                st.session_state[f"intake_jd_hash_{cur_intake}"] = cur_jd_hash
-
-            job_payload = {
-                "opportunity_id": st.session_state.setdefault(f"intake_opportunity_{cur_intake}", str(uuid.uuid4())),
-                "company": final_company,
-                "title": final_title,
-                "family": final_family,
-                "min_pay": final_min_pay,
-                "max_pay": final_max_pay,
-                "url": final_url,
-                "req_skills": req_skills,
-                "pref_skills": pref_skills,
-                "pain_points": pain_points,
-                "is_remote": is_remote,
-                "employment_arrangement": final_arrangement,
-                "worker_classification": final_worker_class,
-                "pay_basis": final_pay_basis,
-                "contract_length_raw": final_duration,
-                "contract_length_months": extracted_months,
-                "contract_length_weeks": extracted_weeks,
-                "expected_hours_per_week": extracted_hours,
-                "extension_possible": extracted_ext,
-                "fte_conversion_possible": extracted_fte,
-                "staffing_agency": final_agency,
-                "client_company": final_client,
-                "screening_qa": screening_inputs,
-                "jd_text": jd_text,
-                "all_opps": all_opps,
-                "dup": dup_res,
-                "vel": vel_res,
-                "telemetry_warnings": extracted_telemetry_warnings,
-                "telemetry_flags": extracted_telemetry_flags,
-                "telemetry_benefits": extracted_telemetry_benefits,
-                "category": overrides.get("category"),
-                "applied_via": overrides.get("applied_via"),
-                "priority": overrides.get("priority"),
-                "salary_expectation": overrides.get("salary_expectation"),
-                "notes": overrides.get("notes")
-            }
-
-            # Check if Guardrails are tripped
-            if (dup_res["is_duplicate"] and not dup_res["is_repost"]) or vel_res["velocity_exceeded"]:
-                st.session_state.pending_guardrail_check = job_payload
-                st.session_state.latest_eval = None
-                st.rerun()
-            else:
-                # Clean check -> proceed directly
-                execute_application_workflow(job_payload)
-                st.rerun()
-
-    # Display Pending Job Signals Review Gate if flagged
-    if st.session_state.pending_job_signals_gate:
-        gate = st.session_state.pending_job_signals_gate
-        st.error("🚩 **Job Signals Review — Flags Detected**")
-        st.markdown(
-            "One or more configured **Flags** were detected in this job description. "
-            "Please review the findings and evidence below before deciding whether to proceed with full ingestion."
-        )
-        render_job_signals(gate["flags"], gate["warnings"], gate["benefits"])
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            if st.button("👉 Proceed with ingestion", type="primary", use_container_width=True):
-                gate_payload = st.session_state.pending_job_signals_gate
-                st.session_state.pending_job_signals_gate = None
-                _run_intake_extraction(
-                    jd_text=gate_payload["jd_text"],
-                    pre_evaluated_findings=gate_payload["all_findings"],
-                    overrides=gate_payload["manual_overrides"],
-                    screening_inputs=gate_payload["screening_inputs"]
-                )
-        with col_s2:
-            if st.button("❌ Cancel / Discard", use_container_width=True):
-                st.session_state.pending_job_signals_gate = None
-                st.info("Ingestion cancelled. No Drive workspace or Sheets records were created.")
-                st.rerun()
-
-    # Display Pending Guardrail Warning if tripped
-    if st.session_state.pending_guardrail_check:
-        chk = st.session_state.pending_guardrail_check
-        dup = chk["dup"]
-        vel = chk["vel"]
-
-        st.warning("⚠️ **Application Guardrail Warning** — Review Before Submitting")
-        if dup["is_duplicate"] and not dup["is_repost"]:
-            matched_title = dup["matched_record"].get("Job Title") if dup["matched_record"] else chk["title"]
-            st.error(
-                f"🚨 **Duplicate Application Detected**: You already applied to **{matched_title}** at **{chk['company']}** "
-                f"{dup['days_elapsed']} days ago ({dup['prior_date']}). Current Status: `{dup['prior_status']}`.\n\n"
-                f"*Note: Many ATS platforms (Greenhouse, Lever, Workday) automatically archive or reject duplicate applications submitted within 60 days.*"
-            )
-
-        if dup["is_repost"]:
-            st.info(
-                f"ℹ️ **Potential Repost / Renewed Requisition**: You previously applied to this role at {chk['company']} "
-                f"{dup['days_elapsed']} days ago ({dup['prior_date']}). Re-applying may be viable if the hiring requisition has been refreshed."
-            )
-
-        if vel["velocity_exceeded"]:
-            st.error(
-                f"🏢 **Company Application Velocity Cap Reached**: You already have **{vel['active_count']} application(s)** "
-                f"with **{chk['company']}** within the past {vel['window_days']} days (Guardrail Cap: {vel['max_limit']}).\n\n"
-                f"*Note: Internal talent acquisition teams often flag candidates with multiple concurrent applications as lack of focus.*"
-            )
-            st.markdown("**Recent Applications at this Company:**")
-            st.dataframe(vel["active_applications"], use_container_width=True)
-
-        col_g1, col_g2 = st.columns(2)
-        with col_g1:
-            if st.button("👉 Proceed & Apply Anyway (Override)", type="primary", use_container_width=True):
-                execute_application_workflow(chk)
-                st.rerun()
-        with col_g2:
-            if st.button("❌ Cancel / Hold Application", use_container_width=True):
-                st.session_state.pending_guardrail_check = None
-                st.info("Ingestion cancelled. You can edit your inputs or select another job.")
-                st.rerun()
-
-    # Primary Action Button
-    if not st.session_state.pending_job_signals_gate:
-        if st.button("⚡ Process Job & Generate Apply Kit", type="primary", use_container_width=True):
-            if not jd_text_input or len(jd_text_input.strip()) < 20:
-                st.error("Please paste a valid job description (at least 20 characters).")
-            else:
-                with st.spinner("Evaluating Job Signals and analyzing job description..."):
-                    warning_rules = PipelineConfigService.get_active_telemetry_rules()
-                    try:
-                        flags, warnings, benefits = llm_adapter.evaluate_job_signals(jd_text_input, rules=warning_rules)
-                    except Exception as eval_err:
-                        log_warn(f"Job Signals evaluation error: {eval_err}")
-                        st.error(f"Job Signals evaluation failed: {eval_err}. Ingestion stopped for safety. Please retry.")
-                        flags, warnings, benefits = None, None, None
-
-                    if flags is not None:
-                        all_findings = list(flags) + list(warnings) + list(benefits)
-                        manual_overrides = {
-                            "company": manual_company,
-                            "title": manual_title,
-                            "family": manual_family,
-                            "min_pay": manual_min_pay,
-                            "max_pay": manual_max_pay,
-                            "url": manual_url,
-                            "arrangement": manual_arrangement,
-                            "worker_class": manual_worker_class,
-                            "pay_basis": manual_pay_basis,
-                            "duration": manual_duration,
-                            "agency_client": manual_agency_client,
-                            "category": manual_category,
-                            "applied_via": manual_applied_via,
-                            "priority": manual_priority,
-                            "salary_expectation": manual_salary_expectation,
-                            "notes": manual_notes,
-                        }
-
-                        if flags:
-                            from job_pipeline.logger import log_job_signals
-                            log_job_signals(f"Ingestion paused for user review due to {len(flags)} flag(s).")
-                            st.session_state.pending_job_signals_gate = {
-                                "jd_text": jd_text_input,
-                                "flags": flags,
-                                "warnings": warnings,
-                                "benefits": benefits,
-                                "all_findings": all_findings,
-                                "manual_overrides": manual_overrides,
-                                "screening_inputs": screening_inputs,
-                            }
-                            st.session_state.latest_eval = None
-                            st.rerun()
-                        else:
-                            _run_intake_extraction(
-                                jd_text=jd_text_input,
-                                pre_evaluated_findings=all_findings,
-                                overrides=manual_overrides,
-                                screening_inputs=screening_inputs
+                        extracted_company = telemetry.company_name
+                        extracted_title = telemetry.job_title
+                        extracted_family = telemetry.title_family
+                        extracted_min = telemetry.requirements.salary_min
+                        extracted_max = telemetry.requirements.salary_max
+                        req_skills = telemetry.requirements.required_tech_stack
+                        pref_skills = telemetry.requirements.preferred_tech_stack
+                        pain_points = telemetry.requirements.core_pain_points or ""
+                        is_remote = telemetry.requirements.is_remote
+                        extracted_arrangement = telemetry.requirements.employment_arrangement
+                        extracted_worker_class = telemetry.requirements.worker_classification
+                        extracted_pay_basis = telemetry.requirements.pay_basis
+                        extracted_duration_raw = telemetry.requirements.contract_length_raw
+                        extracted_months = telemetry.requirements.contract_length_months
+                        extracted_weeks = telemetry.requirements.contract_length_weeks
+                        extracted_hours = telemetry.requirements.expected_hours_per_week
+                        extracted_ext = telemetry.requirements.extension_possible
+                        extracted_fte = telemetry.requirements.fte_conversion_possible
+                        extracted_agency = telemetry.requirements.staffing_agency
+                        extracted_client = telemetry.requirements.client_company
+                        extracted_telemetry_warnings = telemetry.requirements.telemetry_warnings or []
+                        extracted_telemetry_flags = telemetry.requirements.telemetry_flags or []
+                        extracted_telemetry_benefits = getattr(telemetry.requirements, "telemetry_benefits", []) or []
+                    except Exception as e:
+                        st.warning(f"Job Signals extraction notice: {e}")
+                        req_skills, pref_skills = ["Salesforce", "SQL", "Tableau", "Clari"], ["dbt"]
+                else:
+                    if hasattr(llm_adapter, "extract_job_telemetry"):
+                        try:
+                            mock_telemetry = llm_adapter.extract_job_telemetry(
+                                jd_text,
+                                warning_rules=warning_rules,
+                                pre_evaluated_findings=pre_evaluated_findings
                             )
+                            extracted_telemetry_warnings = mock_telemetry.requirements.telemetry_warnings or []
+                            extracted_telemetry_flags = mock_telemetry.requirements.telemetry_flags or []
+                            extracted_telemetry_benefits = getattr(mock_telemetry.requirements, "telemetry_benefits", []) or []
+                        except Exception:
+                            extracted_telemetry_warnings = []
+                            extracted_telemetry_flags = []
+                            extracted_telemetry_benefits = []
+                    extracted_company = "Planful"
+                    extracted_title = "Sales Operations Analyst"
+                    extracted_family = "revenue_operations"
+                    extracted_min = 110000
+                    extracted_max = 135000
+                    req_skills = ["Salesforce", "SQL", "Tableau", "Clari"]
+                    pref_skills = ["Territory Planning"]
+                    pain_points = "Translating messy operational data into clean executive forecasts."
+
+                # Apply Overrides if specified
+                m_comp = overrides.get("company", "")
+                m_title = overrides.get("title", "")
+                m_fam = overrides.get("family", "Auto-Detect")
+                m_min = overrides.get("min_pay", 0)
+                m_max = overrides.get("max_pay", 0)
+                m_url = overrides.get("url", "")
+                m_arr = overrides.get("arrangement", "Auto-Detect")
+                m_wc = overrides.get("worker_class", "Auto-Detect")
+                m_pb = overrides.get("pay_basis", "Auto-Detect")
+                m_dur = overrides.get("duration", "")
+                m_agency = overrides.get("agency_client", "")
+
+                final_company = m_comp.strip() if m_comp and m_comp.strip() else (extracted_company or "Target Company")
+                final_title = m_title.strip() if m_title and m_title.strip() else (extracted_title or "Target Role")
+                final_family = m_fam if m_fam != "Auto-Detect" else (extracted_family or "revenue_operations")
+                final_min_pay = m_min if m_min > 0 else extracted_min
+                final_max_pay = m_max if m_max > 0 else extracted_max
+                final_url = m_url.strip() if m_url and m_url.strip() else (telemetry.source_url if telemetry else None)
+
+                # Resolve Contract & Arrangement Overrides
+                final_arrangement = m_arr if m_arr != "Auto-Detect" else (extracted_arrangement or "Employee")
+                final_pay_basis = m_pb if m_pb != "Auto-Detect" else (
+                    extracted_pay_basis or ("Hourly" if (final_min_pay and final_min_pay < 500) else "Annual")
+                )
+                final_worker_class = (None if m_wc in ["Auto-Detect", "Not Specified"] else m_wc) if m_wc != "Auto-Detect" else extracted_worker_class
+                final_duration = m_dur.strip() if m_dur and m_dur.strip() else extracted_duration_raw
+                final_agency = m_agency.strip() if m_agency and m_agency.strip() else extracted_agency
+                final_client = extracted_client
+
+                # Fetch all existing opportunities for guardrail checking
+                all_opps = storage_adapter.fetch_all_opportunities()
+
+                # Guardrail Evaluation: Duplicate & Velocity Checks
+                dup_res = ApplicationGuardrailService.check_duplicate(
+                    company_name=final_company,
+                    job_title=final_title,
+                    existing_records=all_opps,
+                    repost_threshold_days=st.session_state.profile.repost_detection_threshold_days
+                )
+                vel_res = ApplicationGuardrailService.check_company_velocity(
+                    company_name=final_company,
+                    existing_records=all_opps,
+                    max_limit=st.session_state.profile.max_company_applications_limit,
+                    window_days=st.session_state.profile.company_application_window_days
+                )
+
+                # If user entered different JD text, refresh intake opportunity ID so it never collides with an older workspace
+                cur_jd_hash = hash(jd_text.strip())
+                saved_jd_hash = st.session_state.get(f"intake_jd_hash_{cur_intake}")
+                if saved_jd_hash != cur_jd_hash:
+                    st.session_state[f"intake_opportunity_{cur_intake}"] = str(uuid.uuid4())
+                    st.session_state[f"intake_jd_hash_{cur_intake}"] = cur_jd_hash
+
+                job_payload = {
+                    "opportunity_id": st.session_state.setdefault(f"intake_opportunity_{cur_intake}", str(uuid.uuid4())),
+                    "company": final_company,
+                    "title": final_title,
+                    "family": final_family,
+                    "min_pay": final_min_pay,
+                    "max_pay": final_max_pay,
+                    "url": final_url,
+                    "req_skills": req_skills,
+                    "pref_skills": pref_skills,
+                    "pain_points": pain_points,
+                    "is_remote": is_remote,
+                    "employment_arrangement": final_arrangement,
+                    "worker_classification": final_worker_class,
+                    "pay_basis": final_pay_basis,
+                    "contract_length_raw": final_duration,
+                    "contract_length_months": extracted_months,
+                    "contract_length_weeks": extracted_weeks,
+                    "expected_hours_per_week": extracted_hours,
+                    "extension_possible": extracted_ext,
+                    "fte_conversion_possible": extracted_fte,
+                    "staffing_agency": final_agency,
+                    "client_company": final_client,
+                    "screening_qa": screening_inputs,
+                    "jd_text": jd_text,
+                    "all_opps": all_opps,
+                    "dup": dup_res,
+                    "vel": vel_res,
+                    "telemetry_warnings": extracted_telemetry_warnings,
+                    "telemetry_flags": extracted_telemetry_flags,
+                    "telemetry_benefits": extracted_telemetry_benefits,
+                    "category": overrides.get("category"),
+                    "applied_via": overrides.get("applied_via"),
+                    "priority": overrides.get("priority"),
+                    "salary_expectation": overrides.get("salary_expectation"),
+                    "notes": overrides.get("notes")
+                }
+
+                # Check if Guardrails are tripped
+                if (dup_res["is_duplicate"] and not dup_res["is_repost"]) or vel_res["velocity_exceeded"]:
+                    st.session_state.pending_guardrail_check = job_payload
+                    st.session_state.latest_eval = None
+                    st.rerun()
+                else:
+                    # Clean check -> proceed directly
+                    execute_application_workflow(job_payload)
+                    st.rerun()
+
+        # Display Pending Job Signals Review Gate if flagged
+        if st.session_state.pending_job_signals_gate:
+            gate = st.session_state.pending_job_signals_gate
+            st.error("🚩 **Job Signals Review — Flags Detected**")
+            st.markdown(
+                "One or more configured **Flags** were detected in this job description. "
+                "Please review the findings and evidence below before deciding whether to proceed with full ingestion."
+            )
+            render_job_signals(gate["flags"], gate["warnings"], gate["benefits"])
+            col_s1, col_s2 = st.columns(2)
+            with col_s1:
+                if st.button("👉 Proceed with ingestion", type="primary", use_container_width=True):
+                    gate_payload = st.session_state.pending_job_signals_gate
+                    st.session_state.pending_job_signals_gate = None
+                    _run_intake_extraction(
+                        jd_text=gate_payload["jd_text"],
+                        pre_evaluated_findings=gate_payload["all_findings"],
+                        overrides=gate_payload["manual_overrides"],
+                        screening_inputs=gate_payload["screening_inputs"]
+                    )
+            with col_s2:
+                if st.button("❌ Cancel / Discard", use_container_width=True):
+                    st.session_state.pending_job_signals_gate = None
+                    st.info("Ingestion cancelled. No Drive workspace or Sheets records were created.")
+                    st.rerun()
+
+        # Display Pending Guardrail Warning if tripped
+        if st.session_state.pending_guardrail_check:
+            chk = st.session_state.pending_guardrail_check
+            dup = chk["dup"]
+            vel = chk["vel"]
+
+            st.warning("⚠️ **Application Guardrail Warning** — Review Before Submitting")
+            if dup["is_duplicate"] and not dup["is_repost"]:
+                matched_title = dup["matched_record"].get("Job Title") if dup["matched_record"] else chk["title"]
+                st.error(
+                    f"🚨 **Duplicate Application Detected**: You already applied to **{matched_title}** at **{chk['company']}** "
+                    f"{dup['days_elapsed']} days ago ({dup['prior_date']}). Current Status: `{dup['prior_status']}`.\n\n"
+                    f"*Note: Many ATS platforms (Greenhouse, Lever, Workday) automatically archive or reject duplicate applications submitted within 60 days.*"
+                )
+
+            if dup["is_repost"]:
+                st.info(
+                    f"ℹ️ **Potential Repost / Renewed Requisition**: You previously applied to this role at {chk['company']} "
+                    f"{dup['days_elapsed']} days ago ({dup['prior_date']}). Re-applying may be viable if the hiring requisition has been refreshed."
+                )
+
+            if vel["velocity_exceeded"]:
+                st.error(
+                    f"🏢 **Company Application Velocity Cap Reached**: You already have **{vel['active_count']} application(s)** "
+                    f"with **{chk['company']}** within the past {vel['window_days']} days (Guardrail Cap: {vel['max_limit']}).\n\n"
+                    f"*Note: Internal talent acquisition teams often flag candidates with multiple concurrent applications as lack of focus.*"
+                )
+                st.markdown("**Recent Applications at this Company:**")
+                st.dataframe(vel["active_applications"], use_container_width=True)
+
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                if st.button("👉 Proceed & Apply Anyway (Override)", type="primary", use_container_width=True):
+                    execute_application_workflow(chk)
+                    st.rerun()
+            with col_g2:
+                if st.button("❌ Cancel / Hold Application", use_container_width=True):
+                    st.session_state.pending_guardrail_check = None
+                    st.info("Ingestion cancelled. You can edit your inputs or select another job.")
+                    st.rerun()
+
+        # Primary Action Button
+        if not st.session_state.pending_job_signals_gate:
+            if st.button("⚡ Process Job & Generate Apply Kit", type="primary", use_container_width=True):
+                if not jd_text_input or len(jd_text_input.strip()) < 20:
+                    st.error("Please paste a valid job description (at least 20 characters).")
+                else:
+                    with st.spinner("Evaluating Job Signals and analyzing job description..."):
+                        warning_rules = PipelineConfigService.get_active_telemetry_rules()
+                        try:
+                            flags, warnings, benefits = llm_adapter.evaluate_job_signals(jd_text_input, rules=warning_rules)
+                        except Exception as eval_err:
+                            log_warn(f"Job Signals evaluation error: {eval_err}")
+                            st.error(f"Job Signals evaluation failed: {eval_err}. Ingestion stopped for safety. Please retry.")
+                            flags, warnings, benefits = None, None, None
+
+                        if flags is not None:
+                            all_findings = list(flags) + list(warnings) + list(benefits)
+                            manual_overrides = {
+                                "company": manual_company,
+                                "title": manual_title,
+                                "family": manual_family,
+                                "min_pay": manual_min_pay,
+                                "max_pay": manual_max_pay,
+                                "url": manual_url,
+                                "arrangement": manual_arrangement,
+                                "worker_class": manual_worker_class,
+                                "pay_basis": manual_pay_basis,
+                                "duration": manual_duration,
+                                "agency_client": manual_agency_client,
+                                "category": manual_category,
+                                "applied_via": manual_applied_via,
+                                "priority": manual_priority,
+                                "salary_expectation": manual_salary_expectation,
+                                "notes": manual_notes,
+                            }
+
+                            if flags:
+                                from job_pipeline.logger import log_job_signals
+                                log_job_signals(f"Ingestion paused for user review due to {len(flags)} flag(s).")
+                                st.session_state.pending_job_signals_gate = {
+                                    "jd_text": jd_text_input,
+                                    "flags": flags,
+                                    "warnings": warnings,
+                                    "benefits": benefits,
+                                    "all_findings": all_findings,
+                                    "manual_overrides": manual_overrides,
+                                    "screening_inputs": screening_inputs,
+                                }
+                                st.session_state.latest_eval = None
+                                st.rerun()
+                            else:
+                                _run_intake_extraction(
+                                    jd_text=jd_text_input,
+                                    pre_evaluated_findings=all_findings,
+                                    overrides=manual_overrides,
+                                    screening_inputs=screening_inputs
+                                )
+        t_elapsed = (time.perf_counter() - t_start) * 1000
+        if is_logging_enabled():
+            log_cli("PERF", f"Intake view rendered in {t_elapsed:.1f}ms")
+
+    render_intake_view()
 
     # Render Apply Kit if evaluation exists
     if st.session_state.latest_eval:
@@ -2505,100 +2566,95 @@ if active_section == SECTION_CRM:
             unsafe_allow_html=True
         )
 
+        t_crm_start = time.perf_counter()
+
         # Multi-attribute Search & Filter Bar
         col_search, col_arr_filt, col_cat_filt, col_pri_filt, col_src_filt = st.columns([2, 1, 1, 1, 1])
         with col_search:
-            search_query = st.text_input("🔍 Search Applications", placeholder="e.g. Planful, Analyst, Recruiter Screen...", autocomplete="off")
+            search_query = st.text_input(
+                "🔍 Search Applications",
+                placeholder="e.g. Planful, Analyst, Recruiter Screen...",
+                autocomplete="off",
+                key="crm_search_input"
+            )
         with col_arr_filt:
             arr_filter = st.selectbox(
                 "Filter Type",
-                ["All Types", "Employee", "Contract"]
+                ["All Types", "Employee", "Contract"],
+                key="crm_filter_arr"
             )
         with col_cat_filt:
             cat_filter = st.selectbox(
                 "Filter Category",
-                ["All Categories", "Target", "Stretch", "Opportunistic", "Practice", "Fallback", "Unassigned"]
+                ["All Categories", "Target", "Stretch", "Opportunistic", "Practice", "Fallback", "Unassigned"],
+                key="crm_filter_cat"
             )
         with col_pri_filt:
             pri_filter = st.selectbox(
                 "Filter Priority",
-                ["All Priorities"] + list(available_priorities) + ["Unspecified"]
+                ["All Priorities"] + list(available_priorities) + ["Unspecified"],
+                key="crm_filter_pri"
             )
         with col_src_filt:
             src_filter = st.selectbox(
                 "Filter Source",
-                ["All Sources"] + list(available_sources) + ["Unspecified"]
+                ["All Sources"] + list(available_sources) + ["Unspecified"],
+                key="crm_filter_src"
             )
 
-        filtered_opps = opportunities
-        if arr_filter != "All Types":
-            filtered_opps = [o for o in filtered_opps if str(o.get("Employment Arrangement") or o.get("employment_arrangement") or "").strip() == arr_filter]
+        # Track filter and search changes: entering new search or clearing search resets to page 1
+        current_filters = (search_query.strip(), arr_filter, cat_filter, pri_filter, src_filter)
+        prev_filters = st.session_state.get("_prev_crm_filters")
+        if prev_filters is not None and prev_filters != current_filters:
+            st.session_state.crm_page = 1
+            st.session_state.active_opp_card = None
+        st.session_state._prev_crm_filters = current_filters
 
-        if cat_filter != "All Categories":
-            if cat_filter == "Unassigned":
-                filtered_opps = [o for o in filtered_opps if str(o.get("Category", "")).strip() not in APPLICATION_CATEGORIES]
-            else:
-                filtered_opps = [o for o in filtered_opps if str(o.get("Category", "")).strip() == cat_filter]
-
-        if pri_filter != "All Priorities":
-            if pri_filter == "Unspecified":
-                filtered_opps = [o for o in filtered_opps if not o.get("Priority") or o.get("Priority") == "Not Specified"]
-            else:
-                filtered_opps = [o for o in filtered_opps if str(o.get("Priority", "")).strip() == pri_filter]
-
-        if src_filter != "All Sources":
-            if src_filter == "Unspecified":
-                filtered_opps = [o for o in filtered_opps if not o.get("Applied Via") or o.get("Applied Via") == "Not Specified"]
-            else:
-                filtered_opps = [o for o in filtered_opps if str(o.get("Applied Via", "")).strip() == src_filter]
-
-        if search_query:
-            sq = search_query.lower()
-            filtered_opps = [
-                o for o in filtered_opps
-                if sq in str(o.get("Company Name", "")).lower()
-                or sq in str(o.get("Job Title", "")).lower()
-                or sq in str(o.get("Status", "")).lower()
-                or sq in str(o.get("Notes", "")).lower()
-                or sq in str(o.get("Category", "")).lower()
-                or sq in str(o.get("Priority", "")).lower()
-                or sq in str(o.get("Applied Via", "")).lower()
-                or sq in str(o.get("Employment Arrangement", "")).lower()
-                or sq in str(o.get("Worker Classification", "")).lower()
-                or sq in str(o.get("Staffing Agency", "")).lower()
-                or sq in str(o.get("Client Company", "")).lower()
-            ]
+        filtered_opps = PipelineSearchPaginationService.filter_opportunities(
+            opportunities=opportunities,
+            search_query=search_query,
+            arrangement_filter=arr_filter,
+            category_filter=cat_filter,
+            priority_filter=pri_filter,
+            source_filter=src_filter,
+            application_categories=list(APPLICATION_CATEGORIES.keys())
+        )
 
         total_filtered = len(filtered_opps)
-        PAGE_SIZE_OPTIONS = [5, 10, 15, 25, 50]
+        PAGE_SIZE_OPTIONS = PipelineSearchPaginationService.PAGE_SIZE_OPTIONS
         if "crm_page_size" not in st.session_state:
-            st.session_state.crm_page_size = 5
+            st.session_state.crm_page_size = PipelineSearchPaginationService.DEFAULT_PAGE_SIZE
 
         items_per_page = st.session_state.crm_page_size
-        total_pages = max(1, (total_filtered + items_per_page - 1) // items_per_page)
-
         reversed_list = list(reversed(filtered_opps))
 
-        # If user opened an active opp card, jump to that page
-        active_card_id = st.session_state.get("active_opp_card")
-        if active_card_id:
-            for card_idx, card_item in enumerate(reversed_list):
-                if str(card_item.get("Opportunity ID", "")).strip() == str(active_card_id).strip():
-                    st.session_state.crm_page = (card_idx // items_per_page) + 1
-                    break
+        # Jump to card page ONLY upon explicit action (consumed immediately)
+        jump_target_id = st.session_state.pop("crm_jump_to_card", None)
+        if jump_target_id:
+            card_pg = PipelineSearchPaginationService.find_card_page(
+                card_id=jump_target_id,
+                ordered_records=reversed_list,
+                items_per_page=items_per_page
+            )
+            if card_pg:
+                st.session_state.crm_page = card_pg
 
         if "crm_page" not in st.session_state:
             st.session_state.crm_page = 1
-        if st.session_state.crm_page > total_pages:
-            st.session_state.crm_page = total_pages
-        if st.session_state.crm_page < 1:
-            st.session_state.crm_page = 1
+
+        pagination = PipelineSearchPaginationService.calculate_pagination(
+            total_items=total_filtered,
+            items_per_page=items_per_page,
+            current_page=st.session_state.crm_page
+        )
+        st.session_state.crm_page = pagination["current_page"]
+        total_pages = pagination["total_pages"]
 
         col_hdr_info, col_sz, col_p_prev, col_p_info, col_p_next = st.columns([2.5, 1.2, 1, 1.2, 1])
         with col_hdr_info:
             st.markdown(f"Showing **{total_filtered}** opportunities ({items_per_page}/page):")
         with col_sz:
-            sz_idx = PAGE_SIZE_OPTIONS.index(st.session_state.crm_page_size) if st.session_state.crm_page_size in PAGE_SIZE_OPTIONS else 1
+            sz_idx = PAGE_SIZE_OPTIONS.index(st.session_state.crm_page_size) if st.session_state.crm_page_size in PAGE_SIZE_OPTIONS else 0
             new_sz = st.selectbox(
                 "Per Page",
                 PAGE_SIZE_OPTIONS,
@@ -2609,25 +2665,25 @@ if active_section == SECTION_CRM:
             )
             if new_sz != st.session_state.crm_page_size:
                 st.session_state.crm_page_size = new_sz
-                items_per_page = new_sz
-                total_pages = max(1, (total_filtered + items_per_page - 1) // items_per_page)
-                if st.session_state.crm_page > total_pages:
-                    st.session_state.crm_page = total_pages
+                st.session_state.crm_page = 1
                 st.rerun()
         with col_p_prev:
             if st.button("⬅️ Previous", key="crm_prev_pg", disabled=(st.session_state.crm_page <= 1), use_container_width=True):
-                st.session_state.crm_page -= 1
+                st.session_state.crm_page = max(1, st.session_state.crm_page - 1)
                 st.rerun()
         with col_p_info:
             st.markdown(f"<div style='text-align:center; padding-top:6px; font-weight:600; color:#94A3B8;'>Page {st.session_state.crm_page} of {total_pages}</div>", unsafe_allow_html=True)
         with col_p_next:
             if st.button("Next ➡️", key="crm_next_pg", disabled=(st.session_state.crm_page >= total_pages), use_container_width=True):
-                st.session_state.crm_page += 1
+                st.session_state.crm_page = min(total_pages, st.session_state.crm_page + 1)
                 st.rerun()
 
-        start_offset = (st.session_state.crm_page - 1) * items_per_page
-        end_offset = start_offset + items_per_page
+        start_offset = pagination["start_offset"]
+        end_offset = pagination["end_offset"]
         current_page_opps = reversed_list[start_offset:end_offset]
+        if is_logging_enabled():
+            crm_elapsed = (time.perf_counter() - t_crm_start) * 1000
+            log_cli("PERF", f"CRM Pipeline Tracker rendered ({total_filtered} opportunities, page {st.session_state.crm_page}/{total_pages}) in {crm_elapsed:.1f}ms")
 
         # Render each application card
         for idx, opp in enumerate(current_page_opps):
@@ -3030,6 +3086,7 @@ if active_section == SECTION_CRM:
 
                         log_crm(f"Updating opportunity '{final_comp}' ({opp_id}): Title='{final_title}', Stage='{new_stage}', Pay='{final_pay}', SalExp='{final_sal_exp}', Arrangement='{new_arr}'")
                         st.session_state.active_opp_card = opp_id
+                        st.session_state.crm_jump_to_card = opp_id
                         st.session_state.active_sub_card = None
 
                         # Resolve Source
@@ -3255,6 +3312,7 @@ if active_section == SECTION_CRM:
                         btn_call_submitted = st.form_submit_button("➕ Append Call Note to Tracker")
                         if btn_call_submitted:
                             st.session_state.active_opp_card = opp_id
+                            st.session_state.crm_jump_to_card = opp_id
                             st.session_state.active_sub_card = f"call_{opp_id}"
                             if call_takeaway.strip():
                                 if storage_adapter.is_connected and hasattr(storage_adapter, "append_call_note"):
@@ -3310,6 +3368,7 @@ if active_section == SECTION_CRM:
 
                     if btn_draft_ai:
                         st.session_state.active_opp_card = opp_id
+                        st.session_state.crm_jump_to_card = opp_id
                         st.session_state.active_sub_card = f"qa_{opp_id}"
                         if not ai_prompt_hint.strip():
                             st.warning("Please enter a topic or question to draft.")
@@ -3360,6 +3419,7 @@ if active_section == SECTION_CRM:
                         btn_save_qa = st.form_submit_button("💾 Save Question & Sync to Drive")
                         if btn_save_qa:
                             st.session_state.active_opp_card = opp_id
+                            st.session_state.crm_jump_to_card = opp_id
                             st.session_state.active_sub_card = f"qa_{opp_id}"
                             if not q_new_prompt.strip() or not q_new_ans.strip():
                                 st.warning("Please enter both the question and answer.")
