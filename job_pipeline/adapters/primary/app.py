@@ -3,6 +3,7 @@ import re
 import sys
 import uuid
 import json
+import pyperclip
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
@@ -2893,7 +2894,7 @@ if active_section == SECTION_CRM:
                 with c_card2:
                     st.markdown("##### Update Application Details & Recruiter Notes:")
                     stage_options = [
-                        "Pending", "Processed", "Applied", "Declined to Apply",
+                        "Pending", "Processed", "Applied", "Declined to Apply", "Employer Interest",
                         "Application Rejected", "Recruiter Screen", "Hiring Manager",
                         "Technical Screen", "Final Round", "Offer", "Withdrawn",
                         "Archived", "Rejected"
