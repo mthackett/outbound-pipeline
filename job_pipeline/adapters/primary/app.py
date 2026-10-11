@@ -21,8 +21,7 @@ import streamlit as st
 try:
     from job_pipeline.version import __version__ as APP_VERSION
 except Exception:
-    APP_VERSION = "1.3"
-
+    APP_VERSION = "1.4"
 
 from job_pipeline.domain.services import (
     JobQualificationService, ApplicationGuardrailService, ScreeningQAService, QuickLinksService,
@@ -416,8 +415,40 @@ def render_quicklinks_manager(context_key: str = "sb"):
 
 
 # =====================================================================
-# SIDEBAR REORGANIZATION
+# SIDEBAR BRANDING & REORGANIZATION
 # =====================================================================
+
+# Brand Identity: Configured Logo or MO Monogram
+custom_logo_path = getattr(instance_cfg, "logo_path", None)
+if custom_logo_path and Path(custom_logo_path).is_file():
+    st.sidebar.image(custom_logo_path, use_container_width=True)
+else:
+    st.sidebar.markdown(
+        """
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 2px 0px;">
+            <div style="
+                width: 36px;
+                height: 36px;
+                background: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%);
+                border-radius: 8px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-weight: 800;
+                font-size: 15px;
+                color: #FFFFFF;
+                letter-spacing: 0.5px;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
+                flex-shrink: 0;
+            ">MO</div>
+            <div style="line-height: 1.25;">
+                <div style="font-size: 1.05rem; font-weight: 700; color: #F8FAFC; letter-spacing: -0.2px;">More Outbound</div>
+                <div style="font-size: 0.72rem; font-weight: 500; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.6px;">Pipeline Intelligence</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 # 1. Application Quicklinks
 st.sidebar.subheader("⚡ Application Quicklinks")
@@ -2395,7 +2426,7 @@ def parse_skills_list(val) -> list[str]:
 # SECTION 2: PIPELINE TRACKER
 # =====================================================================
 if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
-    st.subheader("📊 Live Application Pipeline & CRM")
+    st.subheader("📊 Application Pipeline")
     #st.caption("Active applications synced in real-time from your Google Sheet (`Raw Ingestion`). Update stages, add recruiter contact info, and track interview progress.")
 
     # Flash notification for saved updates
@@ -2594,12 +2625,29 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
         if active_count is None:
             active_count = sum(1 for o in opportunities if str(o.get("Status") or o.get("status") or "").strip() in ACTIVE_OPPORTUNITY_STAGES)
         apps_per_interview = pipeline_kpis["apps_per_interview"]
+        apps_per_interest = pipeline_kpis.get("apps_per_interest", "—")
+        interest_count = pipeline_kpis.get("total_positive_interest", 0)
+        interview_count = pipeline_kpis.get("total_interviewed", 0)
 
         stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
         stat_col1.metric("Total Tracked", total_apps)
-        stat_col2.metric("Applied", applied_count)
+        stat_col2.metric("Applications Submitted", applied_count)
         stat_col3.metric("Active Opportunities", active_count)
         stat_col4.metric("Apps / Interview", apps_per_interview)
+
+        # Supporting Conversion Metric Banner
+        st.markdown(
+            f"<div style='margin-top: 4px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; background: #0F172A; border: 1px solid #334155; border-radius: 6px; padding: 6px 14px; font-size: 0.82rem; color: #94A3B8;'>"
+            f"<div><span style='color: #64748B; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;'>Conversion Velocity:</span> &nbsp; "
+            f"<span style='color: #E2E8F0;'>Apps / Interest:</span> <b style='color: #818CF8;'>{apps_per_interest}</b> "
+            f"<span style='color: #64748B;'>({interest_count} positive outcome{'s' if interest_count != 1 else ''})</span> &nbsp;|&nbsp; "
+            f"<span style='color: #E2E8F0;'>Apps / Interview:</span> <b style='color: #A5B4FC;'>{apps_per_interview}</b> "
+            f"<span style='color: #64748B;'>({interview_count} interview{'s' if interview_count != 1 else ''})</span>"
+            f"</div>"
+            f"<div style='color: #64748B; font-size: 0.76rem;'>Submitted applications per qualified stage progression</div>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
 
         # Performance breakdown by resume variant (for 2+ variants)
         variant_rows = pipeline_kpis["variant_rows"]
@@ -2611,7 +2659,8 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
                     <td style="text-align: right; padding: 7px 12px;">{r['tracked']}</td>
                     <td style="text-align: right; padding: 7px 12px;">{r['applied']}</td>
                     <td style="text-align: right; padding: 7px 12px;">{r['active']}</td>
-                    <td style="text-align: right; padding: 7px 12px; color: #818CF8; font-weight: 600;">{r['apps_per_interview']}</td>
+                    <td style="text-align: right; padding: 7px 12px; color: #818CF8; font-weight: 600;">{r.get('apps_per_interest', '—')}</td>
+                    <td style="text-align: right; padding: 7px 12px; color: #A5B4FC; font-weight: 600;">{r['apps_per_interview']}</td>
                 </tr>"""
                 for r in variant_rows
             ])
@@ -2625,8 +2674,9 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
                         <tr style="border-bottom: 1px solid #334155; color: #94A3B8;">
                             <th style="text-align: left; padding: 6px 12px; font-weight: 600;">Resume Variant</th>
                             <th style="text-align: right; padding: 6px 12px; font-weight: 600;">Tracked</th>
-                            <th style="text-align: right; padding: 6px 12px; font-weight: 600;">Applied</th>
+                            <th style="text-align: right; padding: 6px 12px; font-weight: 600;">Submitted</th>
                             <th style="text-align: right; padding: 6px 12px; font-weight: 600;">Active Opps</th>
+                            <th style="text-align: right; padding: 6px 12px; font-weight: 600;">Apps / Interest</th>
                             <th style="text-align: right; padding: 6px 12px; font-weight: 600;">Apps / Interview</th>
                         </tr>
                     </thead>
@@ -2637,6 +2687,7 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
                             <td style="text-align: right; padding: 7px 12px;">{totals_row['tracked']}</td>
                             <td style="text-align: right; padding: 7px 12px;">{totals_row['applied']}</td>
                             <td style="text-align: right; padding: 7px 12px;">{totals_row['active']}</td>
+                            <td style="text-align: right; padding: 7px 12px; color: #818CF8; font-weight: 700;">{totals_row.get('apps_per_interest', '—')}</td>
                             <td style="text-align: right; padding: 7px 12px; color: #A5B4FC; font-weight: 700;">{totals_row['apps_per_interview']}</td>
                         </tr>
                     </tbody>
@@ -2645,24 +2696,28 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
             """
             st.markdown(table_html, unsafe_allow_html=True)
 
-        # Strategic Category Breakdown Bar
-        cat_counts = {
-            "Target": sum(1 for o in opportunities if str(o.get("Category", "")).strip() == "Target"),
-            "Stretch": sum(1 for o in opportunities if str(o.get("Category", "")).strip() == "Stretch"),
-            "Opportunistic": sum(1 for o in opportunities if str(o.get("Category", "")).strip() == "Opportunistic"),
-            "Practice": sum(1 for o in opportunities if str(o.get("Category", "")).strip() == "Practice"),
-            "Fallback": sum(1 for o in opportunities if str(o.get("Category", "")).strip() == "Fallback"),
-            "Unassigned": sum(1 for o in opportunities if str(o.get("Category", "")).strip() not in APPLICATION_CATEGORIES)
-        }
+        # Submitted Applications by Strategy (Counts submitted applications only)
+        sub_cats = pipeline_kpis.get("submitted_categories")
+        if not sub_cats:
+            sub_opps = [o for o in opportunities if PipelineKPIService.is_submitted(o)]
+            sub_cats = {"Target": 0, "Stretch": 0, "Opportunistic": 0, "Practice": 0, "Fallback": 0, "Unassigned": 0}
+            for o in sub_opps:
+                c = str(o.get("Category") or o.get("category") or "").strip()
+                if c in sub_cats and c != "Unassigned":
+                    sub_cats[c] += 1
+                else:
+                    sub_cats["Unassigned"] += 1
+
         st.markdown(
-            f"<div style='margin-bottom: 12px; font-size: 0.86rem; color: #94A3B8; background: #1E293B; padding: 7px 14px; border-radius: 8px; border: 1px solid #334155;'>"
-            f"<span style='color: #F8FAFC; font-weight: 600;'>Strategic Categories:</span> &nbsp; "
-            f"🎯 <b>Target:</b> {cat_counts['Target']} &nbsp;|&nbsp; "
-            f"🚀 <b>Stretch:</b> {cat_counts['Stretch']} &nbsp;|&nbsp; "
-            f"💡 <b>Opportunistic:</b> {cat_counts['Opportunistic']} &nbsp;|&nbsp; "
-            f"🥊 <b>Practice:</b> {cat_counts['Practice']} &nbsp;|&nbsp; "
-            f"🛡️ <b>Fallback:</b> {cat_counts['Fallback']} &nbsp;|&nbsp; "
-            f"⚪ <b>Unassigned:</b> {cat_counts['Unassigned']}"
+            f"<div style='margin-bottom: 12px; font-size: 0.84rem; color: #94A3B8; background: #1E293B; padding: 7px 14px; border-radius: 8px; border: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;'>"
+            f"<div><span style='color: #F8FAFC; font-weight: 600;'>Submitted Applications by Strategy:</span> &nbsp; "
+            f"<span style='color: #CBD5E1;'>Target:</span> <b style='color: #F8FAFC;'>{sub_cats['Target']}</b> &nbsp;·&nbsp; "
+            f"<span style='color: #CBD5E1;'>Stretch:</span> <b style='color: #F8FAFC;'>{sub_cats['Stretch']}</b> &nbsp;·&nbsp; "
+            f"<span style='color: #CBD5E1;'>Opportunistic:</span> <b style='color: #F8FAFC;'>{sub_cats['Opportunistic']}</b> &nbsp;·&nbsp; "
+            f"<span style='color: #CBD5E1;'>Practice:</span> <b style='color: #F8FAFC;'>{sub_cats['Practice']}</b> &nbsp;·&nbsp; "
+            f"<span style='color: #CBD5E1;'>Fallback:</span> <b style='color: #F8FAFC;'>{sub_cats['Fallback']}</b> &nbsp;·&nbsp; "
+            f"<span style='color: #CBD5E1;'>Unassigned:</span> <b style='color: #F8FAFC;'>{sub_cats['Unassigned']}</b></div>"
+            f"<div style='color: #64748B; font-size: 0.78rem;'>Total: {applied_count}</div>"
             f"</div>",
             unsafe_allow_html=True
         )
@@ -2814,15 +2869,12 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
             curr_cat = str(opp.get("Category") or "").strip()
             cat_display = curr_cat if curr_cat in APPLICATION_CATEGORIES else "Unassigned"
             cat_ico = CATEGORY_ICONS.get(cat_display, "⚪")
-            cat_badge = f"  |  *Category:* `{cat_ico} {cat_display}`" if cat_display != "Unassigned" else ""
 
             curr_pri = str(opp.get("Priority") or opp.get("priority") or "").strip()
             pri_ico = PRIORITY_ICONS.get(curr_pri, "⚡")
-            pri_badge = f"  |  *Priority:* `{pri_ico} {curr_pri}`" if curr_pri and curr_pri != "Not Specified" else ""
 
             curr_src = str(opp.get("Applied Via") or opp.get("applied_via") or "").strip()
             src_ico = SOURCE_ICONS.get(curr_src, "🌐")
-            src_badge = f"  |  *Via:* `{src_ico} {curr_src}`" if curr_src and curr_src != "Not Specified" else ""
 
             # Contract & Arrangement attributes
             curr_arr = str(opp.get("Employment Arrangement") or opp.get("employment_arrangement") or "").strip()
@@ -2836,18 +2888,7 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
             curr_fte = opp.get("FTE Conversion") if opp.get("FTE Conversion") is not None else opp.get("fte_conversion_possible")
             curr_url = str(opp.get("Source URL") or opp.get("source_url") or "").strip()
 
-            if curr_arr == "Contract":
-                c_parts = ["💼 Contract"]
-                if curr_wc:
-                    c_parts.append(curr_wc)
-                if curr_cd:
-                    c_parts.append(curr_cd)
-                arr_badge = f"  |  *Type:* `{' · '.join(c_parts)}`"
-            else:
-                arr_badge = ""
-
             curr_sal_exp = str(opp.get("Salary Expectation") or opp.get("salary_expectation") or "").strip()
-            sal_exp_badge = f"  |  *Exp:* `{curr_sal_exp}`" if curr_sal_exp else ""
 
             target_pay = opp.get("Target Pay Range", "N/A")
             opp_id = opp.get("Opportunity ID", f"row-{idx}")
@@ -2887,14 +2928,86 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
                 stale_info = PipelineKPIService.get_staleness_info(opp, threshold_days=stale_threshold)
             else:
                 stale_info = {"is_stale": False}
+
+            # Concise indicators for scannable expander title (no verbose prefixes)
+            header_pills = [f"`{curr_status}`"]
             if stale_info.get("is_stale"):
                 elapsed_d = int(stale_info["days_elapsed"]) if stale_info.get("days_elapsed") is not None else stale_threshold
-                stale_badge = f"  |  `⏳ Stale ({elapsed_d}d)`"
-            else:
-                stale_badge = ""
+                header_pills.append(f"`⏳ Stale ({elapsed_d}d)`")
+            if cat_display != "Unassigned":
+                header_pills.append(f"`{cat_display}`")
+            if curr_pri and curr_pri != "Not Specified":
+                header_pills.append(f"`{curr_pri}`")
+            if target_pay and target_pay != "N/A":
+                header_pills.append(f"`{target_pay}`")
+
+            expander_title = f"{s_icon} **{comp}** — {title}  |  {' · '.join(header_pills)}"
 
             is_card_open = (st.session_state.get("active_opp_card") == opp_id)
-            with st.expander(f"{s_icon} **{comp}** — {title}  |  *Status:* `{curr_status}`{stale_badge}{cat_badge}{pri_badge}{src_badge}{arr_badge}{sal_exp_badge}  |  *Pay:* `{target_pay}`", expanded=is_card_open):
+            with st.expander(expander_title, expanded=is_card_open):
+                # Structured Application Summary Card
+                if "Offer" in curr_status:
+                    st_bg, st_fg, st_bd = "#064E3B44", "#6EE7B7", "#05966955"
+                elif any(s in curr_status for s in ["Screen", "Manager", "Technical", "Final", "Interview"]):
+                    st_bg, st_fg, st_bd = "#312E8144", "#A5B4FC", "#6366F155"
+                elif "Employer Interest" in curr_status:
+                    st_bg, st_fg, st_bd = "#0E749033", "#67E8F9", "#0891B255"
+                elif curr_status in ("Application Rejected", "Rejected"):
+                    st_bg, st_fg, st_bd = "#7F1D1D33", "#FCA5A5", "#DC262644"
+                elif curr_status in ("Declined to Apply", "Withdrawn", "Archived"):
+                    st_bg, st_fg, st_bd = "#1E293B", "#94A3B8", "#334155"
+                elif "Flagged" in curr_status:
+                    st_bg, st_fg, st_bd = "#78350F33", "#FCD34D", "#D9770644"
+                else:
+                    st_bg, st_fg, st_bd = "#1E293B", "#CBD5E1", "#475569"
+
+                pills_html_list = [
+                    f'<span style="background:{st_bg}; color:{st_fg}; border:1px solid {st_bd}; padding:3px 10px; border-radius:9999px; font-size:0.78rem; font-weight:600;">{curr_status}</span>'
+                ]
+                if stale_info.get("is_stale"):
+                    elapsed_d = int(stale_info["days_elapsed"]) if stale_info.get("days_elapsed") is not None else stale_threshold
+                    pills_html_list.append(
+                        f'<span style="background:#451A0344; color:#FDBA74; border:1px solid #D9770655; padding:3px 10px; border-radius:9999px; font-size:0.78rem; font-weight:600;">⏳ Stale ({elapsed_d}d)</span>'
+                    )
+                if cat_display != "Unassigned":
+                    pills_html_list.append(
+                        f'<span style="background:#0F172A; color:#E2E8F0; border:1px solid #334155; padding:3px 10px; border-radius:9999px; font-size:0.78rem; font-weight:500;">{cat_ico} {cat_display}</span>'
+                    )
+                if curr_pri and curr_pri != "Not Specified":
+                    pills_html_list.append(
+                        f'<span style="background:#0F172A; color:#E2E8F0; border:1px solid #334155; padding:3px 10px; border-radius:9999px; font-size:0.78rem; font-weight:500;">{pri_ico} {curr_pri}</span>'
+                    )
+                if curr_src and curr_src != "Not Specified":
+                    pills_html_list.append(
+                        f'<span style="background:#0F172A; color:#94A3B8; border:1px solid #334155; padding:3px 10px; border-radius:9999px; font-size:0.78rem; font-weight:500;">{src_ico} {curr_src}</span>'
+                    )
+                if target_pay and target_pay != "N/A":
+                    pills_html_list.append(
+                        f'<span style="background:#0F172A; color:#E2E8F0; border:1px solid #334155; padding:3px 10px; border-radius:9999px; font-size:0.78rem; font-weight:500;">💰 {target_pay}</span>'
+                    )
+                if curr_arr == "Contract":
+                    c_parts = ["Contract"]
+                    if curr_wc:
+                        c_parts.append(curr_wc)
+                    pills_html_list.append(
+                        f'<span style="background:#1E1B4B55; color:#C7D2FE; border:1px solid #4F46E544; padding:3px 10px; border-radius:9999px; font-size:0.78rem; font-weight:500;">💼 {" · ".join(c_parts)}</span>'
+                    )
+
+                secondary_pills_html = " ".join(pills_html_list)
+
+                st.markdown(
+                    f"""
+                    <div style="background:#0F172A; border:1px solid #334155; border-radius:8px; padding:10px 14px; margin-bottom:14px;">
+                        <div style="font-size:1.08rem; font-weight:700; color:#F8FAFC; margin-bottom:6px; line-height:1.35; word-break:break-word;">
+                            {comp} <span style="color:#64748B; font-weight:400;">—</span> {title}
+                        </div>
+                        <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+                            {secondary_pills_html}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
                 c_card1, c_card2 = st.columns([1, 1])
 
                 with c_card1:

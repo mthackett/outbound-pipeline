@@ -299,6 +299,15 @@ ACTIVE_OPPORTUNITY_STAGES: Set[str] = {
     "Offer"
 }
 
+POSITIVE_INTEREST_STAGES: Set[str] = {
+    "Employer Interest",
+    "Recruiter Screen",
+    "Hiring Manager",
+    "Technical Screen",
+    "Final Round",
+    "Offer"
+}
+
 KPI_INTERVIEW_STAGES: Set[str] = {
     "Recruiter Screen",
     "Hiring Manager",

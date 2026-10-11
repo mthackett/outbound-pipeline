@@ -12,7 +12,7 @@ from job_pipeline.domain.models import (
     DEFAULT_TELEMETRY_WARNING_RULES, DEFAULT_TELEMETRY_RULES,
     TelemetryWarningRule, TelemetryRule, TelemetryFinding,
     PipelineInstanceConfig, INTERVIEW_STAGES, AUTHORITATIVE_PIPELINE_STAGES,
-    ACTIVE_OPPORTUNITY_STAGES, KPI_INTERVIEW_STAGES, TERMINAL_STAGES, SUBMITTED_STAGES
+    ACTIVE_OPPORTUNITY_STAGES, POSITIVE_INTEREST_STAGES, KPI_INTERVIEW_STAGES, TERMINAL_STAGES, SUBMITTED_STAGES
 )
 from job_pipeline.domain.screening_intelligence import ScreeningIntelligenceService
 from job_pipeline.domain.story_bank import StoryBankService
@@ -1323,6 +1323,7 @@ class PipelineKPIService:
 
     ACTIVE_STAGES = ACTIVE_OPPORTUNITY_STAGES
     INTERVIEW_STAGES = KPI_INTERVIEW_STAGES
+    POSITIVE_INTEREST_STAGES = POSITIVE_INTEREST_STAGES
     TERMINAL_STAGES = TERMINAL_STAGES
     SUBMITTED_STAGES = SUBMITTED_STAGES
 
@@ -1397,11 +1398,29 @@ class PipelineKPIService:
         return False
 
     @classmethod
+    def has_positive_interest(cls, opp: Dict[str, Any]) -> bool:
+        """
+        Determines whether a submitted application reached positive employer interest
+        (Employer Interest, Recruiter Screen, Hiring Manager, Technical Screen, Final Round, Offer).
+        Counted once per application regardless of number of qualifying stages.
+        """
+        if not cls.is_submitted(opp):
+            return False
+        curr = str(opp.get("Status") or opp.get("status") or "").strip()
+        if curr in cls.POSITIVE_INTEREST_STAGES:
+            return True
+        hist = cls.parse_stage_history(opp)
+        return any(s in cls.POSITIVE_INTEREST_STAGES for s in hist)
+
+    @classmethod
     def has_interviewed(cls, opp: Dict[str, Any]) -> bool:
         """
         Determines whether a submitted application reached an interview stage
         (Recruiter Screen, Hiring Manager, Technical Screen, or Final Round).
         Counted once per application regardless of number of interview rounds.
+        Employer Interest explicitly does NOT qualify as an interview.
+        Offer alone does NOT qualify unless historical evidence establishes that
+        the application reached an interview stage.
         """
         if not cls.is_submitted(opp):
             return False
@@ -1421,27 +1440,77 @@ class PipelineKPIService:
         return curr in cls.ACTIVE_STAGES
 
     @classmethod
-    def get_last_stage_transition_date(cls, opp: Dict[str, Any]) -> Tuple[Optional[datetime], str]:
+    def get_last_meaningful_activity_date(cls, opp: Dict[str, Any]) -> Tuple[Optional[datetime], str]:
         """
-        Determines the datetime of the last meaningful pipeline stage transition.
-        Reliable stage-history timestamps are checked in reverse order.
+        Determines the datetime of the last reliably recorded meaningful activity.
+        Meaningful activity includes:
+        - Pipeline stage transitions (entered_at in stage_history)
+        - Substantive interactions or touchpoints (timestamped interaction records)
+        - Role intelligence generation (Role Intelligence Generated At)
+        - Explicitly timestamped substantive notes (e.g. lines with [YYYY-MM-DD] or YYYY-MM-DD:)
+
+        Routine refreshes, non-stage edits, and existing untimestamped notes do NOT reset freshness.
         Documented fallback: Date Created / date_created.
-        Returns: (datetime, source_name) where source_name is 'stage_history', 'date_created', or 'missing'.
+        Returns: (datetime, source_name)
         """
+        candidates: List[Tuple[datetime, str]] = []
+
+        # 1. Stage transitions from stage_history
         entries = cls.parse_stage_history_entries(opp)
-        for item in reversed(entries):
+        for item in entries:
             ea = item.get("entered_at")
             parsed = cls.parse_timestamp(ea)
             if parsed:
-                return parsed, "stage_history"
+                candidates.append((parsed, "stage_history"))
 
-        # Documented fallback: Date Created
+        # 2. Structured interactions / touchpoints
+        for key in ("interactions", "touchpoints", "activities", "activity_history"):
+            acts = opp.get(key)
+            if isinstance(acts, str):
+                try:
+                    acts = json.loads(acts)
+                except Exception:
+                    acts = []
+            if isinstance(acts, list):
+                for act in acts:
+                    if isinstance(act, dict):
+                        ts = act.get("timestamp") or act.get("date") or act.get("created_at") or act.get("entered_at")
+                        parsed = cls.parse_timestamp(ts)
+                        if parsed:
+                            candidates.append((parsed, "interaction"))
+
+        # 3. Role Intelligence generation timestamp
+        ri_at = opp.get("Role Intelligence Generated At") or opp.get("role_intelligence_generated_at")
+        parsed_ri = cls.parse_timestamp(ri_at)
+        if parsed_ri:
+            candidates.append((parsed_ri, "role_intelligence"))
+
+        # 4. Reliably timestamped notes entries (e.g. [2026-10-15] or 2026-10-15:)
+        notes = opp.get("Notes") or opp.get("notes") or ""
+        if isinstance(notes, str) and notes.strip():
+            date_matches = re.findall(r'(?:\[|\b)(\d{4}-\d{2}-\d{2})(?:\]|:|\s)', notes)
+            for dm in date_matches:
+                parsed_note_dt = cls.parse_timestamp(dm)
+                if parsed_note_dt:
+                    candidates.append((parsed_note_dt, "timestamped_note"))
+
+        if candidates:
+            # Sort descending to find the most recent meaningful activity
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            return candidates[0]
+
+        # 5. Documented fallback: Date Created
         dc = opp.get("Date Created") or opp.get("date_created")
         parsed_dc = cls.parse_timestamp(dc)
         if parsed_dc:
             return parsed_dc, "date_created"
 
         return None, "missing"
+
+    @classmethod
+    def get_last_stage_transition_date(cls, opp: Dict[str, Any]) -> Tuple[Optional[datetime], str]:
+        """Backward-compatible alias delegating to get_last_meaningful_activity_date."""
+        return cls.get_last_meaningful_activity_date(opp)
 
     @classmethod
     def is_stale(
@@ -1452,10 +1521,10 @@ class PipelineKPIService:
     ) -> bool:
         """
         Derived freshness indicator for submitted, nonterminal applications.
-        Marked Stale when 28 or more days have elapsed since its last meaningful pipeline stage transition.
+        Marked Stale when 28 or more days have elapsed since its last meaningful activity.
         Stale does NOT replace current stage, and does NOT remove an application from Active Opportunities.
         Terminal records (Declined to Apply, Application Rejected, Rejected, Withdrawn, Archived) are excluded.
-        Non-stage edits (notes, refreshes) do not reset freshness.
+        Non-substantive edits (refreshes, un-timestamped notes) do not reset freshness.
         """
         if not cls.is_submitted(opp):
             return False
@@ -1463,7 +1532,7 @@ class PipelineKPIService:
         if curr in cls.TERMINAL_STAGES:
             return False
 
-        last_dt, _ = cls.get_last_stage_transition_date(opp)
+        last_dt, _ = cls.get_last_meaningful_activity_date(opp)
         if not last_dt:
             return False
 
@@ -1484,7 +1553,8 @@ class PipelineKPIService:
         - is_stale: bool
         - days_elapsed: float or None
         - last_transition_date: datetime or None
-        - source: 'stage_history', 'date_created', 'terminal', 'not_submitted', or 'missing'
+        - last_activity_date: datetime or None
+        - source: source identifier string
         """
         if not cls.is_submitted(opp):
             return {
@@ -1492,6 +1562,7 @@ class PipelineKPIService:
                 "is_stale": False,
                 "days_elapsed": None,
                 "last_transition_date": None,
+                "last_activity_date": None,
                 "source": "not_submitted"
             }
         curr = str(opp.get("Status") or opp.get("status") or "").strip()
@@ -1501,16 +1572,18 @@ class PipelineKPIService:
                 "is_stale": False,
                 "days_elapsed": None,
                 "last_transition_date": None,
+                "last_activity_date": None,
                 "source": "terminal"
             }
 
-        last_dt, src = cls.get_last_stage_transition_date(opp)
+        last_dt, src = cls.get_last_meaningful_activity_date(opp)
         if not last_dt:
             return {
                 "is_eligible": True,
                 "is_stale": False,
                 "days_elapsed": None,
                 "last_transition_date": None,
+                "last_activity_date": None,
                 "source": "missing"
             }
 
@@ -1521,6 +1594,7 @@ class PipelineKPIService:
             "is_stale": days_elapsed >= threshold_days,
             "days_elapsed": days_elapsed,
             "last_transition_date": last_dt,
+            "last_activity_date": last_dt,
             "source": src
         }
 
@@ -1571,14 +1645,33 @@ class PipelineKPIService:
         reference_date: Optional[datetime] = None
     ) -> Dict[str, Any]:
         total_tracked = len(opportunities)
-        submitted_count = sum(1 for o in opportunities if cls.is_submitted(o))
+        submitted_opps = [o for o in opportunities if cls.is_submitted(o)]
+        submitted_count = len(submitted_opps)
         interviewed_count = sum(1 for o in opportunities if cls.has_interviewed(o))
+        positive_interest_count = sum(1 for o in opportunities if cls.has_positive_interest(o))
         active_count = sum(1 for o in opportunities if cls.is_active(o))
         stale_count = sum(
             1 for o in opportunities
             if cls.is_stale(o, threshold_days=stale_threshold_days, reference_date=reference_date)
         )
-        overall_ratio = cls.format_ratio(submitted_count, interviewed_count)
+        apps_per_interview = cls.format_ratio(submitted_count, interviewed_count)
+        apps_per_interest = cls.format_ratio(submitted_count, positive_interest_count)
+
+        # Submitted applications breakdown by strategy (sum equals submitted_count)
+        submitted_categories = {
+            "Target": 0,
+            "Stretch": 0,
+            "Opportunistic": 0,
+            "Practice": 0,
+            "Fallback": 0,
+            "Unassigned": 0
+        }
+        for o in submitted_opps:
+            c = str(o.get("Category") or o.get("category") or "").strip()
+            if c in submitted_categories and c != "Unassigned":
+                submitted_categories[c] += 1
+            else:
+                submitted_categories["Unassigned"] += 1
 
         # Group by canonical resume variant
         variants_data: Dict[str, Dict[str, int]] = {}
@@ -1589,6 +1682,7 @@ class PipelineKPIService:
                     "tracked": 0,
                     "applied": 0,
                     "active": 0,
+                    "interest": 0,
                     "interviewed": 0,
                     "stale": 0
                 }
@@ -1597,6 +1691,8 @@ class PipelineKPIService:
                 variants_data[variant]["applied"] += 1
             if cls.is_active(o):
                 variants_data[variant]["active"] += 1
+            if cls.has_positive_interest(o):
+                variants_data[variant]["interest"] += 1
             if cls.has_interviewed(o):
                 variants_data[variant]["interviewed"] += 1
             if cls.is_stale(o, threshold_days=stale_threshold_days, reference_date=reference_date):
@@ -1609,8 +1705,10 @@ class PipelineKPIService:
                 "tracked": stats["tracked"],
                 "applied": stats["applied"],
                 "active": stats["active"],
+                "interest": stats["interest"],
                 "interviewed": stats["interviewed"],
                 "stale": stats["stale"],
+                "apps_per_interest": cls.format_ratio(stats["applied"], stats["interest"]),
                 "apps_per_interview": cls.format_ratio(stats["applied"], stats["interviewed"])
             })
 
@@ -1619,9 +1717,11 @@ class PipelineKPIService:
             "tracked": total_tracked,
             "applied": submitted_count,
             "active": active_count,
+            "interest": positive_interest_count,
             "interviewed": interviewed_count,
             "stale": stale_count,
-            "apps_per_interview": overall_ratio
+            "apps_per_interest": apps_per_interest,
+            "apps_per_interview": apps_per_interview
         }
 
         return {
@@ -1629,9 +1729,12 @@ class PipelineKPIService:
             "total_applied": submitted_count,
             "total_active": active_count,
             "total_active_opportunities": active_count,
+            "total_positive_interest": positive_interest_count,
             "total_interviewed": interviewed_count,
             "total_stale": stale_count,
-            "apps_per_interview": overall_ratio,
+            "apps_per_interest": apps_per_interest,
+            "apps_per_interview": apps_per_interview,
+            "submitted_categories": submitted_categories,
             "variant_rows": variant_rows,
             "totals_row": totals_row
         }

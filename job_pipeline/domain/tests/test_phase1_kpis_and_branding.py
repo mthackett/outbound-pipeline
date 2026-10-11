@@ -9,6 +9,7 @@ from job_pipeline.domain.models import (
     PipelineInstanceConfig,
     AUTHORITATIVE_PIPELINE_STAGES,
     ACTIVE_OPPORTUNITY_STAGES,
+    POSITIVE_INTEREST_STAGES,
     KPI_INTERVIEW_STAGES,
     TERMINAL_STAGES,
     SUBMITTED_STAGES,
@@ -25,7 +26,7 @@ class TestPhase1BrandingAndInstanceConfig(unittest.TestCase):
     """Test suite for Phase 1 typed instance configuration and branding."""
 
     def test_version_constant(self):
-        self.assertEqual(APP_VERSION, "1.3")
+        self.assertEqual(APP_VERSION, "1.4")
 
     def test_instance_config_defaults(self):
         cfg = PipelineInstanceConfig()
@@ -235,6 +236,115 @@ class TestPhase1PipelineKPIs(unittest.TestCase):
         self.assertEqual(kpis["total_applied"], 0)
         self.assertEqual(kpis["total_interviewed"], 0)
         self.assertEqual(kpis["apps_per_interview"], "—")
+        self.assertEqual(kpis["apps_per_interest"], "—")
+
+    def test_positive_interest_stages_and_conversion_metrics(self):
+        expected = {
+            "Employer Interest", "Recruiter Screen", "Hiring Manager",
+            "Technical Screen", "Final Round", "Offer"
+        }
+        self.assertEqual(POSITIVE_INTEREST_STAGES, expected)
+
+        # 1. Employer Interest qualifies for positive interest, but NOT interview
+        opp_ei = {
+            "Opportunity ID": "opp-ei",
+            "Status": "Employer Interest",
+            "stage_history": [{"stage": "Applied"}, {"stage": "Employer Interest"}]
+        }
+        self.assertTrue(PipelineKPIService.has_positive_interest(opp_ei))
+        self.assertFalse(PipelineKPIService.has_interviewed(opp_ei))
+
+        # 2. Offer without interview history qualifies for positive interest, but NOT interview
+        opp_offer_only = {
+            "Opportunity ID": "opp-offer",
+            "Status": "Offer",
+            "stage_history": [{"stage": "Applied"}, {"stage": "Offer"}]
+        }
+        self.assertTrue(PipelineKPIService.has_positive_interest(opp_offer_only))
+        self.assertFalse(PipelineKPIService.has_interviewed(opp_offer_only))
+
+        # 3. Offer WITH interview history qualifies for both
+        opp_offer_int = {
+            "Opportunity ID": "opp-offer-int",
+            "Status": "Offer",
+            "stage_history": [{"stage": "Applied"}, {"stage": "Recruiter Screen"}, {"stage": "Offer"}]
+        }
+        self.assertTrue(PipelineKPIService.has_positive_interest(opp_offer_int))
+        self.assertTrue(PipelineKPIService.has_interviewed(opp_offer_int))
+
+        # 4. Recruiter Screen qualifies for both
+        opp_rs = {
+            "Opportunity ID": "opp-rs",
+            "Status": "Recruiter Screen",
+            "stage_history": [{"stage": "Applied"}, {"stage": "Recruiter Screen"}]
+        }
+        self.assertTrue(PipelineKPIService.has_positive_interest(opp_rs))
+        self.assertTrue(PipelineKPIService.has_interviewed(opp_rs))
+
+        # 5. Rejected after interview qualifies for both historically
+        opp_rej_int = {
+            "Opportunity ID": "opp-rej-int",
+            "Status": "Application Rejected",
+            "stage_history": [{"stage": "Applied"}, {"stage": "Recruiter Screen"}, {"stage": "Application Rejected"}]
+        }
+        self.assertTrue(PipelineKPIService.has_positive_interest(opp_rej_int))
+        self.assertTrue(PipelineKPIService.has_interviewed(opp_rej_int))
+
+        # 6. Aggregate calculation with 50 submitted applications:
+        # - 45 standard Applied
+        # - 3 Employer Interest only
+        # - 2 Recruiter Screen (interview)
+        opps = []
+        for i in range(45):
+            opps.append({"Opportunity ID": f"app-{i}", "Status": "Applied"})
+        for i in range(3):
+            opps.append({
+                "Opportunity ID": f"ei-{i}",
+                "Status": "Employer Interest",
+                "stage_history": [{"stage": "Applied"}, {"stage": "Employer Interest"}]
+            })
+        for i in range(2):
+            opps.append({
+                "Opportunity ID": f"rs-{i}",
+                "Status": "Recruiter Screen",
+                "stage_history": [{"stage": "Applied"}, {"stage": "Recruiter Screen"}]
+            })
+
+        kpis = PipelineKPIService.calculate_kpis(opps)
+        self.assertEqual(kpis["total_applied"], 50)
+        self.assertEqual(kpis["total_positive_interest"], 5)
+        self.assertEqual(kpis["total_interviewed"], 2)
+        self.assertEqual(kpis["apps_per_interest"], "1:10")
+        self.assertEqual(kpis["apps_per_interview"], "1:25")
+
+    def test_submitted_applications_by_strategy_breakdown(self):
+        # 10 records total: 7 submitted, 3 unsubmitted
+        opps = [
+            {"Opportunity ID": "sub-1", "Status": "Applied", "Category": "Target"},
+            {"Opportunity ID": "sub-2", "Status": "Applied", "Category": "Target"},
+            {"Opportunity ID": "sub-3", "Status": "Recruiter Screen", "Category": "Target"},
+            {"Opportunity ID": "sub-4", "Status": "Applied", "Category": "Stretch"},
+            {"Opportunity ID": "sub-5", "Status": "Application Rejected", "Category": "Stretch", "stage_history": [{"stage": "Applied"}, {"stage": "Application Rejected"}]},
+            {"Opportunity ID": "sub-6", "Status": "Applied", "Category": "Practice"},
+            {"Opportunity ID": "sub-7", "Status": "Applied", "Category": "CustomRandomCat"},  # unassigned
+            # Unsubmitted:
+            {"Opportunity ID": "unsub-1", "Status": "Pending", "Category": "Target"},
+            {"Opportunity ID": "unsub-2", "Status": "Processed", "Category": "Stretch"},
+            {"Opportunity ID": "unsub-3", "Status": "Declined to Apply", "Category": "Target"},
+        ]
+        kpis = PipelineKPIService.calculate_kpis(opps)
+        self.assertEqual(kpis["total_tracked"], 10)
+        self.assertEqual(kpis["total_applied"], 7)
+
+        cats = kpis["submitted_categories"]
+        self.assertEqual(cats["Target"], 3)
+        self.assertEqual(cats["Stretch"], 2)
+        self.assertEqual(cats["Practice"], 1)
+        self.assertEqual(cats["Opportunistic"], 0)
+        self.assertEqual(cats["Fallback"], 0)
+        self.assertEqual(cats["Unassigned"], 1)
+        self.assertEqual(sum(cats.values()), 7)
+        self.assertEqual(sum(cats.values()), kpis["total_applied"])
 
     def test_canonical_resume_variant_normalization_and_unassigned(self):
         # RevOps variants (dict and string)
@@ -292,16 +402,20 @@ class TestPhase1PipelineKPIs(unittest.TestCase):
         self.assertIn("GTM Engineer", rows)
         self.assertEqual(rows["RevOps Analyst"]["applied"], 26)
         self.assertEqual(rows["RevOps Analyst"]["active"], 1)
+        self.assertEqual(rows["RevOps Analyst"]["apps_per_interest"], "1:26")
         self.assertEqual(rows["RevOps Analyst"]["apps_per_interview"], "1:26")
         self.assertEqual(rows["GTM Engineer"]["applied"], 10)
         self.assertEqual(rows["GTM Engineer"]["active"], 1)
+        self.assertEqual(rows["GTM Engineer"]["apps_per_interest"], "1:10")
         self.assertEqual(rows["GTM Engineer"]["apps_per_interview"], "1:10")
 
         # Aggregate totals row
         tot = kpis["totals_row"]
         self.assertEqual(tot["applied"], 36)
         self.assertEqual(tot["active"], 2)
+        self.assertEqual(tot["interest"], 2)
         self.assertEqual(tot["interviewed"], 2)
+        self.assertEqual(tot["apps_per_interest"], "1:18")
         self.assertEqual(tot["apps_per_interview"], "1:18")
 
 
@@ -422,6 +536,44 @@ class TestPhase1StalenessAndFreshness(unittest.TestCase):
             PipelineKPIService.is_stale(opp, threshold_days=28, reference_date=self.ref_now),
             "Non-stage updates (notes, last modified) must not reset stage transition staleness"
         )
+
+    def test_meaningful_activity_resets_staleness(self):
+        old_stage_time = (self.ref_now - timedelta(days=40)).isoformat()
+        recent_activity_time = (self.ref_now - timedelta(days=5)).isoformat()
+
+        # 1. Structured interaction / touchpoint resets stale clock
+        opp_touchpoint = {
+            "Opportunity ID": "opp-tp",
+            "Status": "Applied",
+            "stage_history": [{"stage": "Applied", "entered_at": old_stage_time}],
+            "interactions": [{"timestamp": recent_activity_time, "type": "recruiter_screen_invite"}]
+        }
+        self.assertFalse(PipelineKPIService.is_stale(opp_touchpoint, threshold_days=28, reference_date=self.ref_now))
+        dt, src = PipelineKPIService.get_last_meaningful_activity_date(opp_touchpoint)
+        self.assertEqual(src, "interaction")
+
+        # 2. Role Intelligence Generated At resets stale clock
+        opp_ri = {
+            "Opportunity ID": "opp-ri",
+            "Status": "Recruiter Screen",
+            "stage_history": [{"stage": "Applied", "entered_at": old_stage_time}],
+            "Role Intelligence Generated At": recent_activity_time
+        }
+        self.assertFalse(PipelineKPIService.is_stale(opp_ri, threshold_days=28, reference_date=self.ref_now))
+        dt, src = PipelineKPIService.get_last_meaningful_activity_date(opp_ri)
+        self.assertEqual(src, "role_intelligence")
+
+        # 3. Reliably timestamped note entry resets stale clock
+        recent_date_str = (self.ref_now - timedelta(days=4)).strftime("%Y-%m-%d")
+        opp_ts_note = {
+            "Opportunity ID": "opp-note",
+            "Status": "Applied",
+            "stage_history": [{"stage": "Applied", "entered_at": old_stage_time}],
+            "Notes": f"[{recent_date_str}] Followed up with hiring manager on email."
+        }
+        self.assertFalse(PipelineKPIService.is_stale(opp_ts_note, threshold_days=28, reference_date=self.ref_now))
+        dt, src = PipelineKPIService.get_last_meaningful_activity_date(opp_ts_note)
+        self.assertEqual(src, "timestamped_note")
 
     def test_configurable_stale_threshold(self):
         # Record 20 days old
