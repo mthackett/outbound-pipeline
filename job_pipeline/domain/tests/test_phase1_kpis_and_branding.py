@@ -26,7 +26,7 @@ class TestPhase1BrandingAndInstanceConfig(unittest.TestCase):
     """Test suite for Phase 1 typed instance configuration and branding."""
 
     def test_version_constant(self):
-        self.assertEqual(APP_VERSION, "1.4")
+        self.assertEqual(APP_VERSION, "1.5.1")
 
     def test_instance_config_defaults(self):
         cfg = PipelineInstanceConfig()
@@ -552,16 +552,27 @@ class TestPhase1StalenessAndFreshness(unittest.TestCase):
         dt, src = PipelineKPIService.get_last_meaningful_activity_date(opp_touchpoint)
         self.assertEqual(src, "interaction")
 
-        # 2. Role Intelligence Generated At resets stale clock
+        # 2. Role Intelligence Generated At does NOT reset stale clock in v1.5.1
         opp_ri = {
             "Opportunity ID": "opp-ri",
             "Status": "Recruiter Screen",
             "stage_history": [{"stage": "Applied", "entered_at": old_stage_time}],
             "Role Intelligence Generated At": recent_activity_time
         }
-        self.assertFalse(PipelineKPIService.is_stale(opp_ri, threshold_days=28, reference_date=self.ref_now))
+        self.assertTrue(PipelineKPIService.is_stale(opp_ri, threshold_days=28, reference_date=self.ref_now))
         dt, src = PipelineKPIService.get_last_meaningful_activity_date(opp_ri)
-        self.assertEqual(src, "role_intelligence")
+        self.assertEqual(src, "stage_history")
+
+        # 2b. User-initiated note edit resets stale clock
+        opp_note_edit = {
+            "Opportunity ID": "opp-note-edit",
+            "Status": "Recruiter Screen",
+            "stage_history": [{"stage": "Applied", "entered_at": old_stage_time}],
+            "notes_updated_at": recent_activity_time
+        }
+        self.assertFalse(PipelineKPIService.is_stale(opp_note_edit, threshold_days=28, reference_date=self.ref_now))
+        dt_ne, src_ne = PipelineKPIService.get_last_meaningful_activity_date(opp_note_edit)
+        self.assertEqual(src_ne, "note_edit")
 
         # 3. Reliably timestamped note entry resets stale clock
         recent_date_str = (self.ref_now - timedelta(days=4)).strftime("%Y-%m-%d")

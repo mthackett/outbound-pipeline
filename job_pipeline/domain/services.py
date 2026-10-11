@@ -1446,10 +1446,10 @@ class PipelineKPIService:
         Meaningful activity includes:
         - Pipeline stage transitions (entered_at in stage_history)
         - Substantive interactions or touchpoints (timestamped interaction records)
-        - Role intelligence generation (Role Intelligence Generated At)
-        - Explicitly timestamped substantive notes (e.g. lines with [YYYY-MM-DD] or YYYY-MM-DD:)
+        - User-initiated creation or modification of application notes (notes_updated_at or dated note entries)
 
-        Routine refreshes, non-stage edits, and existing untimestamped notes do NOT reset freshness.
+        Role Intelligence generation, routine refreshes, non-stage edits without note updates,
+        and untimestamped historical notes do NOT reset freshness.
         Documented fallback: Date Created / date_created.
         Returns: (datetime, source_name)
         """
@@ -1479,11 +1479,13 @@ class PipelineKPIService:
                         if parsed:
                             candidates.append((parsed, "interaction"))
 
-        # 3. Role Intelligence generation timestamp
-        ri_at = opp.get("Role Intelligence Generated At") or opp.get("role_intelligence_generated_at")
-        parsed_ri = cls.parse_timestamp(ri_at)
-        if parsed_ri:
-            candidates.append((parsed_ri, "role_intelligence"))
+        # 3. User-initiated note modifications (via reliable note-edit timestamps)
+        for key in ("notes_updated_at", "notes_modified_at", "last_note_edit_at", "Notes Updated At"):
+            note_ts = opp.get(key)
+            if note_ts:
+                parsed_note_ts = cls.parse_timestamp(note_ts)
+                if parsed_note_ts:
+                    candidates.append((parsed_note_ts, "note_edit"))
 
         # 4. Reliably timestamped notes entries (e.g. [2026-10-15] or 2026-10-15:)
         notes = opp.get("Notes") or opp.get("notes") or ""
@@ -1738,4 +1740,25 @@ class PipelineKPIService:
             "variant_rows": variant_rows,
             "totals_row": totals_row
         }
+
+    @classmethod
+    def refresh_pipeline_data(cls, storage_adapter) -> Tuple[bool, str, Dict[str, Any]]:
+        """
+        Authoritative shared refresh operation for Google Sheets pipeline data.
+        Fetches fresh opportunities, screening Q&A, and requirements extractions.
+        Returns: (success: bool, message: str, data: dict)
+        """
+        if not storage_adapter or not getattr(storage_adapter, "is_connected", False):
+            return False, "Google Sheets adapter is offline or not connected.", {}
+        try:
+            opps = storage_adapter.fetch_all_opportunities(force_refresh=True)
+            qa = storage_adapter.fetch_screening_qa(force_refresh=True)
+            reqs = storage_adapter.fetch_all_requirements_extractions(force_refresh=True)
+            return True, "Pipeline data successfully refreshed from Google Sheets.", {
+                "opportunities": opps,
+                "qa": qa,
+                "requirements": reqs
+            }
+        except Exception as err:
+            return False, f"Could not refresh pipeline data from Google Sheets: {err}", {}
 

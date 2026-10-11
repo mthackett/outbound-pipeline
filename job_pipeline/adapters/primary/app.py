@@ -93,21 +93,60 @@ from job_pipeline.adapters.secondary.mock_adapter import (
 st.markdown("""
 <style>
     .block-container {
-        padding-top: 1.8rem;
+        padding-top: 1.1rem;
         padding-bottom: 2rem;
     }
     .main-title {
-        font-size: 2.05rem;
+        font-size: 1.85rem;
         font-weight: 800;
         color: #F8FAFC;
-        margin-bottom: 0.15rem;
+        margin-bottom: 0.1rem;
         letter-spacing: -0.01em;
     }
     .sub-title {
-        font-size: 0.95rem;
+        font-size: 0.90rem;
         color: #94A3B8;
-        margin-bottom: 1.0rem;
-        line-height: 1.4;
+        margin-bottom: 0.6rem;
+        line-height: 1.35;
+    }
+    /* Compact 6-metric KPI cards */
+    div[data-testid="stMetric"] {
+        background-color: #0F172A;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 8px 12px;
+        box-shadow: none;
+    }
+    div[data-testid="stMetric"] label {
+        font-size: 0.74rem !important;
+        color: #94A3B8 !important;
+        font-weight: 600 !important;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        white-space: nowrap;
+        overflow: visible;
+    }
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        font-size: 1.40rem !important;
+        color: #F8FAFC !important;
+        font-weight: 700 !important;
+        line-height: 1.2;
+    }
+    /* Compact two-line CRM expander card styling */
+    div[data-testid="stExpander"] details {
+        border-radius: 8px;
+        border: 1px solid #334155;
+        background-color: #0B1120;
+        margin-bottom: 5px;
+    }
+    div[data-testid="stExpander"] details summary {
+        padding: 7px 12px;
+        cursor: pointer;
+    }
+    div[data-testid="stExpander"] details summary p {
+        margin-top: 0px !important;
+        margin-bottom: 2px !important;
+        line-height: 1.32;
     }
     .apply-kit-card {
         background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
@@ -477,19 +516,8 @@ with st.sidebar.expander("📋 Fast Application Links", expanded=True):
             rows_in_cat = (len(links_in_cat) + 1) // 2
             total_rows += rows_in_cat
 
-            # Category icon heuristic
-            cat_lower = cat.lower()
-            if "link" in cat_lower or "web" in cat_lower or "profile" in cat_lower:
-                cat_icon = "🔗"
-            elif "sched" in cat_lower or "cal" in cat_lower:
-                cat_icon = "📅"
-            elif "contact" in cat_lower or "info" in cat_lower or "detail" in cat_lower:
-                cat_icon = "📇"
-            else:
-                cat_icon = "📁"
-
             safe_cat_name = cat.replace("<", "&lt;").replace(">", "&gt;")
-            ql_sections_html += f'<div class="ql-category-title">{cat_icon} {safe_cat_name}</div>'
+            ql_sections_html += f'<div class="ql-category-title">{safe_cat_name}</div>'
             ql_sections_html += '<div class="ql-grid">'
 
             for q_link in links_in_cat:
@@ -633,36 +661,7 @@ with st.sidebar.expander("📋 Fast Application Links", expanded=True):
     with st.expander("⚙️ Configure Quicklinks", expanded=False):
         render_quicklinks_manager(context_key="sb")
 
-# 2. Cloud Links
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔗 Quick Cloud Links")
-sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
-drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
-if sheet_id:
-    st.sidebar.markdown(f"[📊 Open Master Google Sheet](https://docs.google.com/spreadsheets/d/{sheet_id}/edit)")
-if drive_root_id:
-    st.sidebar.markdown(f"[📁 Open Drive Applications Root](https://drive.google.com/drive/folders/{drive_root_id})")
-
-# 3. Pipeline Controls
-st.sidebar.markdown("---")
-st.sidebar.subheader("💼 Pipeline Controls")
-demo_mode = st.sidebar.checkbox(
-    "Zero-Cost Demo Mode",
-    value=os.environ.get("DEMO_MODE", "false").lower() == "true",
-    help="Uses mock fixtures and bypasses live API charges."
-)
-
-curr_cli_logging = is_logging_enabled()
-cli_logging_toggle = st.sidebar.checkbox(
-    "CLI Action Logging",
-    value=curr_cli_logging,
-    help="Print background startup processes, network syncs, and actions to the terminal in real-time."
-)
-if cli_logging_toggle != curr_cli_logging:
-    PipelineConfigService.set_cli_logging(cli_logging_toggle)
-    set_logging_enabled(cli_logging_toggle)
-    st.toast(f"CLI Logging {'enabled' if cli_logging_toggle else 'disabled'}")
-
+# 2. Pipeline Adapters & Shared Refresh
 @st.cache_resource
 def get_adapters(is_demo: bool):
     log_startup(f"🔌 Initializing secondary adapters (demo_mode={is_demo})...")
@@ -685,39 +684,70 @@ def get_adapters(is_demo: bool):
     log_startup("Secondary adapters successfully initialized.")
     return storage, drive, resume, llm, twilio, gmail
 
+
+def perform_pipeline_refresh(storage, log_func=None):
+    """Authoritative shared refresh operation for Google Sheets pipeline data."""
+    ok, msg, data = PipelineKPIService.refresh_pipeline_data(storage)
+    if ok:
+        st.session_state.crm_cached_opportunities = data.get("opportunities", [])
+        st.session_state.crm_cached_qa = data.get("qa", [])
+        st.session_state.crm_cached_requirements = data.get("requirements", [])
+        if log_func:
+            log_func("🔄 Live pipeline refresh completed from Google Sheets")
+    return ok, msg
+
+
+# 3. Pipeline Controls (Sidebar)
+st.sidebar.markdown("---")
+st.sidebar.subheader("💼 Pipeline Controls")
+
+demo_mode = st.sidebar.checkbox(
+    "Zero-Cost Demo Mode",
+    value=os.environ.get("DEMO_MODE", "false").lower() == "true",
+    help="Uses mock fixtures and bypasses live API charges."
+)
+
 storage_adapter, drive_adapter, resume_repo, llm_adapter, twilio_adapter, gmail_adapter = get_adapters(demo_mode)
 
-with st.sidebar.expander("🛡️ Guardrail Rules & Limits", expanded=False):
-    st.caption("Industry ATS guardrails to prevent auto-rejection.")
-    s_max_apps = st.slider(
-        "Max Concurrent Apps / Company",
-        min_value=1, max_value=5,
-        value=st.session_state.profile.max_company_applications_limit,
-        help="Recruiter standard is max 2 active roles simultaneously."
-    )
-    s_window = st.slider(
-        "Company Concurrency Window (Days)",
-        min_value=15, max_value=180,
-        value=st.session_state.profile.company_application_window_days,
-        step=15,
-        help="Rolling time window to count active applications at the same company."
-    )
-    s_repost = st.slider(
-        "Repost Detection Window (Days)",
-        min_value=30, max_value=180,
-        value=st.session_state.profile.repost_detection_threshold_days,
-        step=15,
-        help="Applications older than this are treated as renewed reposts rather than duplicates."
-    )
-    st.session_state.profile.max_company_applications_limit = s_max_apps
-    st.session_state.profile.company_application_window_days = s_window
-    st.session_state.profile.repost_detection_threshold_days = s_repost
+if st.sidebar.button("🔄 Refresh Pipeline Data", key="btn_sb_pipeline_refresh", use_container_width=True, help="Fetch fresh records from Google Sheets"):
+    ok, msg = perform_pipeline_refresh(storage_adapter, log_action)
+    if ok:
+        st.toast(msg, icon="✅")
+        st.session_state["crm_flash_message"] = msg
+        st.rerun()
+    else:
+        st.sidebar.error(msg)
 
-active_rules_count = len(PipelineConfigService.get_active_warning_rules())
-with st.sidebar.expander(f"⚠️ Job Signals ({active_rules_count} Active)", expanded=False):
-    if demo_mode:
-        st.caption("Demo mode evaluates Direct Match and Regex rules. Concept rules require a connected LLM.")
-    render_telemetry_warnings_manager(key_prefix="sb")
+curr_cli_logging = is_logging_enabled()
+cli_logging_toggle = st.sidebar.checkbox(
+    "CLI Action Logging",
+    value=curr_cli_logging,
+    help="Print background startup processes, network syncs, and actions to the terminal in real-time."
+)
+if cli_logging_toggle != curr_cli_logging:
+    PipelineConfigService.set_cli_logging(cli_logging_toggle)
+    set_logging_enabled(cli_logging_toggle)
+    st.toast(f"CLI Logging {'enabled' if cli_logging_toggle else 'disabled'}")
+
+if st.sidebar.button("⚙️ Pipeline Settings", key="btn_sb_pipeline_settings", use_container_width=True, help="Manage guardrails, sources, priorities, and Job Signals"):
+    st.session_state["in_settings_view"] = True
+    st.rerun()
+
+# 4. Quick Cloud Links
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔗 Quick Cloud Links")
+sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
+drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
+resumes_folder_id = getattr(drive_adapter, "resumes_folder_id", "") or os.environ.get("GOOGLE_RESUMES_FOLDER_ID", "")
+
+if sheet_id:
+    st.sidebar.markdown(f"[📊 Open Pipeline Spreadsheet](https://docs.google.com/spreadsheets/d/{sheet_id}/edit)")
+if resumes_folder_id:
+    st.sidebar.markdown(f"[📄 Open Resumes Folder](https://drive.google.com/drive/folders/{resumes_folder_id})")
+else:
+    st.sidebar.caption("📄 Open Resumes Folder *(not configured)*")
+if drive_root_id:
+    st.sidebar.markdown(f"[📁 Open Applications Folder](https://drive.google.com/drive/folders/{drive_root_id})")
 
 # 4. Connection Status Expander
 st.sidebar.markdown("---")
@@ -869,6 +899,92 @@ def trigger_role_intelligence_generation(opp_data: Dict[str, Any], show_toasts: 
         if show_toasts:
             st.error(f"Role Intelligence generation failed: {e}")
         return False
+
+
+# Dedicated Full-Width Settings View
+if st.session_state.get("in_settings_view", False):
+    col_back, col_title = st.columns([2.5, 7.5])
+    with col_back:
+        if st.button("⬅️ Return to Pipeline", key="btn_settings_back", type="primary", use_container_width=True):
+            st.session_state["in_settings_view"] = False
+            st.rerun()
+    with col_title:
+        st.markdown("<h2 style='margin:0; padding:0; color:#F8FAFC;'>⚙️ Pipeline Settings</h2>", unsafe_allow_html=True)
+        st.caption("Manage ATS guardrails, application sources, priority tiers, and Job Signal heuristics.")
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+    # Section 1: Guardrail Rules & Limits
+    with st.expander("🛡️ Guardrail Rules & Limits", expanded=True):
+        st.caption("Industry ATS guardrails to prevent auto-rejection.")
+        g_c1, g_c2, g_c3 = st.columns(3)
+        with g_c1:
+            s_max_apps = st.slider(
+                "Max Concurrent Apps / Company",
+                min_value=1, max_value=5,
+                value=st.session_state.profile.max_company_applications_limit,
+                help="Recruiter standard is max 2 active roles simultaneously.",
+                key="settings_max_apps"
+            )
+        with g_c2:
+            s_window = st.slider(
+                "Company Concurrency Window (Days)",
+                min_value=15, max_value=180,
+                value=st.session_state.profile.company_application_window_days,
+                step=15,
+                help="Rolling time window to count active applications at the same company.",
+                key="settings_window_days"
+            )
+        with g_c3:
+            s_repost = st.slider(
+                "Repost Detection Window (Days)",
+                min_value=30, max_value=180,
+                value=st.session_state.profile.repost_detection_threshold_days,
+                step=15,
+                help="Applications older than this are treated as renewed reposts rather than duplicates.",
+                key="settings_repost_days"
+            )
+        st.session_state.profile.max_company_applications_limit = s_max_apps
+        st.session_state.profile.company_application_window_days = s_window
+        st.session_state.profile.repost_detection_threshold_days = s_repost
+
+    # Section 2: Sources & Priorities
+    pipeline_cfg = PipelineConfigService.load_config()
+    available_sources = pipeline_cfg.get("sources", DEFAULT_APPLICATION_SOURCES)
+    available_priorities = pipeline_cfg.get("priorities", DEFAULT_PRIORITIES)
+    with st.expander("🌐 Sources & Priorities", expanded=True):
+        st.caption("Customize where you apply from and your priority tiers.")
+        cfg_c1, cfg_c2 = st.columns(2)
+        with cfg_c1:
+            st.markdown("###### 🌐 Application Sources / Platforms")
+            st.caption(f"Current: {', '.join(available_sources)}")
+            with st.form("settings_add_source_form", clear_on_submit=True):
+                new_src_name = st.text_input("Add Source", placeholder="e.g. Wellfound, Otta, Referral...", autocomplete="off")
+                if st.form_submit_button("➕ Save New Source"):
+                    if new_src_name.strip():
+                        PipelineConfigService.add_source(new_src_name.strip())
+                        st.success(f"Added source: '{new_src_name.strip()}'")
+                        st.rerun()
+
+        with cfg_c2:
+            st.markdown("###### 🎯 Priority Tiers")
+            st.caption(f"Current: {', '.join(available_priorities)}")
+            with st.form("settings_add_priority_form", clear_on_submit=True):
+                new_pri_name = st.text_input("Add Priority Level", placeholder="e.g. Critical, Dream, Tier 1...", autocomplete="off")
+                if st.form_submit_button("➕ Save New Priority"):
+                    if new_pri_name.strip():
+                        PipelineConfigService.add_priority(new_pri_name.strip())
+                        st.success(f"Added priority: '{new_pri_name.strip()}'")
+                        st.rerun()
+
+    # Section 3: Job Signal Rules
+    active_rules_count = len(PipelineConfigService.get_active_warning_rules())
+    with st.expander(f"⚠️ Job Signal Rules ({active_rules_count} Active)", expanded=True):
+        if demo_mode:
+            st.caption("Demo mode evaluates Direct Match and Regex rules. Concept rules require a connected LLM.")
+        render_telemetry_warnings_manager(key_prefix="settings_view")
+
+    st.stop()
 
 
 # Main Navigation: render only the active section to avoid eager rendering of every view
@@ -2426,36 +2542,24 @@ def parse_skills_list(val) -> list[str]:
 # SECTION 2: PIPELINE TRACKER
 # =====================================================================
 if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
-    st.subheader("📊 Application Pipeline")
-    #st.caption("Active applications synced in real-time from your Google Sheet (`Raw Ingestion`). Update stages, add recruiter contact info, and track interview progress.")
-
     # Flash notification for saved updates
     if "crm_flash_message" in st.session_state and st.session_state["crm_flash_message"]:
         st.success(st.session_state.pop("crm_flash_message"), icon="✅")
-
-    col_btn_refresh, col_sheet_link = st.columns([1, 2])
-    with col_btn_refresh:
-        refresh_clicked = st.button("🔄 Refresh Pipeline from Google Sheets")
-    if refresh_clicked:
-        log_action("🔄 User requested live pipeline refresh from Google Sheets")
-    #with col_sheet_link:
-    #    st.markdown(f"[↗ View Full Spreadsheet in Google Sheets](https://docs.google.com/spreadsheets/d/{sheet_id}/edit)")
 
     opportunities = []
     all_screening_qa = []
     all_requirements = []
     if storage_adapter.is_connected:
         needs_fetch = (
-            refresh_clicked
-            or "crm_cached_opportunities" not in st.session_state
+            "crm_cached_opportunities" not in st.session_state
             or "crm_cached_qa" not in st.session_state
             or "crm_cached_requirements" not in st.session_state
         )
         if needs_fetch:
             try:
-                st.session_state.crm_cached_opportunities = storage_adapter.fetch_all_opportunities(force_refresh=refresh_clicked)
-                st.session_state.crm_cached_qa = storage_adapter.fetch_screening_qa(force_refresh=refresh_clicked)
-                st.session_state.crm_cached_requirements = storage_adapter.fetch_all_requirements_extractions(force_refresh=refresh_clicked)
+                st.session_state.crm_cached_opportunities = storage_adapter.fetch_all_opportunities()
+                st.session_state.crm_cached_qa = storage_adapter.fetch_screening_qa()
+                st.session_state.crm_cached_requirements = storage_adapter.fetch_all_requirements_extractions()
             except Exception as e:
                 st.warning(f"Could not load rows from Google Sheets: {e}")
                 if "crm_cached_opportunities" not in st.session_state:
@@ -2567,37 +2671,6 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
     available_sources = pipeline_cfg.get("sources", DEFAULT_APPLICATION_SOURCES)
     available_priorities = pipeline_cfg.get("priorities", DEFAULT_PRIORITIES)
 
-    # Configuration Manager Expander for Sources, Priorities & Telemetry Warnings
-    with st.expander("⚙️ Configure Pipeline Attributes & Job Signal Rules", expanded=False):
-        st.caption("Customize where you apply from, your priority tiers, and Job Signal rules.")
-        cfg_t1, cfg_t2 = st.tabs(["🌐 Sources & Priorities", "⚠️ Job Signals"])
-        with cfg_t1:
-            cfg_c1, cfg_c2 = st.columns(2)
-            with cfg_c1:
-                st.markdown("###### 🌐 Application Sources / Platforms")
-                st.caption(f"Current: {', '.join(available_sources)}")
-                with st.form("cfg_add_source_form", clear_on_submit=True):
-                    new_src_name = st.text_input("Add Source", placeholder="e.g. Wellfound, Otta, Referral...", autocomplete="off")
-                    if st.form_submit_button("➕ Save New Source"):
-                        if new_src_name.strip():
-                            PipelineConfigService.add_source(new_src_name.strip())
-                            st.success(f"Added source: '{new_src_name.strip()}'")
-                            st.rerun()
-
-            with cfg_c2:
-                st.markdown("###### 🎯 Priority Tiers")
-                st.caption(f"Current: {', '.join(available_priorities)}")
-                with st.form("cfg_add_priority_form", clear_on_submit=True):
-                    new_pri_name = st.text_input("Add Priority Level", placeholder="e.g. Critical, Dream, Tier 1...", autocomplete="off")
-                    if st.form_submit_button("➕ Save New Priority"):
-                        if new_pri_name.strip():
-                            PipelineConfigService.add_priority(new_pri_name.strip())
-                            st.success(f"Added priority: '{new_pri_name.strip()}'")
-                            st.rerun()
-
-        with cfg_t2:
-            render_telemetry_warnings_manager(key_prefix="tab2")
-
     # Map screening QA by opportunity_id in-memory (0 extra Sheets API calls)
     opp_qa_map = {}
     for item in all_screening_qa:
@@ -2613,7 +2686,7 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
             opp_req_map[oid] = item
 
     if opportunities:
-        # High Level Pipeline Metrics & Resume Variant Breakdown
+        # High Level Pipeline Metrics: Six Unified Headline KPIs
         stale_threshold = getattr(instance_cfg, "stale_threshold_days", 28) or 28
         try:
             pipeline_kpis = PipelineKPIService.calculate_kpis(opportunities, stale_threshold_days=stale_threshold)
@@ -2624,34 +2697,21 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
         active_count = pipeline_kpis.get("total_active_opportunities")
         if active_count is None:
             active_count = sum(1 for o in opportunities if str(o.get("Status") or o.get("status") or "").strip() in ACTIVE_OPPORTUNITY_STAGES)
-        apps_per_interview = pipeline_kpis["apps_per_interview"]
         apps_per_interest = pipeline_kpis.get("apps_per_interest", "—")
-        interest_count = pipeline_kpis.get("total_positive_interest", 0)
-        interview_count = pipeline_kpis.get("total_interviewed", 0)
+        apps_per_interview = pipeline_kpis.get("apps_per_interview", "—")
+        stale_count = pipeline_kpis.get("total_stale", 0)
 
-        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+        stat_col1, stat_col2, stat_col3, stat_col4, stat_col5, stat_col6 = st.columns(6)
         stat_col1.metric("Total Tracked", total_apps)
         stat_col2.metric("Applications Submitted", applied_count)
         stat_col3.metric("Active Opportunities", active_count)
-        stat_col4.metric("Apps / Interview", apps_per_interview)
-
-        # Supporting Conversion Metric Banner
-        st.markdown(
-            f"<div style='margin-top: 4px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; background: #0F172A; border: 1px solid #334155; border-radius: 6px; padding: 6px 14px; font-size: 0.82rem; color: #94A3B8;'>"
-            f"<div><span style='color: #64748B; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;'>Conversion Velocity:</span> &nbsp; "
-            f"<span style='color: #E2E8F0;'>Apps / Interest:</span> <b style='color: #818CF8;'>{apps_per_interest}</b> "
-            f"<span style='color: #64748B;'>({interest_count} positive outcome{'s' if interest_count != 1 else ''})</span> &nbsp;|&nbsp; "
-            f"<span style='color: #E2E8F0;'>Apps / Interview:</span> <b style='color: #A5B4FC;'>{apps_per_interview}</b> "
-            f"<span style='color: #64748B;'>({interview_count} interview{'s' if interview_count != 1 else ''})</span>"
-            f"</div>"
-            f"<div style='color: #64748B; font-size: 0.76rem;'>Submitted applications per qualified stage progression</div>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
+        stat_col4.metric("Apps / Interest", apps_per_interest)
+        stat_col5.metric("Apps / Interview", apps_per_interview)
+        stat_col6.metric("Stale", stale_count)
 
         # Performance breakdown by resume variant (for 2+ variants)
-        variant_rows = pipeline_kpis["variant_rows"]
-        totals_row = pipeline_kpis["totals_row"]
+        variant_rows = pipeline_kpis.get("variant_rows", [])
+        totals_row = pipeline_kpis.get("totals_row", {})
         if len(variant_rows) >= 2:
             table_rows_html = "".join([
                 f"""<tr style="border-bottom: 1px solid #334155; color: #F8FAFC; background-color: #0F172A;">
@@ -2665,7 +2725,7 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
                 for r in variant_rows
             ])
             table_html = f"""
-            <div style="margin-top: 6px; margin-bottom: 14px; background: #0F172A; border: 1px solid #334155; border-radius: 8px; overflow: hidden;">
+            <div style="margin-top: 6px; margin-bottom: 12px; background: #0F172A; border: 1px solid #334155; border-radius: 8px; overflow: hidden;">
                 <div style="background: #1E293B; padding: 6px 12px; border-bottom: 1px solid #334155; font-size: 0.8rem; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.5px;">
                     Resume Variant Performance
                 </div>
@@ -2709,14 +2769,14 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
                     sub_cats["Unassigned"] += 1
 
         st.markdown(
-            f"<div style='margin-bottom: 12px; font-size: 0.84rem; color: #94A3B8; background: #1E293B; padding: 7px 14px; border-radius: 8px; border: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;'>"
-            f"<div><span style='color: #F8FAFC; font-weight: 600;'>Submitted Applications by Strategy:</span> &nbsp; "
-            f"<span style='color: #CBD5E1;'>Target:</span> <b style='color: #F8FAFC;'>{sub_cats['Target']}</b> &nbsp;·&nbsp; "
-            f"<span style='color: #CBD5E1;'>Stretch:</span> <b style='color: #F8FAFC;'>{sub_cats['Stretch']}</b> &nbsp;·&nbsp; "
-            f"<span style='color: #CBD5E1;'>Opportunistic:</span> <b style='color: #F8FAFC;'>{sub_cats['Opportunistic']}</b> &nbsp;·&nbsp; "
-            f"<span style='color: #CBD5E1;'>Practice:</span> <b style='color: #F8FAFC;'>{sub_cats['Practice']}</b> &nbsp;·&nbsp; "
-            f"<span style='color: #CBD5E1;'>Fallback:</span> <b style='color: #F8FAFC;'>{sub_cats['Fallback']}</b> &nbsp;·&nbsp; "
-            f"<span style='color: #CBD5E1;'>Unassigned:</span> <b style='color: #F8FAFC;'>{sub_cats['Unassigned']}</b></div>"
+            f"<div style='margin-top: 4px; margin-bottom: 10px; font-size: 0.82rem; color: #94A3B8; background: #0F172A; padding: 6px 14px; border-radius: 6px; border: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;'>"
+            f"<div><span style='color: #F8FAFC; font-weight: 600;'>Application Strategy:</span> &nbsp; "
+            f"<span style='color: #94A3B8;'>Target:</span> <b style='color: #F8FAFC;'>{sub_cats['Target']}</b> &nbsp;·&nbsp; "
+            f"<span style='color: #94A3B8;'>Stretch:</span> <b style='color: #F8FAFC;'>{sub_cats['Stretch']}</b> &nbsp;·&nbsp; "
+            f"<span style='color: #94A3B8;'>Opportunistic:</span> <b style='color: #F8FAFC;'>{sub_cats['Opportunistic']}</b> &nbsp;·&nbsp; "
+            f"<span style='color: #94A3B8;'>Practice:</span> <b style='color: #F8FAFC;'>{sub_cats['Practice']}</b> &nbsp;·&nbsp; "
+            f"<span style='color: #94A3B8;'>Fallback:</span> <b style='color: #F8FAFC;'>{sub_cats['Fallback']}</b> &nbsp;·&nbsp; "
+            f"<span style='color: #94A3B8;'>Unassigned:</span> <b style='color: #F8FAFC;'>{sub_cats['Unassigned']}</b></div>"
             f"<div style='color: #64748B; font-size: 0.78rem;'>Total: {applied_count}</div>"
             f"</div>",
             unsafe_allow_html=True
@@ -2724,45 +2784,71 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
 
         t_crm_start = time.perf_counter()
 
-        # Multi-attribute Search & Filter Bar
-        col_search, col_arr_filt, col_cat_filt, col_pri_filt, col_src_filt, col_fresh_filt = st.columns([2, 1, 1, 1, 1, 1])
+        # Multi-attribute Search & Filter Controls
+        col_search, col_inline_refresh = st.columns([11, 1])
         with col_search:
             search_query = st.text_input(
                 "🔍 Search Applications",
-                placeholder="e.g. Planful, Analyst, Recruiter Screen...",
+                placeholder="Search company or role...",
                 autocomplete="off",
-                key="crm_search_input"
+                key="crm_search_input",
+                label_visibility="collapsed"
             )
-        with col_arr_filt:
-            arr_filter = st.selectbox(
-                "Filter Type",
-                ["All Types", "Employee", "Contract"],
-                key="crm_filter_arr"
-            )
-        with col_cat_filt:
-            cat_filter = st.selectbox(
-                "Filter Category",
-                ["All Categories", "Target", "Stretch", "Opportunistic", "Practice", "Fallback", "Unassigned"],
-                key="crm_filter_cat"
-            )
-        with col_pri_filt:
-            pri_filter = st.selectbox(
-                "Filter Priority",
-                ["All Priorities"] + list(available_priorities) + ["Unspecified"],
-                key="crm_filter_pri"
-            )
-        with col_src_filt:
-            src_filter = st.selectbox(
-                "Filter Source",
-                ["All Sources"] + list(available_sources) + ["Unspecified"],
-                key="crm_filter_src"
-            )
-        with col_fresh_filt:
-            fresh_filter = st.selectbox(
-                "Filter Freshness",
-                ["All Freshness", "Fresh Only (<28d)", "Stale Only (≥28d)"],
-                key="crm_filter_fresh"
-            )
+        with col_inline_refresh:
+            if st.button("🔄", key="btn_inline_crm_refresh", help="Refresh Pipeline Data from Google Sheets", use_container_width=True):
+                ok, msg = perform_pipeline_refresh(storage_adapter, log_action)
+                if ok:
+                    st.session_state["crm_flash_message"] = msg
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+        # Count active filters for header indicator
+        active_filt_count = 0
+        if st.session_state.get("crm_filter_arr", "All Types") != "All Types":
+            active_filt_count += 1
+        if st.session_state.get("crm_filter_cat", "All Categories") != "All Categories":
+            active_filt_count += 1
+        if st.session_state.get("crm_filter_pri", "All Priorities") != "All Priorities":
+            active_filt_count += 1
+        if st.session_state.get("crm_filter_src", "All Sources") != "All Sources":
+            active_filt_count += 1
+        if st.session_state.get("crm_filter_fresh", "All Freshness") != "All Freshness":
+            active_filt_count += 1
+
+        filters_header = f"Filters ({active_filt_count})" if active_filt_count > 0 else "Filters"
+        with st.expander(f"🔽 {filters_header}", expanded=False):
+            col_arr_filt, col_cat_filt, col_pri_filt, col_src_filt, col_fresh_filt = st.columns(5)
+            with col_arr_filt:
+                arr_filter = st.selectbox(
+                    "Filter Type",
+                    ["All Types", "Employee", "Contract"],
+                    key="crm_filter_arr"
+                )
+            with col_cat_filt:
+                cat_filter = st.selectbox(
+                    "Filter Category",
+                    ["All Categories", "Target", "Stretch", "Opportunistic", "Practice", "Fallback", "Unassigned"],
+                    key="crm_filter_cat"
+                )
+            with col_pri_filt:
+                pri_filter = st.selectbox(
+                    "Filter Priority",
+                    ["All Priorities"] + list(available_priorities) + ["Unspecified"],
+                    key="crm_filter_pri"
+                )
+            with col_src_filt:
+                src_filter = st.selectbox(
+                    "Filter Source",
+                    ["All Sources"] + list(available_sources) + ["Unspecified"],
+                    key="crm_filter_src"
+                )
+            with col_fresh_filt:
+                fresh_filter = st.selectbox(
+                    "Filter Freshness",
+                    ["All Freshness", "Fresh Only (<28d)", "Stale Only (≥28d)"],
+                    key="crm_filter_fresh"
+                )
 
         # Track filter and search changes: entering new search or clearing search resets to page 1
         current_filters = (search_query.strip(), arr_filter, cat_filter, pri_filter, src_filter, fresh_filter)
@@ -2929,19 +3015,39 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
             else:
                 stale_info = {"is_stale": False}
 
-            # Concise indicators for scannable expander title (no verbose prefixes)
-            header_pills = [f"`{curr_status}`"]
+            # Two-line CRM summary visible while collapsed
+            # Line 1: Company name — Job title
+            # Line 2: Stage · Category · Priority · Source · Expected Salary
+            line2_items = [f"`{curr_status}`"]
             if stale_info.get("is_stale"):
                 elapsed_d = int(stale_info["days_elapsed"]) if stale_info.get("days_elapsed") is not None else stale_threshold
-                header_pills.append(f"`⏳ Stale ({elapsed_d}d)`")
+                line2_items.append(f"`⏳ Stale ({elapsed_d}d)`")
             if cat_display != "Unassigned":
-                header_pills.append(f"`{cat_display}`")
-            if curr_pri and curr_pri != "Not Specified":
-                header_pills.append(f"`{curr_pri}`")
-            if target_pay and target_pay != "N/A":
-                header_pills.append(f"`{target_pay}`")
+                line2_items.append(f"`{cat_display}`")
+            if curr_pri and curr_pri not in ("Not Specified", "Unspecified"):
+                line2_items.append(f"`{curr_pri}`")
+            if curr_src and curr_src not in ("Not Specified", "Unspecified"):
+                line2_items.append(curr_src)
 
-            expander_title = f"{s_icon} **{comp}** — {title}  |  {' · '.join(header_pills)}"
+            # Salary precedence:
+            # 1. Salary Submitted: $X (persisted Salary Expectation)
+            # 2. Suggested Range: $X (calculated target pay recommendation)
+            # 3. Omitted if neither
+            sal_disp = ""
+            if curr_sal_exp and curr_sal_exp.strip() and curr_sal_exp.strip().lower() not in ("none", "n/a", "not specified"):
+                s_val = curr_sal_exp.strip()
+                m_sal = re.match(r"^\$?([0-9]{1,3}),([0-9]{3})(?:\.00)?$", s_val)
+                if m_sal:
+                    s_val = f"${m_sal.group(1)}k"
+                sal_disp = f"Salary Submitted: {s_val}"
+            elif target_pay and str(target_pay).strip() and str(target_pay).strip().lower() not in ("none", "n/a", "not calculated"):
+                sal_disp = f"Suggested Range: {str(target_pay).strip()}"
+
+            if sal_disp:
+                line2_items.append(sal_disp)
+
+            line2_str = " · ".join(line2_items)
+            expander_title = f"{s_icon} **{comp}** — {title}\n\n{line2_str}"
 
             is_card_open = (st.session_state.get("active_opp_card") == opp_id)
             with st.expander(expander_title, expanded=is_card_open):
@@ -3422,8 +3528,10 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
                                     opp["pay_basis"] = final_pb
                                     opp["Source URL"] = final_url
                                     opp["source_url"] = final_url
-                                    opp["Status"] = new_stage
                                     opp["Notes"] = new_notes
+                                    if new_notes.strip() != str(notes or "").strip():
+                                        opp["notes_updated_at"] = now_iso
+                                        opp["notes_modified_at"] = now_iso
                                     opp["Category"] = saved_cat
                                     opp["Applied Via"] = final_src
                                     opp["applied_via"] = final_src
@@ -3477,6 +3585,9 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
                                 opp["source_url"] = final_url
                                 opp["Status"] = new_stage
                                 opp["Notes"] = new_notes
+                                if new_notes.strip() != str(notes or "").strip():
+                                    opp["notes_updated_at"] = now_iso
+                                    opp["notes_modified_at"] = now_iso
                                 opp["Category"] = saved_cat
                                 opp["Applied Via"] = final_src
                                 opp["applied_via"] = final_src
