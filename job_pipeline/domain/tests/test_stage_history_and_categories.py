@@ -28,12 +28,12 @@ class TestStageHistoryAndCategories(unittest.TestCase):
         self.assertIn("below your preferred role/compensation/trajectory", APPLICATION_CATEGORIES["Fallback"])
 
     def test_application_stages_list(self):
-        """Verify standard application stages are defined."""
+        """Verify authoritative application stages are defined."""
         expected_stages = [
-            "Pending", "Processed", "Applied", "Application Rejected",
-            "Recruiter Screen", "Hiring Manager",
-            "Technical Screen", "Final Round", "Offer",
-            "Archived / Rejected"
+            "Pending", "Processed", "Applied", "Declined to Apply", "Employer Interest",
+            "Application Rejected", "Recruiter Screen", "Hiring Manager",
+            "Technical Screen", "Final Round", "Offer", "Withdrawn",
+            "Archived", "Rejected"
         ]
         for stage in expected_stages:
             self.assertIn(stage, APPLICATION_STAGES)

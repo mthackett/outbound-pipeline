@@ -74,7 +74,7 @@ class TestUIResponsivenessAndSearch(unittest.TestCase):
                 self.assertFalse(app.exception, [e.message for e in app.exception])
 
                 # Navigate to CRM section
-                SECTION_CRM = "📊 Pipeline Tracker & CRM"
+                SECTION_CRM = "📊 Pipeline Tracker"
                 app.radio(key="active_main_section").set_value(SECTION_CRM).run()
                 self.assertFalse(app.exception)
 

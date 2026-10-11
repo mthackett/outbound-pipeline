@@ -11,10 +11,6 @@ from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
 
-"""
-Job Application Intelligence & Workflow System
- A production-style application I built to manage a high-volume outbound workflow, preserve contextual knowledge across interactions, automate structured data capture, and analyze pipeline performance.  
-"""
 # Ensure project root is in sys.path for Streamlit
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
 if str(ROOT_DIR) not in sys.path:
@@ -22,10 +18,29 @@ if str(ROOT_DIR) not in sys.path:
 
 import streamlit as st
 
+try:
+    from job_pipeline.version import __version__ as APP_VERSION
+except Exception:
+    APP_VERSION = "1.3"
+
+
+from job_pipeline.domain.services import (
+    JobQualificationService, ApplicationGuardrailService, ScreeningQAService, QuickLinksService,
+    ScreeningIntelligenceService, StoryBankService, PipelineConfigService, IngestionRecoveryService,
+    PipelineSearchPaginationService, PipelineKPIService
+)
+
+# Load instance configuration for dynamic branding
+instance_cfg = PipelineConfigService.get_instance_config()
+
 # Set page config as very first Streamlit command
+page_icon_val = instance_cfg.page_icon or "🚀"
+if instance_cfg.favicon_path and Path(instance_cfg.favicon_path).is_file():
+    page_icon_val = instance_cfg.favicon_path
+
 st.set_page_config(
-    page_title="Job Pipeline & Ingestion Cockpit",
-    page_icon="🚀",
+    page_title=instance_cfg.page_title,
+    page_icon=page_icon_val,
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -39,18 +54,25 @@ from job_pipeline.domain.models import (
     DEFAULT_APPLICATION_SOURCES, DEFAULT_PRIORITIES, PRIORITY_ICONS, SOURCE_ICONS,
     EMPLOYMENT_ARRANGEMENTS, PAY_BASES, WORKER_CLASSIFICATIONS
 )
+try:
+    from job_pipeline.domain.models import AUTHORITATIVE_PIPELINE_STAGES, ACTIVE_OPPORTUNITY_STAGES
+except ImportError:
+    AUTHORITATIVE_PIPELINE_STAGES = [
+        "Pending", "Processed", "Applied", "Declined to Apply", "Employer Interest",
+        "Application Rejected", "Recruiter Screen", "Hiring Manager",
+        "Technical Screen", "Final Round", "Offer", "Withdrawn",
+        "Archived", "Rejected"
+    ]
+    ACTIVE_OPPORTUNITY_STAGES = {
+        "Employer Interest", "Recruiter Screen", "Hiring Manager",
+        "Technical Screen", "Final Round", "Offer"
+    }
 from job_pipeline.domain.role_intelligence import (
     has_role_intelligence, get_role_intelligence_status, get_local_report_path,
     should_trigger_role_intelligence, RoleIntelligenceService
 )
 from job_pipeline.domain.telemetry_service import TelemetryService
 from job_pipeline.adapters.primary.telemetry_ui import render_telemetry_warnings_manager, render_job_signals
-
-from job_pipeline.domain.services import (
-    JobQualificationService, ApplicationGuardrailService, ScreeningQAService, QuickLinksService,
-    ScreeningIntelligenceService, StoryBankService, PipelineConfigService, IngestionRecoveryService,
-    PipelineSearchPaginationService
-)
 from job_pipeline.logger import (
     log_startup, log_action, log_config, log_sheets, log_drive,
     log_llm, log_crm, log_info, log_warn, log_error, log_success, log_timed_action,
@@ -71,16 +93,22 @@ from job_pipeline.adapters.secondary.mock_adapter import (
 # Custom CSS styling for premium look & feel, responsive touch targets
 st.markdown("""
 <style>
+    .block-container {
+        padding-top: 1.8rem;
+        padding-bottom: 2rem;
+    }
     .main-title {
-        font-size: 2.1rem;
+        font-size: 2.05rem;
         font-weight: 800;
         color: #F8FAFC;
-        margin-bottom: 0.1rem;
+        margin-bottom: 0.15rem;
+        letter-spacing: -0.01em;
     }
     .sub-title {
-        font-size: 1.0rem;
+        font-size: 0.95rem;
         color: #94A3B8;
-        margin-bottom: 1.2rem;
+        margin-bottom: 1.0rem;
+        line-height: 1.4;
     }
     .apply-kit-card {
         background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
@@ -162,7 +190,7 @@ st.markdown("""
 # Initialize Session State Objects & Startup Logging
 if "app_session_started" not in st.session_state:
     st.session_state.app_session_started = True
-    log_startup("🚀 Initializing Job Pipeline & Ingestion Cockpit...")
+    log_startup("Initializing Job Pipeline & Ingestion Cockpit...")
     cfg_init = PipelineConfigService.load_config()
     log_config(f"Configuration loaded (CLI logging: {'ENABLED' if is_logging_enabled() else 'DISABLED'}).")
 
@@ -387,92 +415,12 @@ def render_quicklinks_manager(context_key: str = "sb"):
         st.rerun()
 
 
-# Sidebar Configuration & Connections
-st.sidebar.title("💼 Pipeline Controls")
+# =====================================================================
+# SIDEBAR REORGANIZATION
+# =====================================================================
 
-demo_mode = st.sidebar.checkbox(
-    "Zero-Cost Demo Mode",
-    value=os.environ.get("DEMO_MODE", "false").lower() == "true",
-    help="Uses mock fixtures and bypasses live API charges."
-)
-
-# CLI Action Logging Toggle (Persisted to pipeline_config.json)
-curr_cli_logging = is_logging_enabled()
-cli_logging_toggle = st.sidebar.checkbox(
-    "CLI Action Logging",
-    value=curr_cli_logging,
-    help="Print background startup processes, network syncs, and actions to the terminal in real-time."
-)
-if cli_logging_toggle != curr_cli_logging:
-    PipelineConfigService.set_cli_logging(cli_logging_toggle)
-    set_logging_enabled(cli_logging_toggle)
-    st.toast(f"CLI Logging {'enabled' if cli_logging_toggle else 'disabled'}")
-
-@st.cache_resource
-def get_adapters(is_demo: bool):
-    log_startup(f"🔌 Initializing secondary adapters (demo_mode={is_demo})...")
-    if is_demo:
-        log_startup("Using mock secondary adapters (demo mode)...")
-        storage = MockJobStorageAdapter()
-        drive = MockDocumentStorageAdapter()
-        resume = MockResumeRepositoryAdapter()
-        llm = MockLLMStrategyAdapter()
-        twilio = TwilioMessagingAdapter()
-    else:
-        log_startup("Connecting to live infrastructure adapters (Google Sheets, Drive, OpenAI)...")
-        storage = GoogleSheetsAdapter()
-        drive = GoogleDriveAdapter()
-        resume = drive
-        llm = OpenAIEngineAdapter()
-        twilio = TwilioMessagingAdapter()
-
-    gmail = GmailIngestionAdapter()
-    log_startup("Secondary adapters successfully initialized.")
-    return storage, drive, resume, llm, twilio, gmail
-
-storage_adapter, drive_adapter, resume_repo, llm_adapter, twilio_adapter, gmail_adapter = get_adapters(demo_mode)
-
-# Guardrail Rules Configuration
-with st.sidebar.expander("🛡️ Guardrail Rules & Limits", expanded=False):
-    st.caption("Industry ATS guardrails to prevent auto-rejection.")
-    s_max_apps = st.slider(
-        "Max Concurrent Apps / Company",
-        min_value=1, max_value=5,
-        value=st.session_state.profile.max_company_applications_limit,
-        help="Recruiter standard is max 2 active roles simultaneously."
-    )
-    s_window = st.slider(
-        "Company Concurrency Window (Days)",
-        min_value=15, max_value=180,
-        value=st.session_state.profile.company_application_window_days,
-        step=15,
-        help="Rolling time window to count active applications at the same company."
-    )
-    s_repost = st.slider(
-        "Repost Detection Window (Days)",
-        min_value=30, max_value=180,
-        value=st.session_state.profile.repost_detection_threshold_days,
-        step=15,
-        help="Applications older than this are treated as renewed reposts rather than duplicates."
-    )
-    st.session_state.profile.max_company_applications_limit = s_max_apps
-    st.session_state.profile.company_application_window_days = s_window
-    st.session_state.profile.repost_detection_threshold_days = s_repost
-
-# Telemetry Warning Rules (LLM Criteria) Expander in Sidebar
-active_rules_count = len(PipelineConfigService.get_active_warning_rules())
-with st.sidebar.expander(f"⚠️ Job Signals ({active_rules_count} Active)", expanded=False):
-    if demo_mode:
-        st.caption("Demo mode evaluates Direct Match and Regex rules. Concept rules require a connected LLM.")
-    render_telemetry_warnings_manager(key_prefix="sb")
-
-# Direct External Links
-sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
-drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
-
-# Candidate Application Quicklinks Area
-st.sidebar.markdown("---")
-st.sidebar.subheader("⚡ Candidate Quicklinks")
+# 1. Application Quicklinks
+st.sidebar.subheader("⚡ Application Quicklinks")
 with st.sidebar.expander("📋 Fast Application Links", expanded=True):
     @st.fragment
     def render_quicklinks_sidebar_view():
@@ -654,34 +602,124 @@ with st.sidebar.expander("📋 Fast Application Links", expanded=True):
     with st.expander("⚙️ Configure Quicklinks", expanded=False):
         render_quicklinks_manager(context_key="sb")
 
+# 2. Cloud Links
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔗 Quick Cloud Links")
+sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
+drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
 if sheet_id:
     st.sidebar.markdown(f"[📊 Open Master Google Sheet](https://docs.google.com/spreadsheets/d/{sheet_id}/edit)")
 if drive_root_id:
     st.sidebar.markdown(f"[📁 Open Drive Applications Root](https://drive.google.com/drive/folders/{drive_root_id})")
 
+# 3. Pipeline Controls
 st.sidebar.markdown("---")
-st.sidebar.subheader("🔌 Connection Status")
+st.sidebar.subheader("💼 Pipeline Controls")
+demo_mode = st.sidebar.checkbox(
+    "Zero-Cost Demo Mode",
+    value=os.environ.get("DEMO_MODE", "false").lower() == "true",
+    help="Uses mock fixtures and bypasses live API charges."
+)
 
-drive_auth_ctx = getattr(drive_adapter, "auth_context", None)
-if drive_auth_ctx:
-    if drive_auth_ctx.mode == "oauth":
-        st.sidebar.write("**Google Auth**: 🟢 User OAuth (Full Access)")
-    elif drive_auth_ctx.mode == "service_account":
-        st.sidebar.write("**Google Auth**: 🟡 Service Account (Reduced: Sheets only)")
+curr_cli_logging = is_logging_enabled()
+cli_logging_toggle = st.sidebar.checkbox(
+    "CLI Action Logging",
+    value=curr_cli_logging,
+    help="Print background startup processes, network syncs, and actions to the terminal in real-time."
+)
+if cli_logging_toggle != curr_cli_logging:
+    PipelineConfigService.set_cli_logging(cli_logging_toggle)
+    set_logging_enabled(cli_logging_toggle)
+    st.toast(f"CLI Logging {'enabled' if cli_logging_toggle else 'disabled'}")
+
+@st.cache_resource
+def get_adapters(is_demo: bool):
+    log_startup(f"🔌 Initializing secondary adapters (demo_mode={is_demo})...")
+    if is_demo:
+        log_startup("Using mock secondary adapters (demo mode)...")
+        storage = MockJobStorageAdapter()
+        drive = MockDocumentStorageAdapter()
+        resume = MockResumeRepositoryAdapter()
+        llm = MockLLMStrategyAdapter()
+        twilio = TwilioMessagingAdapter()
     else:
-        st.sidebar.write("**Google Auth**: 🔴 Unavailable")
-else:
-    st.sidebar.write(f"**Google Auth**: {'🟢 Connected' if drive_adapter.is_connected else '🔴 Offline/Demo'}")
+        log_startup("Connecting to live infrastructure adapters (Google Sheets, Drive, OpenAI)...")
+        storage = GoogleSheetsAdapter()
+        drive = GoogleDriveAdapter()
+        resume = drive
+        llm = OpenAIEngineAdapter()
+        twilio = TwilioMessagingAdapter()
 
-st.sidebar.write(f"**Sheets API**: {'🟢 Connected' if storage_adapter.is_connected else '🔴 Offline/Demo'}")
-st.sidebar.write(f"**Drive API**:  {'🟢 Connected' if drive_adapter.is_connected else '🔴 Offline/Demo'}")
-st.sidebar.write(f"**OpenAI API**: {'🟢 Ready' if getattr(llm_adapter, 'api_key', None) else '🔴 No API Key'}")
-st.sidebar.write(f"**Twilio**: {'🟡 Simulation (Staged)' if not twilio_adapter.is_connected else '🟢 Live'}")
+    gmail = GmailIngestionAdapter()
+    log_startup("Secondary adapters successfully initialized.")
+    return storage, drive, resume, llm, twilio, gmail
 
-if drive_auth_ctx and (drive_auth_ctx.oauth_failed or drive_auth_ctx.mode == "service_account"):
-    with st.sidebar.expander("🔑 Google Re-Authentication", expanded=bool(drive_auth_ctx.oauth_failed)):
+storage_adapter, drive_adapter, resume_repo, llm_adapter, twilio_adapter, gmail_adapter = get_adapters(demo_mode)
+
+with st.sidebar.expander("🛡️ Guardrail Rules & Limits", expanded=False):
+    st.caption("Industry ATS guardrails to prevent auto-rejection.")
+    s_max_apps = st.slider(
+        "Max Concurrent Apps / Company",
+        min_value=1, max_value=5,
+        value=st.session_state.profile.max_company_applications_limit,
+        help="Recruiter standard is max 2 active roles simultaneously."
+    )
+    s_window = st.slider(
+        "Company Concurrency Window (Days)",
+        min_value=15, max_value=180,
+        value=st.session_state.profile.company_application_window_days,
+        step=15,
+        help="Rolling time window to count active applications at the same company."
+    )
+    s_repost = st.slider(
+        "Repost Detection Window (Days)",
+        min_value=30, max_value=180,
+        value=st.session_state.profile.repost_detection_threshold_days,
+        step=15,
+        help="Applications older than this are treated as renewed reposts rather than duplicates."
+    )
+    st.session_state.profile.max_company_applications_limit = s_max_apps
+    st.session_state.profile.company_application_window_days = s_window
+    st.session_state.profile.repost_detection_threshold_days = s_repost
+
+active_rules_count = len(PipelineConfigService.get_active_warning_rules())
+with st.sidebar.expander(f"⚠️ Job Signals ({active_rules_count} Active)", expanded=False):
+    if demo_mode:
+        st.caption("Demo mode evaluates Direct Match and Regex rules. Concept rules require a connected LLM.")
+    render_telemetry_warnings_manager(key_prefix="sb")
+
+# 4. Connection Status Expander
+st.sidebar.markdown("---")
+drive_auth_ctx = getattr(drive_adapter, "auth_context", None)
+google_auth_ok = (
+    (drive_auth_ctx.mode == "oauth" and not drive_auth_ctx.oauth_failed)
+    if drive_auth_ctx else drive_adapter.is_connected
+)
+sheets_ok = storage_adapter.is_connected
+drive_ok = drive_adapter.is_connected
+openai_ok = bool(getattr(llm_adapter, "api_key", None)) if not demo_mode else True
+
+all_connections_healthy = bool(google_auth_ok and sheets_ok and drive_ok and openai_ok)
+conn_status_icon = "🟢" if all_connections_healthy else "⚠️"
+conn_expander_label = f"🔌 Connection Status {conn_status_icon}"
+
+with st.sidebar.expander(conn_expander_label, expanded=not all_connections_healthy):
+    if drive_auth_ctx:
+        if drive_auth_ctx.mode == "oauth" and not drive_auth_ctx.oauth_failed:
+            st.write("**Google Auth**: 🟢 User OAuth (Full Access)")
+        elif drive_auth_ctx.mode == "service_account":
+            st.write("**Google Auth**: 🟡 Service Account (Reduced: Sheets only)")
+        else:
+            st.write("**Google Auth**: 🔴 Unavailable")
+    else:
+        st.write(f"**Google Auth**: {'🟢 Connected' if drive_adapter.is_connected else '🔴 Offline/Demo'}")
+
+    st.write(f"**Sheets API**: {'🟢 Connected' if storage_adapter.is_connected else '🔴 Offline/Demo'}")
+    st.write(f"**Drive API**:  {'🟢 Connected' if drive_adapter.is_connected else '🔴 Offline/Demo'}")
+    st.write(f"**OpenAI API**: {'🟢 Ready' if openai_ok else '🔴 No API Key'}")
+
+    if drive_auth_ctx and (drive_auth_ctx.oauth_failed or drive_auth_ctx.mode == "service_account"):
+        st.markdown("---")
         st.caption("OAuth token expired or revoked. Re-authenticate to restore personal Google Drive doc creation:")
         st.code("python -m job_pipeline.setup_oauth", language="bash")
         if st.button("🔑 Re-authorize Google OAuth", key="btn_sb_reauth", type="primary", use_container_width=True):
@@ -698,13 +736,26 @@ if drive_auth_ctx and (drive_auth_ctx.oauth_failed or drive_auth_ctx.mode == "se
                 except Exception as oa_err:
                     st.error(f"OAuth error: {oa_err}. Please run 'python -m job_pipeline.setup_oauth' in terminal.")
 
+# 5. Sidebar Footer: Configured Instance Name & App Version
 st.sidebar.markdown("---")
-st.sidebar.caption("Job Application Pipeline CRM v1.3")
+st.sidebar.caption(f"**{instance_cfg.display_name}** · v{APP_VERSION}")
 
 
-# Main Dashboard Header
-st.markdown('<div class="main-title">🚀 Job Application Pipeline & Apply Cockpit</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Automated JD Ingestion · Google Drive Workspace · Best Resume Match · Google Sheets CRM</div>', unsafe_allow_html=True)
+# =====================================================================
+# MAIN DASHBOARD HEADER (Config-Driven)
+# =====================================================================
+logo_path = instance_cfg.logo_path
+if logo_path and Path(logo_path).is_file():
+    col_logo, col_title = st.columns([1, 8])
+    with col_logo:
+        st.image(logo_path, width=54)
+    with col_title:
+        st.markdown(f'<div class="main-title">{instance_cfg.page_title}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sub-title">{instance_cfg.page_subtitle}</div>', unsafe_allow_html=True)
+else:
+    st.markdown(f'<div class="main-title">{instance_cfg.page_title}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sub-title">{instance_cfg.page_subtitle}</div>', unsafe_allow_html=True)
+
 
 # Surface Google Auth Warning if operating under reduced capability with 1-click browser sign-in button
 if drive_auth_ctx and drive_auth_ctx.warning_message:
@@ -790,9 +841,9 @@ def trigger_role_intelligence_generation(opp_data: Dict[str, Any], show_toasts: 
 
 
 # Main Navigation: render only the active section to avoid eager rendering of every view
-SECTION_INGEST = "⚡ Fast Ingestion & Apply Kit"
-SECTION_CRM = "📊 Pipeline Tracker & CRM"
-SECTION_STORIES = "📖 Global Story Bank & Interview Map"
+SECTION_INGEST = "⚡ Ingest & Apply"
+SECTION_CRM = "📊 Pipeline Tracker"
+SECTION_STORIES = "📖 Interview Intelligence"
 
 active_section = st.radio(
     "Main Navigation",
@@ -805,9 +856,9 @@ active_section = st.radio(
 
 
 # =====================================================================
-# SECTION 1: FAST INGESTION & APPLY KIT (ZERO FRICTION)
+# SECTION 1: INGEST & APPLY (ZERO FRICTION)
 # =====================================================================
-if active_section == SECTION_INGEST:
+if active_section in (SECTION_INGEST, "⚡ Fast Ingestion & Apply Kit"):
     # -------------------------------------------------------------
     # Incomplete Ingestion Detection & Recovery Alert
     # -------------------------------------------------------------
@@ -1206,18 +1257,18 @@ if active_section == SECTION_INGEST:
     def render_intake_view():
         t_start = time.perf_counter()
         cur_intake = st.session_state.get("intake_counter", 0)
-        st.markdown("### 1. Paste Job Posting Text")
-        st.caption("Paste the full job description from LinkedIn, Indeed, or company careers page. The AI automatically extracts the company, title, salary, skills, and matches your best resume.")
+        st.markdown("### Process a Job Posting")
+        st.caption("Paste a job description to screen fit, extract role details, and select the best-matching resume.")
 
         jd_text_input = st.text_area(
             "Job Description Text",
-            height=240,
+            height=195,
             placeholder="Paste full job description text here...",
             label_visibility="collapsed",
             key=f"jd_text_input_{cur_intake}"
         )
 
-        with st.expander("📝 Application Notes (Optional)", expanded=False):
+        with st.expander("Application Notes", expanded=False):
             st.caption("Add unstructured notes, referral contacts, outreach angles, or initial application thoughts.")
             manual_notes = st.text_area(
                 "Application Notes",
@@ -1227,7 +1278,7 @@ if active_section == SECTION_INGEST:
                 label_visibility="collapsed"
             )
 
-        with st.expander("⚙️ Advanced / Manual Overrides (Optional)", expanded=False):
+        with st.expander("Advanced Options", expanded=False):
             st.caption("Leave blank to let AI auto-extract automatically.")
             col_ov1, col_ov2, col_ov3 = st.columns(3)
             with col_ov1:
@@ -1320,7 +1371,7 @@ if active_section == SECTION_INGEST:
                 )
 
         # 2. Optional Application Screening Questions & Answers
-        with st.expander("📝 Application Screening Questions & Custom Answers (Optional)", expanded=False):
+        with st.expander("Screening Questions & Answers", expanded=False):
             st.caption("Optionally record questions and answers requested on this application. When provided, they are saved into a dedicated 'Screening Questions' Google Doc in your Drive folder and logged into your reusable master Q&A library.")
 
             col_q_actions = st.columns([1, 1, 3])
@@ -2341,11 +2392,11 @@ def parse_skills_list(val) -> list[str]:
 
 
 # =====================================================================
-# SECTION 2: PIPELINE TRACKER & LIGHTWEIGHT CRM
+# SECTION 2: PIPELINE TRACKER
 # =====================================================================
-if active_section == SECTION_CRM:
+if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
     st.subheader("📊 Live Application Pipeline & CRM")
-    st.caption("Active applications synced in real-time from your Google Sheet (`Raw Ingestion`). Update stages, add recruiter contact info, and track interview progress.")
+    #st.caption("Active applications synced in real-time from your Google Sheet (`Raw Ingestion`). Update stages, add recruiter contact info, and track interview progress.")
 
     # Flash notification for saved updates
     if "crm_flash_message" in st.session_state and st.session_state["crm_flash_message"]:
@@ -2356,8 +2407,8 @@ if active_section == SECTION_CRM:
         refresh_clicked = st.button("🔄 Refresh Pipeline from Google Sheets")
     if refresh_clicked:
         log_action("🔄 User requested live pipeline refresh from Google Sheets")
-    with col_sheet_link:
-        st.markdown(f"[↗ View Full Spreadsheet in Google Sheets](https://docs.google.com/spreadsheets/d/{sheet_id}/edit)")
+    #with col_sheet_link:
+    #    st.markdown(f"[↗ View Full Spreadsheet in Google Sheets](https://docs.google.com/spreadsheets/d/{sheet_id}/edit)")
 
     opportunities = []
     all_screening_qa = []
@@ -2531,17 +2582,68 @@ if active_section == SECTION_CRM:
             opp_req_map[oid] = item
 
     if opportunities:
-        # High Level Pipeline Metrics
-        total_apps = len(opportunities)
-        processed_count = sum(1 for o in opportunities if str(o.get("Status")).strip() in ["Processed", "Applied"])
-        interviewing_count = sum(1 for o in opportunities if "Screen" in str(o.get("Status")) or "Interview" in str(o.get("Status")) or "Manager" in str(o.get("Status")))
-        flagged_count = sum(1 for o in opportunities if "Flagged" in str(o.get("Status")))
+        # High Level Pipeline Metrics & Resume Variant Breakdown
+        stale_threshold = getattr(instance_cfg, "stale_threshold_days", 28) or 28
+        try:
+            pipeline_kpis = PipelineKPIService.calculate_kpis(opportunities, stale_threshold_days=stale_threshold)
+        except TypeError:
+            pipeline_kpis = PipelineKPIService.calculate_kpis(opportunities)
+        total_apps = pipeline_kpis["total_tracked"]
+        applied_count = pipeline_kpis["total_applied"]
+        active_count = pipeline_kpis.get("total_active_opportunities")
+        if active_count is None:
+            active_count = sum(1 for o in opportunities if str(o.get("Status") or o.get("status") or "").strip() in ACTIVE_OPPORTUNITY_STAGES)
+        apps_per_interview = pipeline_kpis["apps_per_interview"]
 
         stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
         stat_col1.metric("Total Tracked", total_apps)
-        stat_col2.metric("Applied / Processed", processed_count)
-        stat_col3.metric("Active Interviewing", interviewing_count)
-        stat_col4.metric("Flagged / Disqualified", flagged_count)
+        stat_col2.metric("Applied", applied_count)
+        stat_col3.metric("Active Opportunities", active_count)
+        stat_col4.metric("Apps / Interview", apps_per_interview)
+
+        # Performance breakdown by resume variant (for 2+ variants)
+        variant_rows = pipeline_kpis["variant_rows"]
+        totals_row = pipeline_kpis["totals_row"]
+        if len(variant_rows) >= 2:
+            table_rows_html = "".join([
+                f"""<tr style="border-bottom: 1px solid #334155; color: #F8FAFC; background-color: #0F172A;">
+                    <td style="text-align: left; padding: 7px 12px; font-weight: 500;">{r['variant']}</td>
+                    <td style="text-align: right; padding: 7px 12px;">{r['tracked']}</td>
+                    <td style="text-align: right; padding: 7px 12px;">{r['applied']}</td>
+                    <td style="text-align: right; padding: 7px 12px;">{r['active']}</td>
+                    <td style="text-align: right; padding: 7px 12px; color: #818CF8; font-weight: 600;">{r['apps_per_interview']}</td>
+                </tr>"""
+                for r in variant_rows
+            ])
+            table_html = f"""
+            <div style="margin-top: 6px; margin-bottom: 14px; background: #0F172A; border: 1px solid #334155; border-radius: 8px; overflow: hidden;">
+                <div style="background: #1E293B; padding: 6px 12px; border-bottom: 1px solid #334155; font-size: 0.8rem; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.5px;">
+                    Resume Variant Performance
+                </div>
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.86rem;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid #334155; color: #94A3B8;">
+                            <th style="text-align: left; padding: 6px 12px; font-weight: 600;">Resume Variant</th>
+                            <th style="text-align: right; padding: 6px 12px; font-weight: 600;">Tracked</th>
+                            <th style="text-align: right; padding: 6px 12px; font-weight: 600;">Applied</th>
+                            <th style="text-align: right; padding: 6px 12px; font-weight: 600;">Active Opps</th>
+                            <th style="text-align: right; padding: 6px 12px; font-weight: 600;">Apps / Interview</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {table_rows_html}
+                        <tr style="border-top: 2px solid #6366F1; background-color: #1E293B; font-weight: 700; color: #FFFFFF;">
+                            <td style="text-align: left; padding: 7px 12px;">{totals_row['variant']}</td>
+                            <td style="text-align: right; padding: 7px 12px;">{totals_row['tracked']}</td>
+                            <td style="text-align: right; padding: 7px 12px;">{totals_row['applied']}</td>
+                            <td style="text-align: right; padding: 7px 12px;">{totals_row['active']}</td>
+                            <td style="text-align: right; padding: 7px 12px; color: #A5B4FC; font-weight: 700;">{totals_row['apps_per_interview']}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            """
+            st.markdown(table_html, unsafe_allow_html=True)
 
         # Strategic Category Breakdown Bar
         cat_counts = {
@@ -2568,7 +2670,7 @@ if active_section == SECTION_CRM:
         t_crm_start = time.perf_counter()
 
         # Multi-attribute Search & Filter Bar
-        col_search, col_arr_filt, col_cat_filt, col_pri_filt, col_src_filt = st.columns([2, 1, 1, 1, 1])
+        col_search, col_arr_filt, col_cat_filt, col_pri_filt, col_src_filt, col_fresh_filt = st.columns([2, 1, 1, 1, 1, 1])
         with col_search:
             search_query = st.text_input(
                 "🔍 Search Applications",
@@ -2600,24 +2702,43 @@ if active_section == SECTION_CRM:
                 ["All Sources"] + list(available_sources) + ["Unspecified"],
                 key="crm_filter_src"
             )
+        with col_fresh_filt:
+            fresh_filter = st.selectbox(
+                "Filter Freshness",
+                ["All Freshness", "Fresh Only (<28d)", "Stale Only (≥28d)"],
+                key="crm_filter_fresh"
+            )
 
         # Track filter and search changes: entering new search or clearing search resets to page 1
-        current_filters = (search_query.strip(), arr_filter, cat_filter, pri_filter, src_filter)
+        current_filters = (search_query.strip(), arr_filter, cat_filter, pri_filter, src_filter, fresh_filter)
         prev_filters = st.session_state.get("_prev_crm_filters")
         if prev_filters is not None and prev_filters != current_filters:
             st.session_state.crm_page = 1
             st.session_state.active_opp_card = None
         st.session_state._prev_crm_filters = current_filters
 
-        filtered_opps = PipelineSearchPaginationService.filter_opportunities(
-            opportunities=opportunities,
-            search_query=search_query,
-            arrangement_filter=arr_filter,
-            category_filter=cat_filter,
-            priority_filter=pri_filter,
-            source_filter=src_filter,
-            application_categories=list(APPLICATION_CATEGORIES.keys())
-        )
+        try:
+            filtered_opps = PipelineSearchPaginationService.filter_opportunities(
+                opportunities=opportunities,
+                search_query=search_query,
+                arrangement_filter=arr_filter,
+                category_filter=cat_filter,
+                priority_filter=pri_filter,
+                source_filter=src_filter,
+                freshness_filter=fresh_filter,
+                stale_threshold_days=stale_threshold,
+                application_categories=list(APPLICATION_CATEGORIES.keys())
+            )
+        except TypeError:
+            filtered_opps = PipelineSearchPaginationService.filter_opportunities(
+                opportunities=opportunities,
+                search_query=search_query,
+                arrangement_filter=arr_filter,
+                category_filter=cat_filter,
+                priority_filter=pri_filter,
+                source_filter=src_filter,
+                application_categories=list(APPLICATION_CATEGORIES.keys())
+            )
 
         total_filtered = len(filtered_opps)
         PAGE_SIZE_OPTIONS = PipelineSearchPaginationService.PAGE_SIZE_OPTIONS
@@ -2667,13 +2788,13 @@ if active_section == SECTION_CRM:
                 st.session_state.crm_page = 1
                 st.rerun()
         with col_p_prev:
-            if st.button("⬅️ Previous", key="crm_prev_pg", disabled=(st.session_state.crm_page <= 1), use_container_width=True):
+            if st.button("⬅️", key="crm_prev_pg", disabled=(st.session_state.crm_page <= 1), use_container_width=True):
                 st.session_state.crm_page = max(1, st.session_state.crm_page - 1)
                 st.rerun()
         with col_p_info:
             st.markdown(f"<div style='text-align:center; padding-top:6px; font-weight:600; color:#94A3B8;'>Page {st.session_state.crm_page} of {total_pages}</div>", unsafe_allow_html=True)
         with col_p_next:
-            if st.button("Next ➡️", key="crm_next_pg", disabled=(st.session_state.crm_page >= total_pages), use_container_width=True):
+            if st.button("➡️", key="crm_next_pg", disabled=(st.session_state.crm_page >= total_pages), use_container_width=True):
                 st.session_state.crm_page = min(total_pages, st.session_state.crm_page + 1)
                 st.rerun()
 
@@ -2762,8 +2883,18 @@ if active_section == SECTION_CRM:
             else:
                 s_icon = "📋"
 
+            if hasattr(PipelineKPIService, "get_staleness_info"):
+                stale_info = PipelineKPIService.get_staleness_info(opp, threshold_days=stale_threshold)
+            else:
+                stale_info = {"is_stale": False}
+            if stale_info.get("is_stale"):
+                elapsed_d = int(stale_info["days_elapsed"]) if stale_info.get("days_elapsed") is not None else stale_threshold
+                stale_badge = f"  |  `⏳ Stale ({elapsed_d}d)`"
+            else:
+                stale_badge = ""
+
             is_card_open = (st.session_state.get("active_opp_card") == opp_id)
-            with st.expander(f"{s_icon} **{comp}** — {title}  |  *Status:* `{curr_status}`{cat_badge}{pri_badge}{src_badge}{arr_badge}{sal_exp_badge}  |  *Pay:* `{target_pay}`", expanded=is_card_open):
+            with st.expander(f"{s_icon} **{comp}** — {title}  |  *Status:* `{curr_status}`{stale_badge}{cat_badge}{pri_badge}{src_badge}{arr_badge}{sal_exp_badge}  |  *Pay:* `{target_pay}`", expanded=is_card_open):
                 c_card1, c_card2 = st.columns([1, 1])
 
                 with c_card1:
@@ -2946,14 +3077,13 @@ if active_section == SECTION_CRM:
                     else:
                         st.caption("No prior stage transitions recorded.")
 
+                    if stale_info.get("is_stale"):
+                        days_s = int(stale_info["days_elapsed"]) if stale_info.get("days_elapsed") is not None else stale_threshold
+                        st.caption(f"⏳ **Staleness Notice**: No pipeline stage transitions recorded for {days_s} days (threshold: {stale_threshold}d).")
+
                 with c_card2:
                     st.markdown("##### Update Application Details & Recruiter Notes:")
-                    stage_options = [
-                        "Pending", "Processed", "Applied", "Declined to Apply", "Employer Interest",
-                        "Application Rejected", "Recruiter Screen", "Hiring Manager",
-                        "Technical Screen", "Final Round", "Offer", "Withdrawn",
-                        "Archived", "Rejected"
-                    ]
+                    stage_options = list(AUTHORITATIVE_PIPELINE_STAGES)
                     current_idx = stage_options.index(curr_status) if curr_status in stage_options else 1
 
                     with st.form(key=f"edit_card_form_{opp_id}"):
@@ -3548,10 +3678,10 @@ if active_section == SECTION_CRM:
 
 
 # =====================================================================
-# SECTION 3: GLOBAL PROFESSIONAL STORY BANK & INTERVIEW NARRATIVE MAP
+# SECTION 3: INTERVIEW INTELLIGENCE
 # =====================================================================
-if active_section == SECTION_STORIES:
-    st.subheader("📖 Global Professional Story Bank & Interview Narrative Map")
+if active_section in (SECTION_STORIES, "📖 Global Story Bank & Interview Map"):
+    st.subheader("📖 Interview Intelligence")
     st.caption("12 canonical behavioral stories grounded in RevOps, GTM Systems, Data Architecture, and Cross-Functional Leadership. Modularized into breadcrumb trails with lock protections.")
 
     # Always ensure story bank is loaded in session state

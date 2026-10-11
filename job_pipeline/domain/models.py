@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Set
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -271,12 +271,40 @@ CATEGORY_ICONS: Dict[str, str] = {
     "Unassigned": "⚪"
 }
 
-APPLICATION_STAGES: List[str] = [
-    "Pending", "Processed", "Applied", "Application Rejected",
-    "Recruiter Screen", "Hiring Manager",
-    "Technical Screen", "Final Round", "Offer",
-    "Archived / Rejected"
+AUTHORITATIVE_PIPELINE_STAGES: List[str] = [
+    "Pending",
+    "Processed",
+    "Applied",
+    "Declined to Apply",
+    "Employer Interest",
+    "Application Rejected",
+    "Recruiter Screen",
+    "Hiring Manager",
+    "Technical Screen",
+    "Final Round",
+    "Offer",
+    "Withdrawn",
+    "Archived",
+    "Rejected"
 ]
+
+APPLICATION_STAGES: List[str] = AUTHORITATIVE_PIPELINE_STAGES
+
+ACTIVE_OPPORTUNITY_STAGES: Set[str] = {
+    "Employer Interest",
+    "Recruiter Screen",
+    "Hiring Manager",
+    "Technical Screen",
+    "Final Round",
+    "Offer"
+}
+
+KPI_INTERVIEW_STAGES: Set[str] = {
+    "Recruiter Screen",
+    "Hiring Manager",
+    "Technical Screen",
+    "Final Round"
+}
 
 INTERVIEW_STAGES: List[str] = [
     "Recruiter Screen",
@@ -285,6 +313,25 @@ INTERVIEW_STAGES: List[str] = [
     "Final Round",
     "Offer"
 ]
+
+TERMINAL_STAGES: Set[str] = {
+    "Declined to Apply",
+    "Application Rejected",
+    "Rejected",
+    "Withdrawn",
+    "Archived"
+}
+
+SUBMITTED_STAGES: Set[str] = {
+    "Applied",
+    "Employer Interest",
+    "Recruiter Screen",
+    "Hiring Manager",
+    "Technical Screen",
+    "Final Round",
+    "Offer",
+    "Application Rejected"
+}
 
 ROLE_INTELLIGENCE_STATUS_NOT_GENERATED: str = "Not Generated"
 ROLE_INTELLIGENCE_STATUS_GENERATING: str = "Generating"
@@ -538,4 +585,17 @@ class QuickLink(BaseModel):
     url: str
     category: str = "Links"  # Links, Scheduling, Contact / Info, or custom
     icon: str = "🔗"
+
+
+class PipelineInstanceConfig(BaseModel):
+    """Configuration for branding and instance identity of the pipeline."""
+    instance_id: str = "job-applications"
+    pipeline_type: str = "job_applications"
+    display_name: str = "Job Application Pipeline"
+    page_title: str = "More Outbound: Job Application Pipeline"
+    page_subtitle: str = "Automated Job Fit Screening · Resume Matching · Google Workspace Integration · Opportunity Tracking"
+    logo_path: Optional[str] = None
+    favicon_path: Optional[str] = None
+    page_icon: Optional[str] = "🚀"
+    stale_threshold_days: int = 28
 

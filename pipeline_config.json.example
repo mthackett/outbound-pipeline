@@ -1,4 +1,12 @@
 {
+  "instance_config": {
+    "instance_id": "job-applications",
+    "pipeline_type": "job_applications",
+    "display_name": "Job Application Pipeline",
+    "page_title": "More Outbound: Job Application Pipeline",
+    "page_subtitle": "Automated Job Fit Screening · Resume Matching · Google Workspace Integration · Opportunity Tracking",
+    "stale_threshold_days": 28
+  },
   "enable_cli_logging": true,
   "sources": [
     "LinkedIn",

@@ -10,7 +10,9 @@ from job_pipeline.domain.models import (
     TargetPayBounds, FitEvaluation, CandidateProfile, ScreeningQA, QuickLink,
     ScreeningMatchResult, DEFAULT_APPLICATION_SOURCES, DEFAULT_PRIORITIES,
     DEFAULT_TELEMETRY_WARNING_RULES, DEFAULT_TELEMETRY_RULES,
-    TelemetryWarningRule, TelemetryRule, TelemetryFinding
+    TelemetryWarningRule, TelemetryRule, TelemetryFinding,
+    PipelineInstanceConfig, INTERVIEW_STAGES, AUTHORITATIVE_PIPELINE_STAGES,
+    ACTIVE_OPPORTUNITY_STAGES, KPI_INTERVIEW_STAGES, TERMINAL_STAGES, SUBMITTED_STAGES
 )
 from job_pipeline.domain.screening_intelligence import ScreeningIntelligenceService
 from job_pipeline.domain.story_bank import StoryBankService
@@ -783,7 +785,8 @@ class PipelineConfigService:
             "sources": list(DEFAULT_APPLICATION_SOURCES),
             "priorities": list(DEFAULT_PRIORITIES),
             "telemetry_rules": [TelemetryService.normalize_rule_dict(r) for r in DEFAULT_TELEMETRY_RULES],
-            "telemetry_warnings": [TelemetryService.normalize_rule_dict(r) for r in DEFAULT_TELEMETRY_RULES]
+            "telemetry_warnings": [TelemetryService.normalize_rule_dict(r) for r in DEFAULT_TELEMETRY_RULES],
+            "instance_config": PipelineInstanceConfig().model_dump()
         }
         if not path.exists():
             example_path = Path(str(path) + ".example")
@@ -813,18 +816,39 @@ class PipelineConfigService:
                 else:
                     normalized_rules = [TelemetryService.normalize_rule_dict(r) for r in DEFAULT_TELEMETRY_RULES]
 
+                raw_inst = data.get("instance_config")
+                if isinstance(raw_inst, dict):
+                    try:
+                        inst_cfg = PipelineInstanceConfig(**raw_inst).model_dump()
+                    except Exception:
+                        inst_cfg = PipelineInstanceConfig().model_dump()
+                else:
+                    inst_cfg = PipelineInstanceConfig().model_dump()
+
                 res = {
                     **data,
                     "enable_cli_logging": bool(enable_logging),
                     "sources": sources if isinstance(sources, list) and sources else list(DEFAULT_APPLICATION_SOURCES),
                     "priorities": priorities if isinstance(priorities, list) and priorities else list(DEFAULT_PRIORITIES),
                     "telemetry_rules": normalized_rules,
-                    "telemetry_warnings": normalized_rules
+                    "telemetry_warnings": normalized_rules,
+                    "instance_config": inst_cfg
                 }
                 return res
             return defaults
         except Exception:
             return defaults
+
+    @classmethod
+    def get_instance_config(cls, filepath: Optional[str] = None) -> PipelineInstanceConfig:
+        cfg = cls.load_config(filepath)
+        raw = cfg.get("instance_config")
+        if isinstance(raw, dict):
+            try:
+                return PipelineInstanceConfig(**raw)
+            except Exception:
+                pass
+        return PipelineInstanceConfig()
 
     @classmethod
     def is_cli_logging_enabled(cls, filepath: Optional[str] = None) -> bool:
@@ -1125,6 +1149,9 @@ class PipelineSearchPaginationService:
         category_filter: str = "All Categories",
         priority_filter: str = "All Priorities",
         source_filter: str = "All Sources",
+        freshness_filter: str = "All Freshness",
+        stale_threshold_days: int = 28,
+        reference_date: Optional[datetime] = None,
         application_categories: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         app_cats = application_categories or ["Target", "Stretch", "Opportunistic", "Practice", "Fallback"]
@@ -1170,6 +1197,18 @@ class PipelineSearchPaginationService:
                 filtered = [
                     o for o in filtered
                     if str(o.get("Applied Via", "")).strip() == source_filter
+                ]
+
+        if freshness_filter and freshness_filter not in ("All Freshness", "All"):
+            if "Stale" in freshness_filter:
+                filtered = [
+                    o for o in filtered
+                    if PipelineKPIService.is_stale(o, threshold_days=stale_threshold_days, reference_date=reference_date)
+                ]
+            elif "Fresh" in freshness_filter:
+                filtered = [
+                    o for o in filtered
+                    if not PipelineKPIService.is_stale(o, threshold_days=stale_threshold_days, reference_date=reference_date)
                 ]
 
         if search_query and search_query.strip():
@@ -1277,4 +1316,323 @@ class PipelineSearchPaginationService:
             if oid == target:
                 return (idx // items_per_page) + 1
         return None
+
+
+class PipelineKPIService:
+    """Domain service for calculating pipeline performance KPIs, staleness indicators, and resume variant breakdowns."""
+
+    ACTIVE_STAGES = ACTIVE_OPPORTUNITY_STAGES
+    INTERVIEW_STAGES = KPI_INTERVIEW_STAGES
+    TERMINAL_STAGES = TERMINAL_STAGES
+    SUBMITTED_STAGES = SUBMITTED_STAGES
+
+    @classmethod
+    def parse_stage_history(cls, opp: Dict[str, Any]) -> List[str]:
+        """Extracts list of stage names from an opportunity dictionary."""
+        raw = opp.get("stage_history") or opp.get("Stage History") or []
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = []
+        stages = []
+        if isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, dict):
+                    stg = item.get("stage")
+                    if stg:
+                        stages.append(str(stg).strip())
+                elif isinstance(item, str):
+                    stages.append(item.strip())
+        return stages
+
+    @classmethod
+    def parse_stage_history_entries(cls, opp: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extracts structured stage history entries with stage and entered_at."""
+        raw = opp.get("stage_history") or opp.get("Stage History") or []
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = []
+        entries = []
+        if isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, dict):
+                    entries.append(item)
+                elif isinstance(item, str):
+                    entries.append({"stage": item.strip()})
+        return entries
+
+    @classmethod
+    def parse_timestamp(cls, val: Any) -> Optional[datetime]:
+        """Safely parses ISO timestamp or YYYY-MM-DD date."""
+        if not val:
+            return None
+        s = str(val).strip()
+        if not s:
+            return None
+        try:
+            if "T" in s:
+                return datetime.fromisoformat(s[:19])
+            if len(s) >= 10:
+                return datetime.strptime(s[:10], "%Y-%m-%d")
+        except Exception:
+            pass
+        return None
+
+    @classmethod
+    def is_submitted(cls, opp: Dict[str, Any]) -> bool:
+        """
+        Counts applications that were actually submitted, including those subsequently
+        progressed, rejected, or withdrawn. Checks stage history first, then current status.
+        Does not assume unverified terminal records outside submission stages were submitted.
+        """
+        curr = str(opp.get("Status") or opp.get("status") or "").strip()
+        hist = cls.parse_stage_history(opp)
+        if any(s in cls.SUBMITTED_STAGES for s in hist):
+            return True
+        if curr in cls.SUBMITTED_STAGES:
+            return True
+        return False
+
+    @classmethod
+    def has_interviewed(cls, opp: Dict[str, Any]) -> bool:
+        """
+        Determines whether a submitted application reached an interview stage
+        (Recruiter Screen, Hiring Manager, Technical Screen, or Final Round).
+        Counted once per application regardless of number of interview rounds.
+        """
+        if not cls.is_submitted(opp):
+            return False
+        curr = str(opp.get("Status") or opp.get("status") or "").strip()
+        if curr in cls.INTERVIEW_STAGES:
+            return True
+        hist = cls.parse_stage_history(opp)
+        return any(s in cls.INTERVIEW_STAGES for s in hist)
+
+    @classmethod
+    def is_active(cls, opp: Dict[str, Any]) -> bool:
+        """
+        Active Opportunities: Counts ONLY records whose CURRENT stage is in the explicit allowlist:
+        Employer Interest, Recruiter Screen, Hiring Manager, Technical Screen, Final Round, Offer.
+        """
+        curr = str(opp.get("Status") or opp.get("status") or "").strip()
+        return curr in cls.ACTIVE_STAGES
+
+    @classmethod
+    def get_last_stage_transition_date(cls, opp: Dict[str, Any]) -> Tuple[Optional[datetime], str]:
+        """
+        Determines the datetime of the last meaningful pipeline stage transition.
+        Reliable stage-history timestamps are checked in reverse order.
+        Documented fallback: Date Created / date_created.
+        Returns: (datetime, source_name) where source_name is 'stage_history', 'date_created', or 'missing'.
+        """
+        entries = cls.parse_stage_history_entries(opp)
+        for item in reversed(entries):
+            ea = item.get("entered_at")
+            parsed = cls.parse_timestamp(ea)
+            if parsed:
+                return parsed, "stage_history"
+
+        # Documented fallback: Date Created
+        dc = opp.get("Date Created") or opp.get("date_created")
+        parsed_dc = cls.parse_timestamp(dc)
+        if parsed_dc:
+            return parsed_dc, "date_created"
+
+        return None, "missing"
+
+    @classmethod
+    def is_stale(
+        cls,
+        opp: Dict[str, Any],
+        threshold_days: int = 28,
+        reference_date: Optional[datetime] = None
+    ) -> bool:
+        """
+        Derived freshness indicator for submitted, nonterminal applications.
+        Marked Stale when 28 or more days have elapsed since its last meaningful pipeline stage transition.
+        Stale does NOT replace current stage, and does NOT remove an application from Active Opportunities.
+        Terminal records (Declined to Apply, Application Rejected, Rejected, Withdrawn, Archived) are excluded.
+        Non-stage edits (notes, refreshes) do not reset freshness.
+        """
+        if not cls.is_submitted(opp):
+            return False
+        curr = str(opp.get("Status") or opp.get("status") or "").strip()
+        if curr in cls.TERMINAL_STAGES:
+            return False
+
+        last_dt, _ = cls.get_last_stage_transition_date(opp)
+        if not last_dt:
+            return False
+
+        ref = reference_date or datetime.now()
+        days_elapsed = (ref - last_dt).total_seconds() / 86400.0
+        return days_elapsed >= threshold_days
+
+    @classmethod
+    def get_staleness_info(
+        cls,
+        opp: Dict[str, Any],
+        threshold_days: int = 28,
+        reference_date: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """
+        Returns structured staleness information:
+        - is_eligible: submitted and nonterminal
+        - is_stale: bool
+        - days_elapsed: float or None
+        - last_transition_date: datetime or None
+        - source: 'stage_history', 'date_created', 'terminal', 'not_submitted', or 'missing'
+        """
+        if not cls.is_submitted(opp):
+            return {
+                "is_eligible": False,
+                "is_stale": False,
+                "days_elapsed": None,
+                "last_transition_date": None,
+                "source": "not_submitted"
+            }
+        curr = str(opp.get("Status") or opp.get("status") or "").strip()
+        if curr in cls.TERMINAL_STAGES:
+            return {
+                "is_eligible": False,
+                "is_stale": False,
+                "days_elapsed": None,
+                "last_transition_date": None,
+                "source": "terminal"
+            }
+
+        last_dt, src = cls.get_last_stage_transition_date(opp)
+        if not last_dt:
+            return {
+                "is_eligible": True,
+                "is_stale": False,
+                "days_elapsed": None,
+                "last_transition_date": None,
+                "source": "missing"
+            }
+
+        ref = reference_date or datetime.now()
+        days_elapsed = (ref - last_dt).total_seconds() / 86400.0
+        return {
+            "is_eligible": True,
+            "is_stale": days_elapsed >= threshold_days,
+            "days_elapsed": days_elapsed,
+            "last_transition_date": last_dt,
+            "source": src
+        }
+
+    @classmethod
+    def get_canonical_resume_variant(cls, opp: Union[Dict[str, Any], str]) -> str:
+        """Extracts and normalizes the resume variant name from opp dict or string."""
+        if isinstance(opp, str):
+            raw = opp
+        elif isinstance(opp, dict):
+            raw = opp.get("Selected Resume") or opp.get("selected_resume_name") or opp.get("selected_resume") or ""
+        else:
+            raw = ""
+        if not raw or not str(raw).strip():
+            return "Unassigned"
+        val = str(raw).strip()
+        # Remove file extensions
+        val = re.sub(r'(?i)\.(docx?|pdf|txt|gdoc)$', '', val).strip()
+        # Remove candidate prefixes (e.g. 'Candidate ', 'Matt Hackett - ')
+        val = re.sub(r'(?i)^(candidate\s+|(?:[a-z]+\s+){1,3}-\s*)', '', val).strip()
+        # Remove trailing 'Resume' or 'CV'
+        val = re.sub(r'(?i)\s+(resume|cv)$', '', val).strip()
+        # Normalize canonical role families
+        low = val.lower()
+        if "revops" in low or "revenue operations" in low:
+            return "RevOps Analyst"
+        if "gtm" in low or "go to market" in low:
+            return "GTM Engineer"
+        if "business analyst" in low or "business analytics" in low or "data analytics" in low:
+            return "Business Analyst"
+        if "solutions" in low:
+            return "Solutions Engineer"
+        if val:
+            return val
+        return "Unassigned"
+
+    @classmethod
+    def format_ratio(cls, numerator: int, denominator: int) -> str:
+        if denominator <= 0:
+            return "—"
+        ratio = numerator / denominator
+        return f"1:{int(round(ratio))}"
+
+    @classmethod
+    def calculate_kpis(
+        cls,
+        opportunities: List[Dict[str, Any]],
+        stale_threshold_days: int = 28,
+        reference_date: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        total_tracked = len(opportunities)
+        submitted_count = sum(1 for o in opportunities if cls.is_submitted(o))
+        interviewed_count = sum(1 for o in opportunities if cls.has_interviewed(o))
+        active_count = sum(1 for o in opportunities if cls.is_active(o))
+        stale_count = sum(
+            1 for o in opportunities
+            if cls.is_stale(o, threshold_days=stale_threshold_days, reference_date=reference_date)
+        )
+        overall_ratio = cls.format_ratio(submitted_count, interviewed_count)
+
+        # Group by canonical resume variant
+        variants_data: Dict[str, Dict[str, int]] = {}
+        for o in opportunities:
+            variant = cls.get_canonical_resume_variant(o)
+            if variant not in variants_data:
+                variants_data[variant] = {
+                    "tracked": 0,
+                    "applied": 0,
+                    "active": 0,
+                    "interviewed": 0,
+                    "stale": 0
+                }
+            variants_data[variant]["tracked"] += 1
+            if cls.is_submitted(o):
+                variants_data[variant]["applied"] += 1
+            if cls.is_active(o):
+                variants_data[variant]["active"] += 1
+            if cls.has_interviewed(o):
+                variants_data[variant]["interviewed"] += 1
+            if cls.is_stale(o, threshold_days=stale_threshold_days, reference_date=reference_date):
+                variants_data[variant]["stale"] += 1
+
+        variant_rows = []
+        for v_name, stats in sorted(variants_data.items(), key=lambda x: (-x[1]["tracked"], x[0])):
+            variant_rows.append({
+                "variant": v_name,
+                "tracked": stats["tracked"],
+                "applied": stats["applied"],
+                "active": stats["active"],
+                "interviewed": stats["interviewed"],
+                "stale": stats["stale"],
+                "apps_per_interview": cls.format_ratio(stats["applied"], stats["interviewed"])
+            })
+
+        totals_row = {
+            "variant": "Total",
+            "tracked": total_tracked,
+            "applied": submitted_count,
+            "active": active_count,
+            "interviewed": interviewed_count,
+            "stale": stale_count,
+            "apps_per_interview": overall_ratio
+        }
+
+        return {
+            "total_tracked": total_tracked,
+            "total_applied": submitted_count,
+            "total_active": active_count,
+            "total_active_opportunities": active_count,
+            "total_interviewed": interviewed_count,
+            "total_stale": stale_count,
+            "apps_per_interview": overall_ratio,
+            "variant_rows": variant_rows,
+            "totals_row": totals_row
+        }
 
