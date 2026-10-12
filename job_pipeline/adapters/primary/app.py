@@ -693,11 +693,6 @@ with st.sidebar.expander("Application Quicklinks", expanded=True):
 
     render_quicklinks_sidebar_view()
 
-    bundle_text = QuickLinksService.format_clipboard_bundle(st.session_state.quicklinks)
-    with st.expander("📋 Copy All Links (Bundle)", expanded=False):
-        st.caption("All links formatted together:")
-        st.code(bundle_text, language=None)
-
     with st.expander("⚙️ Configure Quicklinks", expanded=False):
         render_quicklinks_manager(context_key="sb")
 
