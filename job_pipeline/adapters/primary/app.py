@@ -3109,7 +3109,7 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
             if curr_pri and curr_pri not in ("Not Specified", "Unspecified"):
                 line2_items.append(f"`{curr_pri}`")
             if curr_src and curr_src not in ("Not Specified", "Unspecified"):
-                line2_items.append(curr_src)
+                line2_items.append(f"`{curr_src}`")
 
             # Standardized compensation display with strict precedence:
             # 1. Salary Submitted: $X
