@@ -93,7 +93,7 @@ from job_pipeline.adapters.secondary.mock_adapter import (
 st.markdown("""
 <style>
     .block-container {
-        padding-top: 1.1rem;
+        padding-top: 3.8rem;
         padding-bottom: 2rem;
     }
     .main-title {
@@ -109,28 +109,55 @@ st.markdown("""
         margin-bottom: 0.6rem;
         line-height: 1.35;
     }
-    /* Compact 6-metric KPI cards */
+    /* Compact 6-metric KPI cards: centered labels and values */
     div[data-testid="stMetric"] {
         background-color: #0F172A;
         border: 1px solid #334155;
         border-radius: 8px;
-        padding: 8px 12px;
+        padding: 8px 6px;
         box-shadow: none;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
     }
-    div[data-testid="stMetric"] label {
-        font-size: 0.74rem !important;
+    div[data-testid="stMetric"] label,
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"] {
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        width: 100% !important;
+        text-align: center !important;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"] > div,
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"] p {
+        font-size: 0.70rem !important;
         color: #94A3B8 !important;
         font-weight: 600 !important;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.2px;
+        text-align: center !important;
+        width: 100% !important;
         white-space: nowrap;
-        overflow: visible;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        margin: 0 auto !important;
     }
     div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        width: 100% !important;
+        text-align: center !important;
         font-size: 1.40rem !important;
         color: #F8FAFC !important;
         font-weight: 700 !important;
         line-height: 1.2;
+    }
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] > div {
+        text-align: center !important;
+        width: 100% !important;
     }
     /* Compact two-line CRM expander card styling */
     div[data-testid="stExpander"] details {
@@ -490,8 +517,8 @@ else:
     )
 
 # 1. Application Quicklinks
-st.sidebar.subheader("⚡ Application Quicklinks")
-with st.sidebar.expander("📋 Fast Application Links", expanded=True):
+#st.sidebar.subheader("⚡ Application Quicklinks")
+with st.sidebar.expander("Application Quicklinks", expanded=True):
     @st.fragment
     def render_quicklinks_sidebar_view():
         if not st.session_state.quicklinks:
@@ -3017,7 +3044,7 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
 
             # Two-line CRM summary visible while collapsed
             # Line 1: Company name — Job title
-            # Line 2: Stage · Category · Priority · Source · Expected Salary
+            # Line 2: Stage · Strategic Category · Priority · Source · Compensation
             line2_items = [f"`{curr_status}`"]
             if stale_info.get("is_stale"):
                 elapsed_d = int(stale_info["days_elapsed"]) if stale_info.get("days_elapsed") is not None else stale_threshold
@@ -3029,22 +3056,12 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
             if curr_src and curr_src not in ("Not Specified", "Unspecified"):
                 line2_items.append(curr_src)
 
-            # Salary precedence:
-            # 1. Salary Submitted: $X (persisted Salary Expectation)
-            # 2. Suggested Range: $X (calculated target pay recommendation)
-            # 3. Omitted if neither
-            sal_disp = ""
-            if curr_sal_exp and curr_sal_exp.strip() and curr_sal_exp.strip().lower() not in ("none", "n/a", "not specified"):
-                s_val = curr_sal_exp.strip()
-                m_sal = re.match(r"^\$?([0-9]{1,3}),([0-9]{3})(?:\.00)?$", s_val)
-                if m_sal:
-                    s_val = f"${m_sal.group(1)}k"
-                sal_disp = f"Salary Submitted: {s_val}"
-            elif target_pay and str(target_pay).strip() and str(target_pay).strip().lower() not in ("none", "n/a", "not calculated"):
-                sal_disp = f"Suggested Range: {str(target_pay).strip()}"
-
-            if sal_disp:
-                line2_items.append(sal_disp)
+            # Standardized compensation display with strict precedence:
+            # 1. Salary Submitted: $X
+            # 2. Suggested Range: $X–$Y
+            # 3. Salary Unspecified
+            comp_display = PipelineKPIService.format_compensation_display(curr_sal_exp, target_pay)
+            line2_items.append(comp_display)
 
             line2_str = " · ".join(line2_items)
             expander_title = f"{s_icon} **{comp}** — {title}\n\n{line2_str}"

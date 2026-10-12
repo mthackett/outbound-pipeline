@@ -288,6 +288,83 @@ class TestV151DashboardAndSettings(unittest.TestCase):
         self.assertEqual(data["qa"], [{"qa_id": "qa-1"}])
         self.assertEqual(data["requirements"], [{"opportunity_id": "req-1"}])
 
+    def test_compensation_display_salary_submitted_precedence(self):
+        """Precedence 1: Recorded salary submission takes precedence and highlights numeric amounts in green."""
+        # Standard formatted amount
+        res1 = PipelineKPIService.format_compensation_display(
+            salary_submitted="$135,000",
+            target_pay="$115,000 - $125,000 (Target: $121,000 - $123,000)"
+        )
+        self.assertEqual(res1, "Salary Submitted: :green[$135,000]")
+
+        # Abbreviated k format is normalized with dollar sign and thousands separator
+        res2 = PipelineKPIService.format_compensation_display(
+            salary_submitted="135k",
+            target_pay="$120,000 - $130,000"
+        )
+        self.assertEqual(res2, "Salary Submitted: :green[$135,000]")
+
+        # Range submitted
+        res3 = PipelineKPIService.format_compensation_display(
+            salary_submitted="$130k - $140k",
+            target_pay=""
+        )
+        self.assertEqual(res3, "Salary Submitted: :green[$130,000–$140,000]")
+
+    def test_compensation_display_suggested_range_precedence(self):
+        """Precedence 2: When no salary submitted, valid calculated range displays with en-dash and green amounts."""
+        # Range with Target suffix is cleaned to clean range
+        res1 = PipelineKPIService.format_compensation_display(
+            salary_submitted="",
+            target_pay="115,000 - 125,000 (Target: 121,000 - 123,000)"
+        )
+        self.assertEqual(res1, "Suggested Range: :green[$115,000–$125,000]")
+
+        # Range already containing dollar signs
+        res2 = PipelineKPIService.format_compensation_display(
+            salary_submitted=None,
+            target_pay="$110k–$120k"
+        )
+        self.assertEqual(res2, "Suggested Range: :green[$110,000–$120,000]")
+
+        # Hourly contract range
+        res3 = PipelineKPIService.format_compensation_display(
+            salary_submitted="None",
+            target_pay="$75.00 – $80.00 / hr"
+        )
+        self.assertEqual(res3, "Suggested Range: :green[$75–$80/hr]")
+
+    def test_compensation_display_salary_unspecified_fallback_and_placeholder_rejection(self):
+        """Precedence 3: Unspecified when neither exists; placeholders are never shown as calculated ranges."""
+        # Undisclosed placeholder
+        res1 = PipelineKPIService.format_compensation_display(
+            salary_submitted="",
+            target_pay="Undisclosed / Set per role"
+        )
+        self.assertEqual(res1, ":orange[Salary Unspecified]")
+
+        # Hourly undisclosed placeholder
+        res2 = PipelineKPIService.format_compensation_display(
+            salary_submitted="N/A",
+            target_pay="Hourly (Rate undisclosed)"
+        )
+        self.assertEqual(res2, ":orange[Salary Unspecified]")
+
+        # Both empty/none
+        res3 = PipelineKPIService.format_compensation_display(
+            salary_submitted=None,
+            target_pay=None
+        )
+        self.assertEqual(res3, ":orange[Salary Unspecified]")
+
+        # Explicit 'Not Specified'
+        res4 = PipelineKPIService.format_compensation_display(
+            salary_submitted="Not Specified",
+            target_pay="Not calculated"
+        )
+        self.assertEqual(res4, ":orange[Salary Unspecified]")
+
 
 if __name__ == "__main__":
     unittest.main()
+

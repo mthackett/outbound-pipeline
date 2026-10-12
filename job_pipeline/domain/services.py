@@ -1741,6 +1741,80 @@ class PipelineKPIService:
             "totals_row": totals_row
         }
 
+    @staticmethod
+    def format_compensation_display(salary_submitted: Optional[str] = None, target_pay: Optional[str] = None) -> str:
+        """
+        Standardizes compensation display for pipeline opportunity records.
+        Display precedence:
+        1. Salary Submitted: When an actual salary response was recorded ($X) -> 'Salary Submitted: :green[$135,000]'
+        2. Suggested Range: Otherwise when a valid calculated range exists ($X–$Y) -> 'Suggested Range: :green[$115,000–$125,000]'
+        3. Salary Unspecified: When neither value exists -> ':orange[Salary Unspecified]'
+        """
+        def format_currency_amount(val_str: str) -> str:
+            val_str = str(val_str).strip()
+            m_k = re.match(r"^\$?([0-9]+(?:\.[0-9]+)?)\s*[kK]$", val_str)
+            if m_k:
+                amt = float(m_k.group(1)) * 1000
+                return f"${amt:,.0f}"
+            clean = re.sub(r"[\$,]", "", val_str)
+            try:
+                amt = float(clean)
+                return f"${amt:,.0f}"
+            except ValueError:
+                return val_str if val_str.startswith("$") else f"${val_str}"
+
+        # 1. Salary Submitted: When an actual salary response was recorded
+        if salary_submitted:
+            s_val = str(salary_submitted).strip()
+            if s_val and s_val.lower() not in ("none", "n/a", "not specified", "unspecified", "undisclosed", "null", "0"):
+                m_range = re.match(r"^\$?([0-9kK,\.]+)\s*[-–—]\s*\$?([0-9kK,\.]+)$", s_val)
+                if m_range:
+                    low = format_currency_amount(m_range.group(1))
+                    high = format_currency_amount(m_range.group(2))
+                    return f"Salary Submitted: :green[{low}–{high}]"
+                formatted = format_currency_amount(s_val)
+                return f"Salary Submitted: :green[{formatted}]"
+
+        # 2. Suggested Range: When a valid calculated range exists
+        if target_pay:
+            t_val = str(target_pay).strip()
+            placeholder_patterns = [
+                r"undisclosed", r"set per role", r"not specified", r"not calculated",
+                r"unspecified", r"^n/?a$", r"^none$", r"^null$", r"rate undisclosed"
+            ]
+            is_placeholder = any(re.search(pat, t_val, re.IGNORECASE) for pat in placeholder_patterns)
+            if not is_placeholder and t_val:
+                m_target = re.match(r"^(.*?)\s*\((?:Target:.*?)\)$", t_val, re.IGNORECASE)
+                base_range = m_target.group(1).strip() if m_target else t_val
+
+                m_rng = re.match(r"^\$?([0-9kK,\.]+)\s*[-–—]\s*\$?([0-9kK,\.]+)$", base_range)
+                if m_rng:
+                    low = format_currency_amount(m_rng.group(1))
+                    high = format_currency_amount(m_rng.group(2))
+                    return f"Suggested Range: :green[{low}–{high}]"
+
+                m_plus = re.match(r"^\$?([0-9kK,\.]+)\s*\+$", base_range)
+                if m_plus:
+                    amt = format_currency_amount(m_plus.group(1))
+                    return f"Suggested Range: :green[{amt}+]"
+
+                m_upto = re.match(r"^up to\s+\$?([0-9kK,\.]+)$", base_range, re.IGNORECASE)
+                if m_upto:
+                    amt = format_currency_amount(m_upto.group(1))
+                    return f"Suggested Range: :green[Up to {amt}]"
+
+                m_hr = re.match(r"^\$?([0-9\.]+)\s*[-–—]\s*\$?([0-9\.]+)\s*/\s*hr", base_range, re.IGNORECASE)
+                if m_hr:
+                    low = format_currency_amount(m_hr.group(1))
+                    high = format_currency_amount(m_hr.group(2))
+                    return f"Suggested Range: :green[{low}–{high}/hr]"
+
+                if re.search(r"\d", base_range):
+                    return f"Suggested Range: :green[{base_range}]"
+
+        # 3. Salary Unspecified: When neither value exists
+        return ":orange[Salary Unspecified]"
+
     @classmethod
     def refresh_pipeline_data(cls, storage_adapter) -> Tuple[bool, str, Dict[str, Any]]:
         """
@@ -1761,4 +1835,5 @@ class PipelineKPIService:
             }
         except Exception as err:
             return False, f"Could not refresh pipeline data from Google Sheets: {err}", {}
+
 
