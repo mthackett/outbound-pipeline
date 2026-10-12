@@ -732,17 +732,38 @@ def perform_pipeline_refresh(storage, log_func=None):
     return ok, msg
 
 
-# 3. Pipeline Controls (Sidebar)
+# Resolve demo mode state and initialize adapters
+demo_mode_state = st.session_state.get("demo_mode_cb", os.environ.get("DEMO_MODE", "false").lower() == "true")
+storage_adapter, drive_adapter, resume_repo, llm_adapter, twilio_adapter, gmail_adapter = get_adapters(demo_mode_state)
+
+# 3. Quick Cloud Links (Sidebar)
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔗 Quick Cloud Links")
+sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
+drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
+resumes_folder_id = getattr(drive_adapter, "resumes_folder_id", "") or os.environ.get("GOOGLE_RESUMES_FOLDER_ID", "")
+
+if sheet_id:
+    st.sidebar.markdown(f"[📊 Open Pipeline Spreadsheet](https://docs.google.com/spreadsheets/d/{sheet_id}/edit)")
+if resumes_folder_id:
+    st.sidebar.markdown(f"[📄 Open Resumes Folder](https://drive.google.com/drive/folders/{resumes_folder_id})")
+else:
+    st.sidebar.caption("📄 Open Resumes Folder *(not configured)*")
+if drive_root_id:
+    st.sidebar.markdown(f"[📁 Open Applications Folder](https://drive.google.com/drive/folders/{drive_root_id})")
+
+# 4. Pipeline Controls (Sidebar)
 st.sidebar.markdown("---")
 st.sidebar.subheader("💼 Pipeline Controls")
 
 demo_mode = st.sidebar.checkbox(
     "Zero-Cost Demo Mode",
-    value=os.environ.get("DEMO_MODE", "false").lower() == "true",
+    value=demo_mode_state,
+    key="demo_mode_cb",
     help="Uses mock fixtures and bypasses live API charges."
 )
-
-storage_adapter, drive_adapter, resume_repo, llm_adapter, twilio_adapter, gmail_adapter = get_adapters(demo_mode)
+if demo_mode != demo_mode_state:
+    storage_adapter, drive_adapter, resume_repo, llm_adapter, twilio_adapter, gmail_adapter = get_adapters(demo_mode)
 
 if st.sidebar.button("🔄 Refresh Pipeline Data", key="btn_sb_pipeline_refresh", use_container_width=True, help="Fetch fresh records from Google Sheets"):
     ok, msg = perform_pipeline_refresh(storage_adapter, log_action)
@@ -767,22 +788,6 @@ if cli_logging_toggle != curr_cli_logging:
 if st.sidebar.button("⚙️ Pipeline Settings", key="btn_sb_pipeline_settings", use_container_width=True, help="Manage guardrails, sources, priorities, and Job Signals"):
     st.session_state["in_settings_view"] = True
     st.rerun()
-
-# 4. Quick Cloud Links
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔗 Quick Cloud Links")
-sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
-drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
-resumes_folder_id = getattr(drive_adapter, "resumes_folder_id", "") or os.environ.get("GOOGLE_RESUMES_FOLDER_ID", "")
-
-if sheet_id:
-    st.sidebar.markdown(f"[📊 Open Pipeline Spreadsheet](https://docs.google.com/spreadsheets/d/{sheet_id}/edit)")
-if resumes_folder_id:
-    st.sidebar.markdown(f"[📄 Open Resumes Folder](https://drive.google.com/drive/folders/{resumes_folder_id})")
-else:
-    st.sidebar.caption("📄 Open Resumes Folder *(not configured)*")
-if drive_root_id:
-    st.sidebar.markdown(f"[📁 Open Applications Folder](https://drive.google.com/drive/folders/{drive_root_id})")
 
 # 4. Connection Status Expander
 st.sidebar.markdown("---")
