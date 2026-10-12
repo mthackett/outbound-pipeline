@@ -936,19 +936,19 @@ def trigger_role_intelligence_generation(opp_data: Dict[str, Any], show_toasts: 
 
 # Dedicated Full-Width Settings View
 if st.session_state.get("in_settings_view", False):
-    col_back, col_title = st.columns([2.5, 7.5])
+    col_back, col_title = st.columns([2.5, 7.5], vertical_alignment="center")
     with col_back:
         if st.button("⬅️ Return to Pipeline", key="btn_settings_back", type="primary", use_container_width=True):
             st.session_state["in_settings_view"] = False
             st.rerun()
     with col_title:
-        st.markdown("<h2 style='margin:0; padding:0; color:#F8FAFC;'>⚙️ Pipeline Settings</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='margin:0; padding:0; color:#F8FAFC;'>Pipeline Settings</h2>", unsafe_allow_html=True)
         st.caption("Manage ATS guardrails, application sources, priority tiers, and Job Signal heuristics.")
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
     # Section 1: Guardrail Rules & Limits
-    with st.expander("🛡️ Guardrail Rules & Limits", expanded=True):
+    with st.expander("🛡️ Guardrail Rules & Limits", expanded=False):
         st.caption("Industry ATS guardrails to prevent auto-rejection.")
         g_c1, g_c2, g_c3 = st.columns(3)
         with g_c1:
@@ -985,7 +985,7 @@ if st.session_state.get("in_settings_view", False):
     pipeline_cfg = PipelineConfigService.load_config()
     available_sources = pipeline_cfg.get("sources", DEFAULT_APPLICATION_SOURCES)
     available_priorities = pipeline_cfg.get("priorities", DEFAULT_PRIORITIES)
-    with st.expander("🌐 Sources & Priorities", expanded=True):
+    with st.expander("🌐 Sources & Priorities", expanded=False):
         st.caption("Customize where you apply from and your priority tiers.")
         cfg_c1, cfg_c2 = st.columns(2)
         with cfg_c1:
@@ -1012,13 +1012,13 @@ if st.session_state.get("in_settings_view", False):
 
     # Section 3: Job Signal Rules
     active_rules_count = len(PipelineConfigService.get_active_warning_rules())
-    with st.expander(f"⚠️ Job Signal Rules ({active_rules_count} Active)", expanded=True):
+    with st.expander(f"⚠️ Job Signal Rules ({active_rules_count} Active)", expanded=False):
         if demo_mode:
             st.caption("Demo mode evaluates Direct Match and Regex rules. Concept rules require a connected LLM.")
         render_telemetry_warnings_manager(key_prefix="settings_view")
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-    st.markdown("##### 🛠️ Environment & System Controls")
+    st.markdown("##### Environment & System Controls")
     col_demo, col_log = st.columns(2)
     with col_demo:
         demo_mode_toggle = st.checkbox(
