@@ -188,6 +188,16 @@ st.markdown("""
         line-height: inherit !important;
         color: inherit !important;
     }
+    /* Pipeline Tracker: Center inline refresh icon */
+    div.st-key-btn_inline_crm_refresh button {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        width: 100%;
+    }
     .apply-kit-card {
         background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
         border: 1px solid #334155;
@@ -735,10 +745,12 @@ def perform_pipeline_refresh(storage, log_func=None):
 # Resolve demo mode state and initialize adapters
 demo_mode_state = st.session_state.get("demo_mode_cb", os.environ.get("DEMO_MODE", "false").lower() == "true")
 storage_adapter, drive_adapter, resume_repo, llm_adapter, twilio_adapter, gmail_adapter = get_adapters(demo_mode_state)
+demo_mode = demo_mode_state
 
 # 3. Quick Cloud Links (Sidebar)
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔗 Quick Cloud Links")
+#st.sidebar.markdown("---")
+#st.sidebar.subheader("🔗 Quick Cloud Links")
+st.sidebar.subheader("Quick Cloud Links")
 sheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
 drive_root_id = os.environ.get("GOOGLE_APPLICATIONS_ROOT_FOLDER_ID", "")
 resumes_folder_id = getattr(drive_adapter, "resumes_folder_id", "") or os.environ.get("GOOGLE_RESUMES_FOLDER_ID", "")
@@ -753,17 +765,9 @@ if drive_root_id:
     st.sidebar.markdown(f"[📁 Open Applications Folder](https://drive.google.com/drive/folders/{drive_root_id})")
 
 # 4. Pipeline Controls (Sidebar)
-st.sidebar.markdown("---")
-st.sidebar.subheader("💼 Pipeline Controls")
-
-demo_mode = st.sidebar.checkbox(
-    "Zero-Cost Demo Mode",
-    value=demo_mode_state,
-    key="demo_mode_cb",
-    help="Uses mock fixtures and bypasses live API charges."
-)
-if demo_mode != demo_mode_state:
-    storage_adapter, drive_adapter, resume_repo, llm_adapter, twilio_adapter, gmail_adapter = get_adapters(demo_mode)
+#st.sidebar.markdown("---")
+#st.sidebar.subheader("💼 Pipeline Controls")
+st.sidebar.subheader("Pipeline Controls")
 
 if st.sidebar.button("🔄 Refresh Pipeline Data", key="btn_sb_pipeline_refresh", use_container_width=True, help="Fetch fresh records from Google Sheets"):
     ok, msg = perform_pipeline_refresh(storage_adapter, log_action)
@@ -773,17 +777,6 @@ if st.sidebar.button("🔄 Refresh Pipeline Data", key="btn_sb_pipeline_refresh"
         st.rerun()
     else:
         st.sidebar.error(msg)
-
-curr_cli_logging = is_logging_enabled()
-cli_logging_toggle = st.sidebar.checkbox(
-    "CLI Action Logging",
-    value=curr_cli_logging,
-    help="Print background startup processes, network syncs, and actions to the terminal in real-time."
-)
-if cli_logging_toggle != curr_cli_logging:
-    PipelineConfigService.set_cli_logging(cli_logging_toggle)
-    set_logging_enabled(cli_logging_toggle)
-    st.toast(f"CLI Logging {'enabled' if cli_logging_toggle else 'disabled'}")
 
 if st.sidebar.button("⚙️ Pipeline Settings", key="btn_sb_pipeline_settings", use_container_width=True, help="Manage guardrails, sources, priorities, and Job Signals"):
     st.session_state["in_settings_view"] = True
@@ -838,7 +831,7 @@ with st.sidebar.expander(conn_expander_label, expanded=not all_connections_healt
                     st.error(f"OAuth error: {oa_err}. Please run 'python -m job_pipeline.setup_oauth' in terminal.")
 
 # 5. Sidebar Footer: Configured Instance Name & App Version
-st.sidebar.markdown("---")
+#st.sidebar.markdown("---")
 st.sidebar.caption(f"**{instance_cfg.display_name}** · v{APP_VERSION}")
 
 
@@ -1023,6 +1016,32 @@ if st.session_state.get("in_settings_view", False):
         if demo_mode:
             st.caption("Demo mode evaluates Direct Match and Regex rules. Concept rules require a connected LLM.")
         render_telemetry_warnings_manager(key_prefix="settings_view")
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    st.markdown("##### 🛠️ Environment & System Controls")
+    col_demo, col_log = st.columns(2)
+    with col_demo:
+        demo_mode_toggle = st.checkbox(
+            "Zero-Cost Demo Mode",
+            value=demo_mode,
+            key="demo_mode_cb",
+            help="Uses mock fixtures and bypasses live API charges."
+        )
+        if demo_mode_toggle != demo_mode:
+            storage_adapter, drive_adapter, resume_repo, llm_adapter, twilio_adapter, gmail_adapter = get_adapters(demo_mode_toggle)
+            st.rerun()
+    with col_log:
+        curr_cli_logging = is_logging_enabled()
+        cli_logging_toggle = st.checkbox(
+            "CLI Action Logging",
+            value=curr_cli_logging,
+            key="cli_logging_cb",
+            help="Print background startup processes, network syncs, and actions to the terminal in real-time."
+        )
+        if cli_logging_toggle != curr_cli_logging:
+            PipelineConfigService.set_cli_logging(cli_logging_toggle)
+            set_logging_enabled(cli_logging_toggle)
+            st.toast(f"CLI Logging {'enabled' if cli_logging_toggle else 'disabled'}")
 
     st.stop()
 

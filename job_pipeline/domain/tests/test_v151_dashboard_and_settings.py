@@ -341,28 +341,28 @@ class TestV151DashboardAndSettings(unittest.TestCase):
             salary_submitted="",
             target_pay="Undisclosed / Set per role"
         )
-        self.assertEqual(res1, ":orange[Salary Unspecified]")
+        self.assertEqual(res1, ':color[Salary Unspecified]{foreground="#FCD34D"}')
 
         # Hourly undisclosed placeholder
         res2 = PipelineKPIService.format_compensation_display(
             salary_submitted="N/A",
             target_pay="Hourly (Rate undisclosed)"
         )
-        self.assertEqual(res2, ":orange[Salary Unspecified]")
+        self.assertEqual(res2, ':color[Salary Unspecified]{foreground="#FCD34D"}')
 
         # Both empty/none
         res3 = PipelineKPIService.format_compensation_display(
             salary_submitted=None,
             target_pay=None
         )
-        self.assertEqual(res3, ":orange[Salary Unspecified]")
+        self.assertEqual(res3, ':color[Salary Unspecified]{foreground="#FCD34D"}')
 
         # Explicit 'Not Specified'
         res4 = PipelineKPIService.format_compensation_display(
             salary_submitted="Not Specified",
             target_pay="Not calculated"
         )
-        self.assertEqual(res4, ":orange[Salary Unspecified]")
+        self.assertEqual(res4, ':color[Salary Unspecified]{foreground="#FCD34D"}')
 
 
 if __name__ == "__main__":

@@ -1748,7 +1748,7 @@ class PipelineKPIService:
         Display precedence:
         1. Salary Submitted: When an actual salary response was recorded ($X) -> 'Salary Submitted: :green[\$135,000]'
         2. Suggested Range: Otherwise when a valid calculated range exists ($X–$Y) -> 'Suggested Range: :green[\$115,000–\$125,000]'
-        3. Salary Unspecified: When neither value exists -> ':orange[Salary Unspecified]'
+        3. Salary Unspecified: When neither value exists -> ':color[Salary Unspecified]{foreground="#FCD34D"}'
         """
         def format_currency_amount(val_str: str) -> str:
             val_str = str(val_str).strip()
@@ -1815,7 +1815,7 @@ class PipelineKPIService:
                     return f"Suggested Range: :green[{escaped_base}]"
 
         # 3. Salary Unspecified: When neither value exists
-        return ":orange[Salary Unspecified]"
+        return ':color[Salary Unspecified]{foreground="#FCD34D"}'
 
     @classmethod
     def refresh_pipeline_data(cls, storage_adapter) -> Tuple[bool, str, Dict[str, Any]]:
