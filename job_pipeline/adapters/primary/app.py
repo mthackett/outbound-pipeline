@@ -175,6 +175,19 @@ st.markdown("""
         margin-bottom: 2px !important;
         line-height: 1.32;
     }
+    /* Ensure expander summary labels and math expressions maintain identical sans-serif typography */
+    div[data-testid="stExpander"] details summary span.katex {
+        font-family: inherit !important;
+        font-size: inherit !important;
+        line-height: inherit !important;
+        color: inherit !important;
+    }
+    div[data-testid="stExpander"] details summary span.katex * {
+        font-family: inherit !important;
+        font-size: inherit !important;
+        line-height: inherit !important;
+        color: inherit !important;
+    }
     .apply-kit-card {
         background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
         border: 1px solid #334155;
@@ -2730,8 +2743,8 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
 
         stat_col1, stat_col2, stat_col3, stat_col4, stat_col5, stat_col6 = st.columns(6)
         stat_col1.metric("Total Tracked", total_apps)
-        stat_col2.metric("Applications Submitted", applied_count)
-        stat_col3.metric("Active Opportunities", active_count)
+        stat_col2.metric("Apps Submitted", applied_count)
+        stat_col3.metric("Active", active_count)
         stat_col4.metric("Apps / Interest", apps_per_interest)
         stat_col5.metric("Apps / Interview", apps_per_interview)
         stat_col6.metric("Stale", stale_count)
@@ -2811,26 +2824,7 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
 
         t_crm_start = time.perf_counter()
 
-        # Multi-attribute Search & Filter Controls
-        col_search, col_inline_refresh = st.columns([11, 1])
-        with col_search:
-            search_query = st.text_input(
-                "🔍 Search Applications",
-                placeholder="Search company or role...",
-                autocomplete="off",
-                key="crm_search_input",
-                label_visibility="collapsed"
-            )
-        with col_inline_refresh:
-            if st.button("🔄", key="btn_inline_crm_refresh", help="Refresh Pipeline Data from Google Sheets", use_container_width=True):
-                ok, msg = perform_pipeline_refresh(storage_adapter, log_action)
-                if ok:
-                    st.session_state["crm_flash_message"] = msg
-                    st.rerun()
-                else:
-                    st.error(msg)
-
-        # Count active filters for header indicator
+        # Count active filters for button label
         active_filt_count = 0
         if st.session_state.get("crm_filter_arr", "All Types") != "All Types":
             active_filt_count += 1
@@ -2843,39 +2837,100 @@ if active_section in (SECTION_CRM, "📊 Pipeline Tracker & CRM"):
         if st.session_state.get("crm_filter_fresh", "All Freshness") != "All Freshness":
             active_filt_count += 1
 
-        filters_header = f"Filters ({active_filt_count})" if active_filt_count > 0 else "Filters"
-        with st.expander(f"🔽 {filters_header}", expanded=False):
-            col_arr_filt, col_cat_filt, col_pri_filt, col_src_filt, col_fresh_filt = st.columns(5)
-            with col_arr_filt:
-                arr_filter = st.selectbox(
-                    "Filter Type",
-                    ["All Types", "Employee", "Contract"],
-                    key="crm_filter_arr"
+        # Multi-attribute Search & Filter Controls Row: Search (~2/3), Filters (flexible), Sync (compact)
+        col_search, col_filt_btn, col_inline_refresh = st.columns([10, 4, 1])
+        with col_search:
+            search_query = st.text_input(
+                "🔍 Search Applications",
+                placeholder="Search company or role...",
+                autocomplete="off",
+                key="crm_search_input",
+                label_visibility="collapsed"
+            )
+        with col_filt_btn:
+            is_filt_open = st.session_state.get("crm_filters_open", False)
+            btn_filt_icon = "🔼" if is_filt_open else "🔽"
+            btn_filt_text = f"{btn_filt_icon} Filters ({active_filt_count})" if active_filt_count > 0 else f"{btn_filt_icon} Filters"
+            if st.button(btn_filt_text, key="btn_toggle_crm_filters", help="Toggle Search Filter Panel", use_container_width=True):
+                st.session_state["crm_filters_open"] = not is_filt_open
+                st.rerun()
+        with col_inline_refresh:
+            if st.button("🔄", key="btn_inline_crm_refresh", help="Refresh Pipeline Data from Google Sheets", use_container_width=True):
+                ok, msg = perform_pipeline_refresh(storage_adapter, log_action)
+                if ok:
+                    st.session_state["crm_flash_message"] = msg
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+        # Full-width Filter Panel immediately below search row when toggled open
+        if st.session_state.get("crm_filters_open", False):
+            with st.container():
+                st.markdown(
+                    "<div style='background: #0B1120; border: 1px solid #334155; border-radius: 8px; padding: 10px 14px 4px 14px; margin-top: 4px; margin-bottom: 8px;'>"
+                    "<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>"
+                    "<span style='font-size: 0.80rem; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.5px;'>Filter Opportunities</span>"
+                    "</div>",
+                    unsafe_allow_html=True
                 )
-            with col_cat_filt:
-                cat_filter = st.selectbox(
-                    "Filter Category",
-                    ["All Categories", "Target", "Stretch", "Opportunistic", "Practice", "Fallback", "Unassigned"],
-                    key="crm_filter_cat"
-                )
-            with col_pri_filt:
-                pri_filter = st.selectbox(
-                    "Filter Priority",
-                    ["All Priorities"] + list(available_priorities) + ["Unspecified"],
-                    key="crm_filter_pri"
-                )
-            with col_src_filt:
-                src_filter = st.selectbox(
-                    "Filter Source",
-                    ["All Sources"] + list(available_sources) + ["Unspecified"],
-                    key="crm_filter_src"
-                )
-            with col_fresh_filt:
-                fresh_filter = st.selectbox(
-                    "Filter Freshness",
-                    ["All Freshness", "Fresh Only (<28d)", "Stale Only (≥28d)"],
-                    key="crm_filter_fresh"
-                )
+                col_arr_filt, col_cat_filt, col_pri_filt, col_src_filt, col_fresh_filt = st.columns(5)
+                with col_arr_filt:
+                    arr_options = ["All Types", "Employee", "Contract"]
+                    curr_arr = st.session_state.get("crm_filter_arr", "All Types")
+                    arr_idx = arr_options.index(curr_arr) if curr_arr in arr_options else 0
+                    arr_filter = st.selectbox(
+                        "Filter Type",
+                        arr_options,
+                        index=arr_idx,
+                        key="crm_filter_arr"
+                    )
+                with col_cat_filt:
+                    cat_options = ["All Categories", "Target", "Stretch", "Opportunistic", "Practice", "Fallback", "Unassigned"]
+                    curr_cat = st.session_state.get("crm_filter_cat", "All Categories")
+                    cat_idx = cat_options.index(curr_cat) if curr_cat in cat_options else 0
+                    cat_filter = st.selectbox(
+                        "Filter Category",
+                        cat_options,
+                        index=cat_idx,
+                        key="crm_filter_cat"
+                    )
+                with col_pri_filt:
+                    pri_options = ["All Priorities"] + list(available_priorities) + ["Unspecified"]
+                    curr_pri = st.session_state.get("crm_filter_pri", "All Priorities")
+                    pri_idx = pri_options.index(curr_pri) if curr_pri in pri_options else 0
+                    pri_filter = st.selectbox(
+                        "Filter Priority",
+                        pri_options,
+                        index=pri_idx,
+                        key="crm_filter_pri"
+                    )
+                with col_src_filt:
+                    src_options = ["All Sources"] + list(available_sources) + ["Unspecified"]
+                    curr_src = st.session_state.get("crm_filter_src", "All Sources")
+                    src_idx = src_options.index(curr_src) if curr_src in src_options else 0
+                    src_filter = st.selectbox(
+                        "Filter Source",
+                        src_options,
+                        index=src_idx,
+                        key="crm_filter_src"
+                    )
+                with col_fresh_filt:
+                    fresh_options = ["All Freshness", "Fresh Only (<28d)", "Stale Only (≥28d)"]
+                    curr_fresh = st.session_state.get("crm_filter_fresh", "All Freshness")
+                    fresh_idx = fresh_options.index(curr_fresh) if curr_fresh in fresh_options else 0
+                    fresh_filter = st.selectbox(
+                        "Filter Freshness",
+                        fresh_options,
+                        index=fresh_idx,
+                        key="crm_filter_fresh"
+                    )
+                st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            arr_filter = st.session_state.get("crm_filter_arr", "All Types")
+            cat_filter = st.session_state.get("crm_filter_cat", "All Categories")
+            pri_filter = st.session_state.get("crm_filter_pri", "All Priorities")
+            src_filter = st.session_state.get("crm_filter_src", "All Sources")
+            fresh_filter = st.session_state.get("crm_filter_fresh", "All Freshness")
 
         # Track filter and search changes: entering new search or clearing search resets to page 1
         current_filters = (search_query.strip(), arr_filter, cat_filter, pri_filter, src_filter, fresh_filter)

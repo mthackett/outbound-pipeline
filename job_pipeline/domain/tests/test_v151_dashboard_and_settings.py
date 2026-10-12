@@ -295,21 +295,21 @@ class TestV151DashboardAndSettings(unittest.TestCase):
             salary_submitted="$135,000",
             target_pay="$115,000 - $125,000 (Target: $121,000 - $123,000)"
         )
-        self.assertEqual(res1, "Salary Submitted: :green[$135,000]")
+        self.assertEqual(res1, "Salary Submitted: :green[\\$135,000]")
 
         # Abbreviated k format is normalized with dollar sign and thousands separator
         res2 = PipelineKPIService.format_compensation_display(
             salary_submitted="135k",
             target_pay="$120,000 - $130,000"
         )
-        self.assertEqual(res2, "Salary Submitted: :green[$135,000]")
+        self.assertEqual(res2, "Salary Submitted: :green[\\$135,000]")
 
         # Range submitted
         res3 = PipelineKPIService.format_compensation_display(
             salary_submitted="$130k - $140k",
             target_pay=""
         )
-        self.assertEqual(res3, "Salary Submitted: :green[$130,000–$140,000]")
+        self.assertEqual(res3, "Salary Submitted: :green[\\$130,000–\\$140,000]")
 
     def test_compensation_display_suggested_range_precedence(self):
         """Precedence 2: When no salary submitted, valid calculated range displays with en-dash and green amounts."""
@@ -318,21 +318,21 @@ class TestV151DashboardAndSettings(unittest.TestCase):
             salary_submitted="",
             target_pay="115,000 - 125,000 (Target: 121,000 - 123,000)"
         )
-        self.assertEqual(res1, "Suggested Range: :green[$115,000–$125,000]")
+        self.assertEqual(res1, "Suggested Range: :green[\\$115,000–\\$125,000]")
 
         # Range already containing dollar signs
         res2 = PipelineKPIService.format_compensation_display(
             salary_submitted=None,
             target_pay="$110k–$120k"
         )
-        self.assertEqual(res2, "Suggested Range: :green[$110,000–$120,000]")
+        self.assertEqual(res2, "Suggested Range: :green[\\$110,000–\\$120,000]")
 
         # Hourly contract range
         res3 = PipelineKPIService.format_compensation_display(
             salary_submitted="None",
             target_pay="$75.00 – $80.00 / hr"
         )
-        self.assertEqual(res3, "Suggested Range: :green[$75–$80/hr]")
+        self.assertEqual(res3, "Suggested Range: :green[\\$75–\\$80/hr]")
 
     def test_compensation_display_salary_unspecified_fallback_and_placeholder_rejection(self):
         """Precedence 3: Unspecified when neither exists; placeholders are never shown as calculated ranges."""

@@ -1743,11 +1743,11 @@ class PipelineKPIService:
 
     @staticmethod
     def format_compensation_display(salary_submitted: Optional[str] = None, target_pay: Optional[str] = None) -> str:
-        """
+        r"""
         Standardizes compensation display for pipeline opportunity records.
         Display precedence:
-        1. Salary Submitted: When an actual salary response was recorded ($X) -> 'Salary Submitted: :green[$135,000]'
-        2. Suggested Range: Otherwise when a valid calculated range exists ($X–$Y) -> 'Suggested Range: :green[$115,000–$125,000]'
+        1. Salary Submitted: When an actual salary response was recorded ($X) -> 'Salary Submitted: :green[\$135,000]'
+        2. Suggested Range: Otherwise when a valid calculated range exists ($X–$Y) -> 'Suggested Range: :green[\$115,000–\$125,000]'
         3. Salary Unspecified: When neither value exists -> ':orange[Salary Unspecified]'
         """
         def format_currency_amount(val_str: str) -> str:
@@ -1755,13 +1755,14 @@ class PipelineKPIService:
             m_k = re.match(r"^\$?([0-9]+(?:\.[0-9]+)?)\s*[kK]$", val_str)
             if m_k:
                 amt = float(m_k.group(1)) * 1000
-                return f"${amt:,.0f}"
+                return f"\\${amt:,.0f}"
             clean = re.sub(r"[\$,]", "", val_str)
             try:
                 amt = float(clean)
-                return f"${amt:,.0f}"
+                return f"\\${amt:,.0f}"
             except ValueError:
-                return val_str if val_str.startswith("$") else f"${val_str}"
+                val_clean = val_str.lstrip("$")
+                return f"\\${val_clean}"
 
         # 1. Salary Submitted: When an actual salary response was recorded
         if salary_submitted:
@@ -1810,7 +1811,8 @@ class PipelineKPIService:
                     return f"Suggested Range: :green[{low}–{high}/hr]"
 
                 if re.search(r"\d", base_range):
-                    return f"Suggested Range: :green[{base_range}]"
+                    escaped_base = re.sub(r"(?<!\\)\$", r"\$", base_range)
+                    return f"Suggested Range: :green[{escaped_base}]"
 
         # 3. Salary Unspecified: When neither value exists
         return ":orange[Salary Unspecified]"
