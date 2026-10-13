@@ -272,6 +272,7 @@ CATEGORY_ICONS: Dict[str, str] = {
 }
 
 AUTHORITATIVE_PIPELINE_STAGES: List[str] = [
+    "New Lead",
     "Pending",
     "Processed",
     "Applied",
@@ -487,13 +488,15 @@ class FitEvaluation(BaseModel):
 
 class JobPosting(BaseModel):
     opportunity_id: str
-    company_name: str
-    job_title: str
-    title_family: str
-    raw_description: str
+    company_name: str = ""
+    job_title: str = ""
+    title_family: str = "revenue_operations"
+    raw_description: str = ""
     source_url: Optional[str] = None
     date_created: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
     status: str = "Pending"
+    opportunity_source: str = "Outbound"
+    contact_name: Optional[str] = None
     category: Optional[str] = None
     applied_via: Optional[str] = None
     priority: Optional[str] = None

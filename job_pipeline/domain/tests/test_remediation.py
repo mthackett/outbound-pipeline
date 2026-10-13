@@ -646,7 +646,8 @@ class TestRawJDPersistencePolicy(unittest.TestCase, _WorkspaceHelper):
             "Contract Duration", "Contract Value", "Staffing Agency",
             "Client Company", "Extension Possible", "FTE Conversion",
             "Salary Expectation", "Notes",
-            "Role Intelligence Status", "Role Intelligence Link", "Role Intelligence Generated At"
+            "Role Intelligence Status", "Role Intelligence Link", "Role Intelligence Generated At",
+            "Opportunity Source", "Contact Name"
         ]
         with patch.object(GoogleSheetsAdapter, "_init_connection"):
             adapter = GoogleSheetsAdapter(spreadsheet_id="mock_sheet_id")

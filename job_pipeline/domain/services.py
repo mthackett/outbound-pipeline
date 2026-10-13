@@ -2,7 +2,7 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union, Tuple
@@ -1150,12 +1150,19 @@ class PipelineSearchPaginationService:
         priority_filter: str = "All Priorities",
         source_filter: str = "All Sources",
         freshness_filter: str = "All Freshness",
-        stale_threshold_days: int = 28,
+        stale_threshold_days: int = 7,
         reference_date: Optional[datetime] = None,
-        application_categories: Optional[List[str]] = None
+        application_categories: Optional[List[str]] = None,
+        opportunity_source_filter: str = "All"
     ) -> List[Dict[str, Any]]:
         app_cats = application_categories or ["Target", "Stretch", "Opportunistic", "Practice", "Fallback"]
         filtered = list(opportunities)
+
+        if opportunity_source_filter and opportunity_source_filter not in ("All", "All Sources"):
+            filtered = [
+                o for o in filtered
+                if str(o.get("Opportunity Source") or o.get("opportunity_source") or "Outbound").strip().lower() == opportunity_source_filter.strip().lower()
+            ]
 
         if arrangement_filter and arrangement_filter != "All Types":
             filtered = [
@@ -1200,15 +1207,20 @@ class PipelineSearchPaginationService:
                 ]
 
         if freshness_filter and freshness_filter not in ("All Freshness", "All"):
+            eff_threshold = stale_threshold_days
+            m_thresh = re.search(r'(\d+)\s*d', str(freshness_filter))
+            if m_thresh and stale_threshold_days == 7:
+                eff_threshold = int(m_thresh.group(1))
+
             if "Stale" in freshness_filter:
                 filtered = [
                     o for o in filtered
-                    if PipelineKPIService.is_stale(o, threshold_days=stale_threshold_days, reference_date=reference_date)
+                    if PipelineKPIService.is_stale(o, threshold_days=eff_threshold, reference_date=reference_date)
                 ]
             elif "Fresh" in freshness_filter:
                 filtered = [
                     o for o in filtered
-                    if not PipelineKPIService.is_stale(o, threshold_days=stale_threshold_days, reference_date=reference_date)
+                    if not PipelineKPIService.is_stale(o, threshold_days=eff_threshold, reference_date=reference_date)
                 ]
 
         if search_query and search_query.strip():
@@ -1217,6 +1229,8 @@ class PipelineSearchPaginationService:
                 o for o in filtered
                 if sq in str(o.get("Company Name", "")).lower()
                 or sq in str(o.get("Job Title", "")).lower()
+                or sq in str(o.get("Contact Name", "")).lower()
+                or sq in str(o.get("contact_name", "")).lower()
                 or sq in str(o.get("Status", "")).lower()
                 or sq in str(o.get("Notes", "")).lower()
                 or sq in str(o.get("Category", "")).lower()
@@ -1388,9 +1402,13 @@ class PipelineKPIService:
         Counts applications that were actually submitted, including those subsequently
         progressed, rejected, or withdrawn. Checks stage history first, then current status.
         Does not assume unverified terminal records outside submission stages were submitted.
+        For Inbound opportunities: only counted as submitted if explicitly marked with an 'Applied' stage.
         """
+        source = str(opp.get("Opportunity Source") or opp.get("opportunity_source") or "Outbound").strip().capitalize()
         curr = str(opp.get("Status") or opp.get("status") or "").strip()
         hist = cls.parse_stage_history(opp)
+        if source == "Inbound":
+            return curr == "Applied" or "Applied" in hist
         if any(s in cls.SUBMITTED_STAGES for s in hist):
             return True
         if curr in cls.SUBMITTED_STAGES:
@@ -1403,25 +1421,50 @@ class PipelineKPIService:
         Determines whether a submitted application reached positive employer interest
         (Employer Interest, Recruiter Screen, Hiring Manager, Technical Screen, Final Round, Offer).
         Counted once per application regardless of number of qualifying stages.
+        For Outbound: requires submission evidence.
+        For Inbound: qualifies directly without requiring submission.
         """
+        source = str(opp.get("Opportunity Source") or opp.get("opportunity_source") or "Outbound").strip().capitalize()
+        curr = str(opp.get("Status") or opp.get("status") or "").strip()
+        hist = cls.parse_stage_history(opp)
+        if source == "Inbound":
+            if curr in cls.POSITIVE_INTEREST_STAGES:
+                return True
+            return any(s in cls.POSITIVE_INTEREST_STAGES for s in hist)
         if not cls.is_submitted(opp):
             return False
-        curr = str(opp.get("Status") or opp.get("status") or "").strip()
         if curr in cls.POSITIVE_INTEREST_STAGES:
             return True
-        hist = cls.parse_stage_history(opp)
         return any(s in cls.POSITIVE_INTEREST_STAGES for s in hist)
+
+    @classmethod
+    def has_inbound_interviewed(cls, opp: Dict[str, Any]) -> bool:
+        """
+        Determines whether an inbound lead reached an interview stage
+        (Recruiter Screen, Hiring Manager, Technical Screen, or Final Round)
+        without requiring an application submission step.
+        """
+        curr = str(opp.get("Status") or opp.get("status") or "").strip()
+        if curr in cls.INTERVIEW_STAGES:
+            return True
+        hist = cls.parse_stage_history(opp)
+        return any(s in cls.INTERVIEW_STAGES for s in hist)
 
     @classmethod
     def has_interviewed(cls, opp: Dict[str, Any]) -> bool:
         """
-        Determines whether a submitted application reached an interview stage
+        Determines whether an application reached an interview stage
         (Recruiter Screen, Hiring Manager, Technical Screen, or Final Round).
         Counted once per application regardless of number of interview rounds.
         Employer Interest explicitly does NOT qualify as an interview.
         Offer alone does NOT qualify unless historical evidence establishes that
         the application reached an interview stage.
+        For Outbound: requires is_submitted(opp).
+        For Inbound: delegates to has_inbound_interviewed(opp).
         """
+        source = str(opp.get("Opportunity Source") or opp.get("opportunity_source") or "Outbound").strip().capitalize()
+        if source == "Inbound":
+            return cls.has_inbound_interviewed(opp)
         if not cls.is_submitted(opp):
             return False
         curr = str(opp.get("Status") or opp.get("status") or "").strip()
@@ -1518,21 +1561,26 @@ class PipelineKPIService:
     def is_stale(
         cls,
         opp: Dict[str, Any],
-        threshold_days: int = 28,
+        threshold_days: int = 7,
         reference_date: Optional[datetime] = None
     ) -> bool:
         """
-        Derived freshness indicator for submitted, nonterminal applications.
-        Marked Stale when 28 or more days have elapsed since its last meaningful activity.
+        Derived freshness indicator for active, nonterminal applications and leads.
+        Marked Stale when threshold_days or more have elapsed since its last meaningful activity.
         Stale does NOT replace current stage, and does NOT remove an application from Active Opportunities.
         Terminal records (Declined to Apply, Application Rejected, Rejected, Withdrawn, Archived) are excluded.
         Non-substantive edits (refreshes, un-timestamped notes) do not reset freshness.
+        Outbound requires application submission; Inbound requires nonterminal status.
+        Default threshold: 7 days (configurable).
         """
-        if not cls.is_submitted(opp):
-            return False
         curr = str(opp.get("Status") or opp.get("status") or "").strip()
         if curr in cls.TERMINAL_STAGES:
             return False
+
+        source = str(opp.get("Opportunity Source") or opp.get("opportunity_source") or "Outbound").strip().capitalize()
+        if source != "Inbound":
+            if not cls.is_submitted(opp):
+                return False
 
         last_dt, _ = cls.get_last_meaningful_activity_date(opp)
         if not last_dt:
@@ -1546,27 +1594,18 @@ class PipelineKPIService:
     def get_staleness_info(
         cls,
         opp: Dict[str, Any],
-        threshold_days: int = 28,
+        threshold_days: int = 7,
         reference_date: Optional[datetime] = None
     ) -> Dict[str, Any]:
         """
         Returns structured staleness information:
-        - is_eligible: submitted and nonterminal
+        - is_eligible: nonterminal (and submitted if outbound)
         - is_stale: bool
         - days_elapsed: float or None
         - last_transition_date: datetime or None
         - last_activity_date: datetime or None
         - source: source identifier string
         """
-        if not cls.is_submitted(opp):
-            return {
-                "is_eligible": False,
-                "is_stale": False,
-                "days_elapsed": None,
-                "last_transition_date": None,
-                "last_activity_date": None,
-                "source": "not_submitted"
-            }
         curr = str(opp.get("Status") or opp.get("status") or "").strip()
         if curr in cls.TERMINAL_STAGES:
             return {
@@ -1577,6 +1616,18 @@ class PipelineKPIService:
                 "last_activity_date": None,
                 "source": "terminal"
             }
+
+        source = str(opp.get("Opportunity Source") or opp.get("opportunity_source") or "Outbound").strip().capitalize()
+        if source != "Inbound":
+            if not cls.is_submitted(opp):
+                return {
+                    "is_eligible": False,
+                    "is_stale": False,
+                    "days_elapsed": None,
+                    "last_transition_date": None,
+                    "last_activity_date": None,
+                    "source": "not_submitted"
+                }
 
         last_dt, src = cls.get_last_meaningful_activity_date(opp)
         if not last_dt:
@@ -1643,7 +1694,7 @@ class PipelineKPIService:
     def calculate_kpis(
         cls,
         opportunities: List[Dict[str, Any]],
-        stale_threshold_days: int = 28,
+        stale_threshold_days: int = 7,
         reference_date: Optional[datetime] = None
     ) -> Dict[str, Any]:
         total_tracked = len(opportunities)
@@ -1656,8 +1707,17 @@ class PipelineKPIService:
             1 for o in opportunities
             if cls.is_stale(o, threshold_days=stale_threshold_days, reference_date=reference_date)
         )
-        apps_per_interview = cls.format_ratio(submitted_count, interviewed_count)
-        apps_per_interest = cls.format_ratio(submitted_count, positive_interest_count)
+
+        # Outbound-specific conversions to preserve metric integrity
+        outbound_opps = [
+            o for o in opportunities
+            if str(o.get("Opportunity Source") or o.get("opportunity_source") or "Outbound").strip().capitalize() != "Inbound"
+        ]
+        outbound_submitted = len([o for o in outbound_opps if cls.is_submitted(o)])
+        outbound_interviewed = sum(1 for o in outbound_opps if cls.has_interviewed(o))
+        outbound_interest = sum(1 for o in outbound_opps if cls.has_positive_interest(o))
+        apps_per_interview = cls.format_ratio(outbound_submitted, outbound_interviewed)
+        apps_per_interest = cls.format_ratio(outbound_submitted, outbound_interest)
 
         # Submitted applications breakdown by strategy (sum equals submitted_count)
         submitted_categories = {
@@ -1739,6 +1799,269 @@ class PipelineKPIService:
             "submitted_categories": submitted_categories,
             "variant_rows": variant_rows,
             "totals_row": totals_row
+        }
+
+    @classmethod
+    def calculate_analytics_dashboard_metrics(
+        cls,
+        opportunities: List[Dict[str, Any]],
+        stale_threshold_days: int = 7,
+        source_filter: str = "All",
+        date_range_filter: str = "All Time",
+        reference_date: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """
+        Calculates comprehensive metrics for the dedicated Analytics Dashboard:
+        - Overview: Tracked, Outbound, Inbound, Submitted, Interviews, Active, Stale
+        - Source Performance: Separate denominators for Outbound vs Inbound
+        - Funnel: Conversion stages
+        - Opportunity Health: Staleness analysis with configurable threshold
+        - Application Strategy: Strategy performance
+        - Resume Performance: Variants breakdown
+        - Activity Trends: Monthly activity progression
+        """
+        ref = reference_date or datetime.now()
+
+        # 1. Date-range filter
+        filtered_by_date = list(opportunities)
+        if date_range_filter and date_range_filter != "All Time":
+            cutoff = None
+            if date_range_filter == "Last 7 Days":
+                cutoff = ref - timedelta(days=7)
+            elif date_range_filter == "Last 30 Days":
+                cutoff = ref - timedelta(days=30)
+            elif date_range_filter == "Last 90 Days":
+                cutoff = ref - timedelta(days=90)
+
+            if cutoff:
+                date_filtered = []
+                for o in filtered_by_date:
+                    act_dt, _ = cls.get_last_meaningful_activity_date(o)
+                    if act_dt and act_dt >= cutoff:
+                        date_filtered.append(o)
+                filtered_by_date = date_filtered
+
+        # 2. Source filter
+        filtered_opps = list(filtered_by_date)
+        if source_filter and source_filter not in ("All", "All Sources"):
+            norm_sf = source_filter.strip().capitalize()
+            filtered_opps = [
+                o for o in filtered_opps
+                if str(o.get("Opportunity Source") or o.get("opportunity_source") or "Outbound").strip().capitalize() == norm_sf
+            ]
+
+        # 3. Overall numbers on filtered dataset
+        total_tracked = len(filtered_opps)
+        outbound_opps = [
+            o for o in filtered_opps
+            if str(o.get("Opportunity Source") or o.get("opportunity_source") or "Outbound").strip().capitalize() != "Inbound"
+        ]
+        inbound_opps = [
+            o for o in filtered_opps
+            if str(o.get("Opportunity Source") or o.get("opportunity_source") or "Outbound").strip().capitalize() == "Inbound"
+        ]
+
+        total_outbound = len(outbound_opps)
+        total_inbound = len(inbound_opps)
+        submitted_outbound = sum(1 for o in outbound_opps if cls.is_submitted(o))
+        interviews_outbound = sum(1 for o in outbound_opps if cls.has_interviewed(o))
+        interest_outbound = sum(1 for o in outbound_opps if cls.has_positive_interest(o))
+        active_outbound = sum(1 for o in outbound_opps if cls.is_active(o))
+        stale_outbound = sum(1 for o in outbound_opps if cls.is_stale(o, threshold_days=stale_threshold_days, reference_date=ref))
+
+        interviews_inbound = sum(1 for o in inbound_opps if cls.has_interviewed(o))
+        interest_inbound = sum(1 for o in inbound_opps if cls.has_positive_interest(o))
+        active_inbound = sum(1 for o in inbound_opps if cls.is_active(o))
+        stale_inbound = sum(1 for o in inbound_opps if cls.is_stale(o, threshold_days=stale_threshold_days, reference_date=ref))
+
+        interviews_total = interviews_outbound + interviews_inbound
+        active_total = active_outbound + active_inbound
+        stale_total = stale_outbound + stale_inbound
+
+        # 4. Source performance calculations
+        outbound_conv_pct = round((interviews_outbound / submitted_outbound * 100.0), 1) if submitted_outbound > 0 else 0.0
+        outbound_ratio_str = cls.format_ratio(submitted_outbound, interviews_outbound)
+
+        inbound_conv_pct = round((interviews_inbound / total_inbound * 100.0), 1) if total_inbound > 0 else 0.0
+        inbound_ratio_str = cls.format_ratio(total_inbound, interviews_inbound)
+
+        # 5. Opportunity health details
+        stale_records = []
+        days_since_activity_list = []
+        stale_by_stage_source: Dict[str, Dict[str, int]] = {}
+
+        for o in filtered_opps:
+            curr_stg = str(o.get("Status") or o.get("status") or "").strip()
+            src = str(o.get("Opportunity Source") or o.get("opportunity_source") or "Outbound").strip().capitalize()
+            stale_info = cls.get_staleness_info(o, threshold_days=stale_threshold_days, reference_date=ref)
+
+            if stale_info.get("days_elapsed") is not None and curr_stg not in cls.TERMINAL_STAGES:
+                days_since_activity_list.append(stale_info["days_elapsed"])
+
+            if stale_info.get("is_stale"):
+                if curr_stg not in stale_by_stage_source:
+                    stale_by_stage_source[curr_stg] = {"Outbound": 0, "Inbound": 0, "Total": 0}
+                if src == "Inbound":
+                    stale_by_stage_source[curr_stg]["Inbound"] += 1
+                else:
+                    stale_by_stage_source[curr_stg]["Outbound"] += 1
+                stale_by_stage_source[curr_stg]["Total"] += 1
+
+                c_name = str(o.get("Company Name") or o.get("company_name") or "").strip()
+                t_name = str(o.get("Job Title") or o.get("job_title") or "").strip()
+                ct_name = str(o.get("Contact Name") or o.get("contact_name") or "").strip()
+                if c_name and t_name:
+                    disp = f"{c_name} — {t_name}"
+                elif c_name:
+                    disp = f"{c_name}" + (f" ({ct_name})" if ct_name else "")
+                elif ct_name:
+                    disp = f"{ct_name} (Inbound Lead)"
+                else:
+                    disp = "Untitled Opportunity"
+
+                stale_records.append({
+                    "opportunity_id": o.get("Opportunity ID") or o.get("opportunity_id") or "",
+                    "display_name": disp,
+                    "company_name": c_name,
+                    "contact_name": ct_name,
+                    "job_title": t_name,
+                    "status": curr_stg,
+                    "source": src,
+                    "days_elapsed": round(stale_info.get("days_elapsed") or 0.0, 1),
+                    "last_activity_date": stale_info.get("last_activity_date"),
+                    "last_activity_source": stale_info.get("source") or ""
+                })
+
+        avg_days_since_activity = (
+            round(sum(days_since_activity_list) / len(days_since_activity_list), 1)
+            if days_since_activity_list else None
+        )
+
+        # 6. Strategy breakdown (for submitted outbound)
+        strategy_stats = {
+            "Target": {"submitted": 0, "interviewed": 0, "active": 0},
+            "Stretch": {"submitted": 0, "interviewed": 0, "active": 0},
+            "Opportunistic": {"submitted": 0, "interviewed": 0, "active": 0},
+            "Practice": {"submitted": 0, "interviewed": 0, "active": 0},
+            "Fallback": {"submitted": 0, "interviewed": 0, "active": 0},
+            "Unassigned": {"submitted": 0, "interviewed": 0, "active": 0}
+        }
+        for o in outbound_opps:
+            if cls.is_submitted(o):
+                cat = str(o.get("Category") or o.get("category") or "").strip()
+                key = cat if cat in strategy_stats and cat != "Unassigned" else "Unassigned"
+                strategy_stats[key]["submitted"] += 1
+                if cls.has_interviewed(o):
+                    strategy_stats[key]["interviewed"] += 1
+                if cls.is_active(o):
+                    strategy_stats[key]["active"] += 1
+
+        strategy_rows = []
+        for cat, s_data in strategy_stats.items():
+            sub = s_data["submitted"]
+            intv = s_data["interviewed"]
+            act = s_data["active"]
+            ratio = cls.format_ratio(sub, intv)
+            strategy_rows.append({
+                "category": cat,
+                "submitted": sub,
+                "interviewed": intv,
+                "active": act,
+                "conversion_ratio": ratio
+            })
+
+        # 7. Resume variant breakdown
+        kpi_res = cls.calculate_kpis(filtered_opps, stale_threshold_days=stale_threshold_days, reference_date=ref)
+        variant_rows = kpi_res.get("variant_rows", [])
+
+        # 8. Activity trends by month
+        monthly_trends: Dict[str, Dict[str, int]] = {}
+        for o in filtered_opps:
+            act_dt, _ = cls.get_last_meaningful_activity_date(o)
+            if act_dt:
+                m_key = act_dt.strftime("%Y-%m")
+                if m_key not in monthly_trends:
+                    monthly_trends[m_key] = {"outbound_applied": 0, "interviews": 0, "inbound_leads": 0}
+                src = str(o.get("Opportunity Source") or o.get("opportunity_source") or "Outbound").strip().capitalize()
+                if src == "Inbound":
+                    monthly_trends[m_key]["inbound_leads"] += 1
+                else:
+                    if cls.is_submitted(o):
+                        monthly_trends[m_key]["outbound_applied"] += 1
+                if cls.has_interviewed(o):
+                    monthly_trends[m_key]["interviews"] += 1
+
+        trend_rows = [
+            {"month": m, **data}
+            for m, data in sorted(monthly_trends.items())
+        ]
+
+        return {
+            "overview": {
+                "total_tracked": total_tracked,
+                "total_outbound": total_outbound,
+                "total_inbound": total_inbound,
+                "applications_submitted": submitted_outbound,
+                "interviews_total": interviews_total,
+                "active_total": active_total,
+                "stale_total": stale_total,
+            },
+            "source_performance": {
+                "outbound": {
+                    "tracked": total_outbound,
+                    "submitted": submitted_outbound,
+                    "interviewed": interviews_outbound,
+                    "active": active_outbound,
+                    "stale": stale_outbound,
+                    "conversion_pct": outbound_conv_pct,
+                    "ratio": outbound_ratio_str,
+                },
+                "inbound": {
+                    "tracked": total_inbound,
+                    "interviewed": interviews_inbound,
+                    "active": active_inbound,
+                    "stale": stale_inbound,
+                    "conversion_pct": inbound_conv_pct,
+                    "ratio": inbound_ratio_str,
+                },
+                "combined": {
+                    "tracked": total_tracked,
+                    "interviews": interviews_total,
+                }
+            },
+            "funnel": {
+                "outbound": {
+                    "tracked": total_outbound,
+                    "submitted": submitted_outbound,
+                    "interest": interest_outbound,
+                    "interviewed": interviews_outbound,
+                    "app_to_interest_ratio": cls.format_ratio(submitted_outbound, interest_outbound),
+                    "app_to_interview_ratio": outbound_ratio_str,
+                },
+                "inbound": {
+                    "tracked": total_inbound,
+                    "interviewed": interviews_inbound,
+                    "active": active_inbound,
+                    "opp_to_interview_ratio": inbound_ratio_str,
+                }
+            },
+            "opportunity_health": {
+                "stale_threshold_days": stale_threshold_days,
+                "stale_total": stale_total,
+                "avg_days_since_activity": avg_days_since_activity,
+                "stale_by_stage_source": stale_by_stage_source,
+                "stale_records": stale_records,
+            },
+            "strategy": {
+                "rows": strategy_rows
+            },
+            "resume_performance": {
+                "variant_rows": variant_rows,
+                "totals_row": kpi_res.get("totals_row", {})
+            },
+            "trends": {
+                "rows": trend_rows
+            }
         }
 
     @staticmethod
@@ -1837,5 +2160,35 @@ class PipelineKPIService:
             }
         except Exception as err:
             return False, f"Could not refresh pipeline data from Google Sheets: {err}", {}
+
+    @classmethod
+    def has_job_signal_flags(cls, opp: Any) -> bool:
+        """
+        Determines whether an opportunity has one or more Job Signal flags.
+        Reads from persisted 'Job Signals' JSON, gracefully handling missing,
+        empty, or malformed data. Does not trigger on warnings or benefits.
+        """
+        if not opp:
+            return False
+        if isinstance(opp, dict):
+            raw_signals = opp.get("Job Signals") or opp.get("job_signals")
+            legacy_note = opp.get("Fit Warning") or opp.get("fit_warning") or ""
+            telemetry_flags = opp.get("telemetry_flags")
+        else:
+            raw_signals = getattr(opp, "job_signals", None)
+            legacy_note = getattr(opp, "fit_warning", "")
+            telemetry_flags = getattr(opp, "telemetry_flags", None)
+
+        try:
+            flags, _, _ = TelemetryService.load_display_findings(raw_signals, legacy_note)
+            if flags and len(flags) > 0:
+                return True
+        except Exception:
+            pass
+
+        if telemetry_flags and isinstance(telemetry_flags, list) and len(telemetry_flags) > 0:
+            return True
+
+        return False
 
 

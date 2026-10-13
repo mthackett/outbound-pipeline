@@ -102,6 +102,8 @@ class GoogleSheetsAdapter(JobStoragePort):
                         title_family=str(rec.get("Title Family", "revenue_operations")).strip(),
                         raw_description=raw_jd,
                         source_url=str(rec.get("Source URL", "")).strip() or None,
+                        opportunity_source=str(rec.get("Opportunity Source", "")).strip() or "Outbound",
+                        contact_name=str(rec.get("Contact Name", "")).strip() or None,
                         status=status or "Pending",
                         row_index=idx
                     ))
@@ -111,7 +113,7 @@ class GoogleSheetsAdapter(JobStoragePort):
             print(f"ERROR: Failed to fetch pending jobs from Google Sheets: {e}")
             return []
 
-    def save_opportunity(self, job: JobPosting, fit_eval: FitEvaluation) -> bool:
+    def save_opportunity(self, job: JobPosting, fit_eval: Optional[FitEvaluation] = None) -> bool:
         if not self.is_connected or not job.opportunity_id.strip():
             return False
 
@@ -122,6 +124,7 @@ class GoogleSheetsAdapter(JobStoragePort):
             # Ensure required columns exist
             required_cols = [
                 "Opportunity ID", "Company Name", "Job Title", "Title Family", "Status",
+                "Opportunity Source", "Contact Name",
                 "Date Created", "Job Description", "Raw JD Link", "Last Modified",
                 "Tokens", "Fit Warning", "Job Signals", "Selected Resume",
                 "Target Pay Range", "Drive Folder Link", "Screening Doc Link", "Screening QA Count",
@@ -166,6 +169,14 @@ class GoogleSheetsAdapter(JobStoragePort):
             if is_new:
                 target_row_idx = len(records) + 2
 
+            if fit_eval is None:
+                fit_eval = getattr(job, "fit_evaluation", None) or FitEvaluation(
+                    status=job.status or "New Lead",
+                    is_qualified=True,
+                    reasoning="",
+                    pay_bounds=TargetPayBounds(display_range=job.salary_expectation or "Not specified")
+                )
+
             cell_updates = []
 
             def queue(header, val):
@@ -176,6 +187,9 @@ class GoogleSheetsAdapter(JobStoragePort):
             queue("Company Name", job.company_name)
             queue("Job Title", job.job_title)
             queue("Title Family", job.title_family)
+            queue("Opportunity Source", getattr(job, "opportunity_source", None) or existing.get("Opportunity Source") or "Outbound")
+            contact_val = getattr(job, "contact_name", None) or existing.get("Contact Name") or ""
+            queue("Contact Name", contact_val)
             queue("Date Created", existing.get("Date Created") or job.date_created)
             queue("Job Description", "")
             raw_jd_link = job.drive_jd_link or existing.get("Raw JD Link")
@@ -236,7 +250,10 @@ class GoogleSheetsAdapter(JobStoragePort):
             if ri_gen_at:
                 queue("Role Intelligence Generated At", ri_gen_at)
 
-            final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
+            if job.status and job.status not in ("Pending", "Processed"):
+                final_status = job.status
+            else:
+                final_status = "Processed" if fit_eval.is_qualified else fit_eval.status
             # Retrying persistence must not reset a later CRM stage/history.
             queue("Status", existing.get("Status") if existing.get("Status") not in (None, "", "Pending") else final_status)
             if job.category:
@@ -426,7 +443,9 @@ class GoogleSheetsAdapter(JobStoragePort):
         salary_expectation: Optional[str] = None,
         role_intelligence_status: Optional[str] = None,
         role_intelligence_link: Optional[str] = None,
-        role_intelligence_generated_at: Optional[str] = None
+        role_intelligence_generated_at: Optional[str] = None,
+        opportunity_source: Optional[str] = None,
+        contact_name: Optional[str] = None
     ) -> bool:
         if not self.is_connected:
             return False
@@ -438,6 +457,7 @@ class GoogleSheetsAdapter(JobStoragePort):
 
             # Ensure all needed columns exist in header
             needed_cols = [
+                "Opportunity Source", "Contact Name",
                 "Stage History", "Category", "Applied Via", "Priority",
                 "Employment Arrangement", "Worker Classification", "Pay Basis",
                 "Contract Duration", "Contract Value", "Staffing Agency",
@@ -459,6 +479,8 @@ class GoogleSheetsAdapter(JobStoragePort):
                 self._headers_cache = headers
 
             opp_id_col = headers.index("Opportunity ID") + 1 if "Opportunity ID" in headers else 10
+            opp_src_col = headers.index("Opportunity Source") + 1 if "Opportunity Source" in headers else None
+            contact_col = headers.index("Contact Name") + 1 if "Contact Name" in headers else None
             status_col = headers.index("Status") + 1 if "Status" in headers else 7
             notes_col = headers.index("Notes") + 1 if "Notes" in headers else None
             stage_hist_col = headers.index("Stage History") + 1 if "Stage History" in headers else None
@@ -539,6 +561,10 @@ class GoogleSheetsAdapter(JobStoragePort):
                     cell_updates.append(gspread.Cell(row=idx, col=ri_link_col, value=role_intelligence_link))
                 if role_intelligence_generated_at is not None and ri_gen_col:
                     cell_updates.append(gspread.Cell(row=idx, col=ri_gen_col, value=role_intelligence_generated_at))
+                if opportunity_source is not None and opp_src_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=opp_src_col, value=opportunity_source))
+                if contact_name is not None and contact_col:
+                    cell_updates.append(gspread.Cell(row=idx, col=contact_col, value=contact_name))
 
                 ingest_ws.update_cells(cell_updates)
                 if self._cached_opportunities is not None:
@@ -549,6 +575,12 @@ class GoogleSheetsAdapter(JobStoragePort):
                                 item["Company Name"] = company_name
                             if job_title is not None:
                                 item["Job Title"] = job_title
+                            if opportunity_source is not None:
+                                item["Opportunity Source"] = opportunity_source
+                                item["opportunity_source"] = opportunity_source
+                            if contact_name is not None:
+                                item["Contact Name"] = contact_name
+                                item["contact_name"] = contact_name
                             if target_pay_range is not None:
                                 item["Target Pay Range"] = target_pay_range
                             if source_url is not None:
@@ -770,6 +802,12 @@ class GoogleSheetsAdapter(JobStoragePort):
                         parsed_sh = []
                 r["stage_history"] = parsed_sh
                 r["Stage History"] = parsed_sh
+                opp_src = str(r.get("Opportunity Source", "")).strip() or "Outbound"
+                r["Opportunity Source"] = opp_src
+                r["opportunity_source"] = opp_src
+                contact_nm = str(r.get("Contact Name", "")).strip()
+                r["Contact Name"] = contact_nm
+                r["contact_name"] = contact_nm
             self._cached_opportunities = records
             self._opportunities_cache_time = now
             log_sheets(f"Loaded {len(records)} opportunities from Google Sheets.")

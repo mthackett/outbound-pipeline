@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional, Literal, Tuple
 from job_pipeline.domain.models import RoleIntelligenceReport
 from job_pipeline.ports.llm_port import LLMStrategyPort
 from job_pipeline.role_intelligence_runner import RoleIntelligenceRunner
+from job_pipeline.logger import log_telemetry
 
 
 class JobRequirementsSchema(BaseModel):
@@ -222,6 +223,11 @@ class OpenAIEngineAdapter(LLMStrategyPort):
         cached_payload = TelemetryService.get_cached_extraction(cache_key)
         if cached_payload:
             self.last_telemetry_tokens = 0
+            reqs = getattr(cached_payload, "requirements", None)
+            c_flags = getattr(reqs, "telemetry_flags", []) if reqs else []
+            c_warns = getattr(reqs, "telemetry_warnings", []) if reqs else []
+            c_bens = getattr(reqs, "telemetry_benefits", []) if reqs else []
+            log_telemetry(f"Completed: {len(c_flags)} flags, {len(c_warns)} warnings, {len(c_bens)} benefits")
             return cached_payload
 
         # 3. Offline fallback if no API key
@@ -254,6 +260,7 @@ class OpenAIEngineAdapter(LLMStrategyPort):
                 )
             )
             TelemetryService.set_cached_extraction(cache_key, payload)
+            log_telemetry(f"Completed: {len(offline_flags)} flags, {len(offline_warnings)} warnings, {len(offline_benefits)} benefits")
             return payload
 
         # 4. Online LLM extraction with semantic rules (or suppressed if pre-evaluated)
@@ -316,6 +323,7 @@ class OpenAIEngineAdapter(LLMStrategyPort):
             parsed.requirements.telemetry_benefits = [f.to_display_string() for f in benefits]
 
         TelemetryService.set_cached_extraction(cache_key, parsed)
+        log_telemetry(f"Completed: {len(flags)} flags, {len(warns)} warnings, {len(benefits)} benefits")
         return parsed
 
     def generate_role_intelligence_report(

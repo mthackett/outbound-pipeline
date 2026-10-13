@@ -101,10 +101,10 @@ class TestV151DashboardAndSettings(unittest.TestCase):
         ]
 
     def test_authoritative_version_equals_1_5_1(self):
-        """Authoritative version exported by package and version.py equals 1.5.1."""
-        self.assertEqual(APP_VERSION, "1.5.1")
+        """Authoritative version exported by package and version.py equals 1.5.2."""
+        self.assertEqual(APP_VERSION, "1.5.2")
         from job_pipeline.version import __version__
-        self.assertEqual(__version__, "1.5.1")
+        self.assertEqual(__version__, "1.5.2")
 
     def test_kpi_calculations_and_six_metrics(self):
         """PipelineKPIService calculates accurate values for all six unified headline metrics."""

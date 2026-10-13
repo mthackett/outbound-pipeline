@@ -26,7 +26,7 @@ class TestPhase1BrandingAndInstanceConfig(unittest.TestCase):
     """Test suite for Phase 1 typed instance configuration and branding."""
 
     def test_version_constant(self):
-        self.assertEqual(APP_VERSION, "1.5.1")
+        self.assertEqual(APP_VERSION, "1.5.2")
 
     def test_instance_config_defaults(self):
         cfg = PipelineInstanceConfig()
@@ -83,7 +83,7 @@ class TestPhase1PipelineKPIs(unittest.TestCase):
 
     def test_authoritative_pipeline_stages_list(self):
         expected_stages = [
-            "Pending", "Processed", "Applied", "Declined to Apply", "Employer Interest",
+            "New Lead", "Pending", "Processed", "Applied", "Declined to Apply", "Employer Interest",
             "Application Rejected", "Recruiter Screen", "Hiring Manager",
             "Technical Screen", "Final Round", "Offer", "Withdrawn",
             "Archived", "Rejected"

@@ -41,7 +41,15 @@ class MockJobStorageAdapter(JobStoragePort):
             )
         ]
 
-    def save_opportunity(self, job: JobPosting, fit_eval: FitEvaluation) -> bool:
+    def save_opportunity(self, job: JobPosting, fit_eval: Optional[FitEvaluation] = None) -> bool:
+        if fit_eval is None:
+            from job_pipeline.domain.models import TargetPayBounds
+            fit_eval = getattr(job, "fit_evaluation", None) or FitEvaluation(
+                status=job.status or "New Lead",
+                is_qualified=True,
+                reasoning="",
+                pay_bounds=TargetPayBounds(display_range=job.salary_expectation or "Not specified")
+            )
         raw_jd_link = job.drive_jd_link
         existing = next((item for item in self.saved_jobs if item["job"].opportunity_id == job.opportunity_id), None)
         if existing:
@@ -99,7 +107,9 @@ class MockJobStorageAdapter(JobStoragePort):
         salary_expectation: Optional[str] = None,
         role_intelligence_status: Optional[str] = None,
         role_intelligence_link: Optional[str] = None,
-        role_intelligence_generated_at: Optional[str] = None
+        role_intelligence_generated_at: Optional[str] = None,
+        opportunity_source: Optional[str] = None,
+        contact_name: Optional[str] = None
     ) -> bool:
         for item in self.saved_jobs:
             j = item["job"]
@@ -109,6 +119,12 @@ class MockJobStorageAdapter(JobStoragePort):
                     j.company_name = company_name
                 if job_title is not None:
                     j.job_title = job_title
+                if opportunity_source is not None:
+                    j.opportunity_source = opportunity_source
+                    item["opportunity_source"] = opportunity_source
+                if contact_name is not None:
+                    j.contact_name = contact_name
+                    item["contact_name"] = contact_name
                 if target_pay_range is not None:
                     item["fit_eval"].pay_bounds.display_range = target_pay_range
                 if source_url is not None:
@@ -168,11 +184,17 @@ class MockJobStorageAdapter(JobStoragePort):
             sh = j.stage_history or [{"stage": j.status, "entered_at": "2026-09-22T08:14:00"}]
             sal_exp = getattr(j, "salary_expectation", "") or item.get("salary_expectation", "")
             j_notes = getattr(j, "notes", "") or item.get("notes", "")
+            opp_src = getattr(j, "opportunity_source", None) or item.get("opportunity_source") or "Outbound"
+            cont_nm = getattr(j, "contact_name", None) or item.get("contact_name") or ""
             results.append({
                 "Company Name": j.company_name,
                 "Job Title": j.job_title,
                 "Date Created": j.date_created,
                 "Status": j.status,
+                "Opportunity Source": opp_src,
+                "opportunity_source": opp_src,
+                "Contact Name": cont_nm,
+                "contact_name": cont_nm,
                 "Job Description": "",
                 "Raw JD Link": j.drive_jd_link or "",
                 "Category": j.category or "Target",
@@ -534,6 +556,9 @@ class MockLLMStrategyAdapter(LLMStrategyPort):
             detected_flags = [f.to_display_string() for f in det_flags]
             detected_warnings = [f.to_display_string() for f in det_warns]
             detected_benefits = [f.to_display_string() for f in det_benefits]
+
+        from job_pipeline.logger import log_telemetry
+        log_telemetry(f"Completed: {len(detected_flags)} flags, {len(detected_warnings)} warnings, {len(detected_benefits)} benefits")
 
         return JobExtractionPayload(
             company_name="Mock Target Company",

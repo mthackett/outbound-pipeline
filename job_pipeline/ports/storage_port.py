@@ -11,7 +11,7 @@ class JobStoragePort(ABC):
         pass
 
     @abstractmethod
-    def save_opportunity(self, job: JobPosting, fit_eval: FitEvaluation) -> bool:
+    def save_opportunity(self, job: JobPosting, fit_eval: Optional[FitEvaluation] = None) -> bool:
         pass
 
     @abstractmethod
@@ -40,7 +40,9 @@ class JobStoragePort(ABC):
         salary_expectation: Optional[str] = None,
         role_intelligence_status: Optional[str] = None,
         role_intelligence_link: Optional[str] = None,
-        role_intelligence_generated_at: Optional[str] = None
+        role_intelligence_generated_at: Optional[str] = None,
+        opportunity_source: Optional[str] = None,
+        contact_name: Optional[str] = None
     ) -> bool:
         pass
 
